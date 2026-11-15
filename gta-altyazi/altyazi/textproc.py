@@ -23,10 +23,35 @@ def _fold_accents(text: str) -> str:
 def normalize(lines: list[str]) -> str:
     """Satırları tek cümleye birleştirir, boşlukları ve kenar çöplerini temizler."""
     text = _fold_accents(" ".join(line.strip() for line in lines if line.strip()))
-    text = _SPACE.sub(" ", text).strip()
+    text = _fix_ocr_confusions(_SPACE.sub(" ", text).strip())
     text = _EDGE_JUNK.sub("", text).strip()
     # Satır sonunda kelime bölünmesi: "some- thing" -> "something"
     text = re.sub(r"(\w)- (\w)", r"\1\2", text)
+    return text
+
+
+# Kontur maskesinde OCR'ın sistematik karışıklıkları (gerçek log): kesme işareti -> r
+# ("donrt", "Irm"), l -> [ ( { ("[ike", "exect[y"). Değiştirilen biçimler gerçek İngilizce kelime
+# değildir, bu yüzden düzeltme doğru okumayı bozmaz.
+_NRT = re.compile(r"\b(do|does|did|is|are|was|were|have|has|had|could|would|should|must|need"
+                  r"|ca|wo|ai)nrt\b", re.IGNORECASE)
+_CONTRACTIONS = re.compile(
+    r"\b(?:(I)r(m|ll|ve|d)|(you|they)r(re|ll|ve)|(we)r(re|ll|ve)"
+    r"|(it|that|what|there|here|who|let)r(s))\b", re.IGNORECASE)
+_L_LOOKALIKE = re.compile(r"(?<=[A-Za-z])[\[{(](?=[a-z])|(?<![\w])[\[{(](?=[a-z]{2})")
+
+
+def _contraction(m: re.Match) -> str:
+    groups = [g for g in m.groups() if g is not None]
+    return f"{groups[0]}'{groups[1]}"
+
+
+def _fix_ocr_confusions(text: str) -> str:
+    text = _NRT.sub(r"\1n't", text)
+    text = _CONTRACTIONS.sub(_contraction, text)
+    # Gerçek parantez/köşeli parantez kapanışıyla gelir ("[laughs]"); kapanış yoksa harf l'dir.
+    if not any(c in text for c in ")]}"):
+        text = _L_LOOKALIKE.sub("l", text)
     return text
 
 

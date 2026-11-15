@@ -282,3 +282,24 @@ def test_real_log_better_reading_upgrades_shown_line():
 def test_new_line_is_still_detected():
     shown = _replay(["Man, fuck you.", "Man, fuck you.", "I'll see you at work.", "I'll see you at work."])
     assert shown == ["Man, fuck you.", "I'll see you at work."]
+
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize("raw,expected", [
+    # Gerçek --debug logundan kontur okumaları
+    ("donrt hate me", "don't hate me"),
+    ("Irm not doing this", "I'm not doing this"),
+    ("[ike my women", "like my women"),
+    ("(ike my women", "like my women"),
+    ("that's exect[y it", "that's exectly it"),
+    ("Itrs fine, yourre late, we can't", "It's fine, you're late, we can't"),
+    ("I wonrt go, I cAnrt", "I won't go, I cAn't"),
+    # Doğru okumalara ve gerçek parantezlere dokunulmaz
+    ("I [laughs] am here", "I [laughs] am here"),
+    ("We (the crew) go", "We (the crew) go"),
+    ("Others hers ours", "Others hers ours"),
+])
+def test_normalize_fixes_outline_ocr_confusions(raw, expected):
+    assert normalize([raw]) == expected

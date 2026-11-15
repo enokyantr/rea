@@ -126,6 +126,10 @@ def test_cache_namespace_tracks_model_and_rules(fake, tmp_path):
     ("Kapa çeneni!\n\nNot: 'shut up' deyimi...", "Kapa çeneni!"),
     ("“Hassiktir kanka.”", "Hassiktir kanka."),
     ("Önce şunu yap.\nSonra git.", "Önce şunu yap. Sonra git."),
+    ('Bu ne amına koyayım kanka? (Not: "nigga" kelimesi Türkçe\'ye doğrudan çevrilemez...)',
+     "Bu ne amına koyayım kanka?"),
+    ("Kapa çeneni lan.\nNote: kept the profanity.", "Kapa çeneni lan."),
+    ("Bu (yani şu) iş.", "Bu (yani şu) iş."),
 ])
 def test_clean_output(raw, expected):
     assert clean_output(raw) == expected

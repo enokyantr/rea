@@ -63,13 +63,19 @@ def _user_message(context: str | None, line: str) -> str:
 
 _LABEL = re.compile(r"^(?:türkçe|turkish|çeviri|translation)\s*:\s*", re.IGNORECASE)
 _TAGS = re.compile(r"</?(?:line|context)>")
+# Modelin çevirinin sonuna eklediği açıklama: "... (Not: "nigga" kelimesi ...)"
+_NOTE = re.compile(r"\s*\(\s*(?:not|note|açıklama|explanation)\s*:.*$", re.IGNORECASE | re.DOTALL)
+_NOTE_LINE = re.compile(r"^\s*(?:not|note|açıklama|explanation)\s*:", re.IGNORECASE)
 
 
 def clean_output(text: str) -> str:
     """Küçük modellerin eklediği etiket/tırnak/ek açıklamaları temizler; yalnızca ilk paragraf."""
     text = _TAGS.sub("", text).strip()
     text = text.split("\n\n", 1)[0].strip()
-    text = " ".join(line.strip() for line in text.splitlines() if line.strip())
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if lines and not _NOTE_LINE.match(lines[0]):
+        lines = [line for line in lines if not _NOTE_LINE.match(line)]
+    text = _NOTE.sub("", " ".join(lines)).strip()
     text = _LABEL.sub("", text).strip()
     if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'“”«»":
         text = text[1:-1].strip()
