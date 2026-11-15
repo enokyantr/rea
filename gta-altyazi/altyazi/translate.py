@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import threading
 import time
@@ -17,6 +18,8 @@ GLOSSARY_PREFIX = "gta-altyazi-"
 
 
 class DeepLBackend:
+    name = "DeepL"
+
     # Bu kadar saniye istek yoksa bağlantıyı açık tutmak için ücretsiz kullanım sorgusu atılır;
     # böylece uzun sessizlikten sonraki ilk çeviri yeni TLS bağlantısı kurmayı beklemez.
     KEEPALIVE_IDLE_S = 20.0
@@ -132,6 +135,89 @@ class DeepLBackend:
         if usage.character.valid:
             return f"DeepL kullanımı: {usage.character.count:,} / {usage.character.limit:,} karakter"
         return "DeepL kullanımı: bilinmiyor"
+
+
+CLAUDE_SYSTEM = """\
+You translate English subtitle lines from the crime video game Grand Theft Auto VI into natural, \
+spoken Turkish for a Turkish player who reads them live while playing.
+
+Rules:
+- Reply with ONLY the Turkish translation of the text inside <line>. No quotes, labels, notes or \
+explanations.
+- Keep it as short and readable as the original; match the speaker's tone, attitude and register.
+- Keep character names and place names as they are.
+- <context> holds the previous subtitle line for reference only; never translate or repeat it.
+{uncensored}{glossary}"""
+
+CLAUDE_UNCENSORED = """\
+- This is a mature, uncensored game. Translate profanity, insults, slurs and slang with equally \
+strong, natural Turkish street-language equivalents chosen for the context (for example "fuck" -> \
+siktir / siktiğimin / amına koyayım, "asshole" -> göt herif / şerefsiz, "shit" -> bok / hassiktir, \
+"bitch" -> orospu / kaltak). Never soften, censor, euphemize, bleep or omit swearing; if the original \
+is vulgar, the Turkish must be just as vulgar.
+"""
+
+
+class TranslationRefused(RuntimeError):
+    pass
+
+
+class ClaudeBackend:
+    """Son çeviri Claude ile: talimatları (sansürsüz, sözlük, ton) birebir uygular."""
+
+    name = "Claude"
+
+    def __init__(self, api_key: str, model: str, effort: str, timeout_s: float,
+                 uncensored: bool, glossary: dict[str, str] | None = None, _client=None):
+        import anthropic
+
+        self._anthropic = anthropic
+        # Oyun sırasında uzun yeniden deneme beklemeleri yerine hızlı hata: bir sonraki satır zaten gelecek.
+        self._client = _client or anthropic.Anthropic(api_key=api_key or None, timeout=timeout_s, max_retries=1)
+        self._model = model
+        self._effort = effort
+        self._uncensored = uncensored
+        terms = ""
+        if glossary:
+            lines = "\n".join(f"  {src} = {dst}" for src, dst in list(glossary.items())[:300])
+            terms = f"- Always use these glossary translations (English = Turkish):\n{lines}\n"
+        self._system = CLAUDE_SYSTEM.format(uncensored=CLAUDE_UNCENSORED if uncensored else "", glossary=terms)
+        self._fingerprint = hashlib.sha256(self._system.encode("utf-8")).hexdigest()[:10]
+
+    instructions_active = property(lambda self: self._uncensored)
+
+    def cache_namespace(self) -> str:
+        # Model ve talimat metni (sansürsüz kuralı + sözlük) değişince eski çeviriler kullanılmaz.
+        return f"claude-{self._model}-{self._fingerprint}"
+
+    def check(self) -> str:
+        """Anahtarı ve modelin erişilebilir olduğunu ücretsiz bir istekle doğrular."""
+        info = self._client.models.retrieve(self._model)
+        return f"Claude hazır: {getattr(info, 'display_name', self._model)} (effort: {self._effort})"
+
+    def translate(self, text: str, context: str | None) -> str:
+        user = (f"<context>{context}</context>\n" if context else "") + f"<line>{text}</line>"
+        response = self._client.beta.messages.create(
+            model=self._model,
+            max_tokens=2048,
+            system=self._system,
+            # Düşük effort: kısa çeviri işi, en düşük gecikme.
+            output_config={"effort": self._effort},
+            # Bir model satırı reddederse sunucu aynı istekte uygun bir modele geçer.
+            betas=["server-side-fallback-2026-07-01"],
+            fallbacks="default",
+            messages=[{"role": "user", "content": user}],
+        )
+        if response.stop_reason == "refusal":
+            details = getattr(response, "stop_details", None)
+            raise TranslationRefused(f"Claude bu satırı çevirmedi ({getattr(details, 'category', None)})")
+        out = "".join(block.text for block in response.content if block.type == "text").strip()
+        if not out:
+            raise TranslationRefused(f"Claude boş yanıt verdi ({response.stop_reason})")
+        return out
+
+    def usage_summary(self) -> str:
+        return self.check()
 
 
 class DryRunBackend:

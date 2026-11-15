@@ -44,8 +44,13 @@ def main() -> int:
 
     cfg = config_mod.load(args.config)
     mode = cfg.translation_mode
-    if mode not in ("hybrid", "deepl", "local"):
-        print(f"translation_mode geçersiz: {mode!r} (hybrid | deepl | local)")
+    if mode not in ("hybrid", "final", "deepl", "local"):
+        print(f"translation_mode geçersiz: {mode!r} (hybrid | final | local)")
+        return 2
+    if mode == "deepl":  # eski ad: yalnızca son çevirmen (final_translator)
+        mode = "final"
+    if cfg.final_translator not in ("claude", "deepl"):
+        print(f"final_translator geçersiz: {cfg.final_translator!r} (claude | deepl)")
         return 2
 
     local = None
@@ -72,17 +77,16 @@ def main() -> int:
     if args.self_test:
         from . import selftest
 
-        key = cfg.resolved_auth_key()
-        backend = _make_deepl(cfg, key) if key and not args.dry_run else None
-        if backend is not None:
+        backend = None
+        if not args.dry_run:
             try:
-                app.log(backend.setup_glossary(*_glossary(cfg, args)))
+                backend = _final_backend(cfg, args, *_glossary(cfg, args), interactive=False)
             except Exception as exc:
-                app.log(f"Sözlük okunamadı: {exc}")
+                app.log(f"Son çevirmen başlatılamadı: {exc}")
         return selftest.run(cfg, backend, local)
 
     final = None
-    if mode in ("hybrid", "deepl"):
+    if mode in ("hybrid", "final"):
         try:
             entries, fp = _glossary(cfg, args)
         except Exception as exc:  # hatalı sözlük satırı: kullanıcı düzeltsin
@@ -91,10 +95,9 @@ def main() -> int:
         if args.dry_run:
             backend = DryRunBackend()
         else:
-            backend = _deepl_backend(cfg, args)
+            backend = _final_backend(cfg, args, entries, fp, interactive=True)
             if backend is None:
                 return 2
-            app.log(backend.setup_glossary(entries, fp))
             app.log("Sansürsüz çeviri: " + ("açık (küfür/argo yumuşatılmaz)" if cfg.uncensored else "kapalı"))
         cache_path = args.config.parent / cfg.cache_file if cfg.cache_file else None
         final = CachedTranslator(backend, cache_path)
@@ -131,30 +134,57 @@ def _make_deepl(cfg, key: str) -> DeepLBackend:
                         instructions=cfg.deepl_instructions if cfg.uncensored else None, log=app.log)
 
 
-def _deepl_backend(cfg, args):
-    """Anahtarı alır (gerekirse sorar), doğrular ve kaydeder. Başarısızsa None."""
+def _ask_key(cfg, args, current: str, title: str, url: str, interactive: bool) -> str | None:
+    if current or not interactive:
+        return current or None
+    if not sys.stdin or not sys.stdin.isatty():
+        print(f"{title} anahtarı yok. {args.config} dosyasına yazın.")
+        return None
+    print(f"{title} API anahtarı gerekli ({url}).")
+    return input("Anahtarı yapıştırıp Enter'a basın: ").strip() or None
+
+
+def _final_backend(cfg, args, entries: dict[str, str], fp: str, interactive: bool):
+    """Taslağın yerine geçen son çevirmeni (Claude veya DeepL) kurar; anahtarı gerekirse sorar,
+    doğrular ve kaydeder. Başarısızsa None (etkileşimsiz modda hata fırlatır)."""
     from . import app
 
-    key = cfg.resolved_auth_key()
+    claude = cfg.final_translator == "claude"
+    if claude:
+        key = _ask_key(cfg, args, cfg.resolved_anthropic_key(), "Claude",
+                       "https://console.anthropic.com → API Keys", interactive)
+    else:
+        key = _ask_key(cfg, args, cfg.resolved_auth_key(), "DeepL",
+                       "ücretsiz: https://www.deepl.com/pro-api → Hesap → API Keys", interactive)
     if not key:
-        if not sys.stdin or not sys.stdin.isatty():
-            print(f"DeepL anahtarı yok. {args.config} içinde \"deepl_auth_key\" alanına yazın.")
-            return None
-        print("DeepL API anahtarı gerekli (ücretsiz: https://www.deepl.com/pro-api → Hesap → API Keys).")
-        key = input("Anahtarı yapıştırıp Enter'a basın: ").strip()
-        if not key:
-            return None
-    backend = _make_deepl(cfg, key)
+        if not interactive:
+            raise RuntimeError("anahtar yok")
+        return None
+    if claude:
+        from .translate import ClaudeBackend
+
+        backend = ClaudeBackend(key, cfg.claude_model, cfg.claude_effort, cfg.claude_timeout_s,
+                                cfg.uncensored, entries)
+    else:
+        backend = _make_deepl(cfg, key)
     try:
-        # Anahtarı doğrular ve DeepL bağlantısını oyundan önce ısıtır.
+        # Anahtarı doğrular ve bağlantıyı oyundan önce ısıtır (ücretsiz istek).
         app.log(backend.usage_summary())
     except Exception as exc:
+        if not interactive:
+            raise
         print(app.describe_error(exc))
         return None
-    if key != cfg.resolved_auth_key():
+    if not claude:
+        app.log(backend.setup_glossary(entries, fp))
+    if claude and key != cfg.resolved_anthropic_key():
+        cfg.anthropic_api_key = key
+        config_mod.save(cfg, args.config)
+        app.log(f"Claude anahtarı {args.config} dosyasına kaydedildi")
+    elif not claude and key != cfg.resolved_auth_key():
         cfg.deepl_auth_key = key
         config_mod.save(cfg, args.config)
-        app.log(f"Anahtar {args.config} dosyasına kaydedildi")
+        app.log(f"DeepL anahtarı {args.config} dosyasına kaydedildi")
     return backend
 
 
