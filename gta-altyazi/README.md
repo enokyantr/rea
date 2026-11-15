@@ -51,7 +51,17 @@ Python gerekmez. Aşağıdaki `baslat.bat` komutlarının hepsi `.\GTA-Altyazi.e
 OCR, overlay, ekran yakalamadan gizleme, beyaz sahnede renk seçimi ve (anahtar girildiyse) DeepL
 gecikmesini bu bilgisayarda dener; her satır `TAMAM`/`HATA` yazar.
 
-**Python ile:** (yerel model exe paketinde gelir; Python kurulumunda exe'deki `model` klasörünü
+**Kaynak koddan (güncellemeler tek tıkla):** Python 3.12 ve Git kurulu olmalı.
+
+```
+git clone -b claude/gta6-auto-subtitle-tool-9uumiv https://github.com/enokyantr/rea.git gta
+```
+
+`gta\gta-altyazi` klasöründe `kurulum.bat`'ı çalıştırın (bir kerelik), exe paketindeki `model`
+klasörünü buraya kopyalayın ve `baslat.bat` ile başlatın (`baslat.bat --self-test` vb. aynı
+seçenekler geçerli). Yeni sürüm için yalnızca `guncelle.bat`.
+
+**Python ile (eski yöntem):** (yerel model exe paketinde gelir; Python kurulumunda exe'deki `model` klasörünü
 proje klasörüne kopyalayın ve `pip install -r requirements-gpu.txt` çalıştırın, yoksa yalnızca DeepL kullanılır)
 
 1. `kurulum.bat` dosyasını çift tıklayın.
