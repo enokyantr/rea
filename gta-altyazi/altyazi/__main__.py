@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from . import config as config_mod
+from .hybrid import HybridTranslator
 from .translate import CachedTranslator, DeepLBackend, DryRunBackend
 
 APP_DIR = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
@@ -25,6 +26,7 @@ def main() -> int:
     parser.add_argument("--full", action="store_true", help="--ocr-test: bölgeyi değil tüm resmi oku")
     parser.add_argument("--list-windows", action="store_true", help="Açık pencere başlıklarını listele")
     parser.add_argument("--self-test", action="store_true", help="OCR, overlay ve DeepL'i bu bilgisayarda dene")
+    parser.add_argument("--mt-bench", action="store_true", help="Yerel çevirinin örnek repliklerdeki kalitesi/hızı")
     args = parser.parse_args()
 
     if sys.platform != "win32":
@@ -41,46 +43,83 @@ def main() -> int:
         return 0
 
     cfg = config_mod.load(args.config)
+    mode = cfg.translation_mode
+    if mode not in ("hybrid", "deepl", "local"):
+        print(f"translation_mode geçersiz: {mode!r} (hybrid | deepl | local)")
+        return 2
+
+    local = None
+    if mode in ("hybrid", "local") or args.self_test or args.mt_bench:
+        model_dir = Path(cfg.local_model_dir)
+        if not model_dir.is_absolute():
+            model_dir = args.config.parent / model_dir
+        try:
+            from .local_mt import LocalBackend
+
+            local = LocalBackend(model_dir, cfg.local_device, cfg.local_beam_size)
+            app.log(local.describe())
+        except Exception as exc:
+            if args.mt_bench or (mode == "local" and not args.self_test):
+                print(f"Yerel çeviri başlatılamadı: {exc}")
+                return 2
+            if mode == "hybrid" or args.self_test:
+                app.log(f"Yerel çeviri kullanılamıyor ({exc}); yalnızca DeepL kullanılacak")
+
+    if args.mt_bench:
+        from . import selftest
+
+        return selftest.bench_local(local)
     if args.self_test:
         from . import selftest
 
         key = cfg.resolved_auth_key()
         backend = DeepLBackend(key, cfg.source_lang, cfg.target_lang, cfg.deepl_model_type,
                                cfg.deepl_timeout_s) if key and not args.dry_run else None
-        return selftest.run(cfg, backend)
-    if args.dry_run:
-        backend = DryRunBackend()
-    else:
-        key = cfg.resolved_auth_key()
-        if not key:
-            if not sys.stdin or not sys.stdin.isatty():
-                print(f"DeepL anahtarı yok. {args.config} içinde \"deepl_auth_key\" alanına yazın.")
-                return 2
-            print("DeepL API anahtarı gerekli (ücretsiz: https://www.deepl.com/pro-api → Hesap → API Keys).")
-            key = input("Anahtarı yapıştırıp Enter'a basın: ").strip()
-            if not key:
-                return 2
-        backend = DeepLBackend(key, cfg.source_lang, cfg.target_lang, cfg.deepl_model_type, cfg.deepl_timeout_s)
-        try:
-            # Anahtarı doğrular ve DeepL bağlantısını oyundan önce ısıtır.
-            app.log(backend.usage_summary())
-        except Exception as exc:
-            print(app.describe_error(exc))
-            return 2
-        if key != cfg.resolved_auth_key():
-            cfg.deepl_auth_key = key
-            config_mod.save(cfg, args.config)
-            app.log(f"Anahtar {args.config} dosyasına kaydedildi")
+        return selftest.run(cfg, backend, local)
 
-    cache_path = args.config.parent / cfg.cache_file if cfg.cache_file else None
-    translator = CachedTranslator(backend, cache_path)
-    app.log(f"Önbellekte {len(translator)} çeviri var")
+    final = None
+    if mode in ("hybrid", "deepl"):
+        backend = _deepl_backend(cfg, args) if not args.dry_run else DryRunBackend()
+        if backend is None:
+            return 2
+        cache_path = args.config.parent / cfg.cache_file if cfg.cache_file else None
+        final = CachedTranslator(backend, cache_path)
+        app.log(f"Önbellekte {len(final)} çeviri var")
+    translator = HybridTranslator(final, local)
+    app.log(f"Çeviri modu: {translator.mode}")
 
     if args.ocr_test:
         app.run_ocr_test(cfg, args.ocr_test, translator, args.full)
         return 0
     app.run_gui(cfg, args.config, translator, args.debug)
     return 0
+
+
+def _deepl_backend(cfg, args):
+    """Anahtarı alır (gerekirse sorar), doğrular ve kaydeder. Başarısızsa None."""
+    from . import app
+
+    key = cfg.resolved_auth_key()
+    if not key:
+        if not sys.stdin or not sys.stdin.isatty():
+            print(f"DeepL anahtarı yok. {args.config} içinde \"deepl_auth_key\" alanına yazın.")
+            return None
+        print("DeepL API anahtarı gerekli (ücretsiz: https://www.deepl.com/pro-api → Hesap → API Keys).")
+        key = input("Anahtarı yapıştırıp Enter'a basın: ").strip()
+        if not key:
+            return None
+    backend = DeepLBackend(key, cfg.source_lang, cfg.target_lang, cfg.deepl_model_type, cfg.deepl_timeout_s)
+    try:
+        # Anahtarı doğrular ve DeepL bağlantısını oyundan önce ısıtır.
+        app.log(backend.usage_summary())
+    except Exception as exc:
+        print(app.describe_error(exc))
+        return None
+    if key != cfg.resolved_auth_key():
+        cfg.deepl_auth_key = key
+        config_mod.save(cfg, args.config)
+        app.log(f"Anahtar {args.config} dosyasına kaydedildi")
+    return backend
 
 
 if __name__ == "__main__":

@@ -92,6 +92,10 @@ class CachedTranslator:
     def _key(text: str) -> str:
         return " ".join(text.split()).casefold()
 
+    def cached(self, text: str) -> str | None:
+        with self._lock:
+            return self._cache.get(self._key(text))
+
     def translate(self, text: str, context: str | None = None) -> str:
         key = self._key(text)
         with self._lock:

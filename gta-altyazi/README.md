@@ -13,6 +13,12 @@ Remote Play penceresi ─► altyazı bölgesini yakala ─► Windows OCR ─�
           yazı rengi: açık sahnede siyah, koyu sahnede beyaz ──► tıklanamaz şeffaf overlay
 ```
 
+**Karma çeviri (varsayılan):** Satır görünür görünmez bilgisayardaki yerel model (Opus-MT, NVIDIA
+GPU'da) Türkçesini ~10–30 ms'de gösterir; aynı anda DeepL'e gönderilen daha kaliteli çeviri gelince
+(~100–300 ms) yerine geçer. Daha önce görülmüş satırlar DeepL önbelleğinden anında gelir. DeepL'e
+ulaşılamazsa yerel çeviri ekranda kalır. `config.json` → `translation_mode`:
+`"hybrid"` (varsayılan), `"deepl"` (yalnızca DeepL) veya `"local"` (yalnızca yerel, internet/anahtar gerekmez).
+
 **Anlık renk:** Türkçe yazının arkasındaki görüntü her karede (~50 ms) ölçülür. Kar, gökyüzü,
 beyaz duvar gibi açık bir sahneye gelince yazı siyah olur, beyaz kontur alır; karanlıkta beyaza döner.
 Yarısı açık yarısı koyu sahnede kontur kalınlaşır. Tek karelik patlama ve flaşlarda renk titremez.
@@ -43,7 +49,8 @@ GTA-Altyazi.exe --self-test
 OCR, overlay, ekran yakalamadan gizleme, beyaz sahnede renk seçimi ve (anahtar girildiyse) DeepL
 gecikmesini bu bilgisayarda dener; her satır `TAMAM`/`HATA` yazar.
 
-**Python ile:**
+**Python ile:** (yerel model exe paketinde gelir; Python kurulumunda exe'deki `model` klasörünü
+proje klasörüne kopyalayın ve `pip install -r requirements-gpu.txt` çalıştırın, yoksa yalnızca DeepL kullanılır)
 
 1. `kurulum.bat` dosyasını çift tıklayın.
 2. `baslat.bat` ile çalıştırın. İlk açılışta DeepL API anahtarı sorulur; yapıştırın.
@@ -83,6 +90,8 @@ Canlı kullanımda süreleri görmek için `baslat.bat --debug`. Pencere başlı
 
 | Ayar | Varsayılan | Ne zaman değiştirilir |
 |---|---|---|
+| `translation_mode` | `"hybrid"` | `"deepl"` veya `"local"` |
+| `local_device` | `"auto"` | GPU sorun çıkarırsa `"cpu"` |
 | `display_mode` | `"adaptive"` | `"cover"`: İngilizceyi koyu kutuyla kapatıp sabit renkte yazar |
 | `deepl_model_type` | `"latency_optimized"` | Daha doğal ama daha yavaş çeviri için `"quality_optimized"` |
 | `preprocess` | `"none"` | Arka plan OCR'ı bozuyorsa `"bright"` (yalnızca beyaz yazıyı bırakır) |
@@ -103,12 +112,14 @@ Altyazının ekrana gelmesinden Türkçenin görünmesine kadar:
 | Satırın fark edilmesi (33 ms aralık, ortalama yarısı) | ~0–33 ms |
 | Windows OCR (yalnızca yazının kırpılmış kısmı) | ~15–50 ms |
 | Doğrulama okuması (hemen yapılır, OCR genelde atlanır) | ~1–10 ms |
-| DeepL `latency_optimized` | ~100–300 ms (internete bağlı) |
+| Yerel taslak çeviri (RTX 4060 Ti; işlemcide ~20–60 ms) | ~10–30 ms |
+| DeepL `latency_optimized` (taslağın yerine geçer) | ~100–300 ms (internete bağlı) |
 | Önbellekteki satır | ~0 ms |
 
 Sahte OCR (30 ms) ve sahte DeepL (150 ms) ile yapılan simülasyonda ortalama 197 ms ölçüldü:
 DeepL dışındaki kısım ~47 ms. Kalan sürenin neredeyse tamamı DeepL'in ağ + çeviri süresidir;
-bulut çeviri kullanıldıkça bunun altına inilemez.
+bulut çeviri kullanıldıkça bunun altına inilemez. Bu yüzden karma modda ilk Türkçe metni yerel model
+verir: ekrana gelme süresi tahminen ~60–80 ms'ye iner (GPU süresi ölçülmedi; `--self-test` ölçer).
 
 `baslat.bat --debug` her satır için gerçek süreyi yazar (`ilk okumadan ekrana: … ms`).
 Gecikmeyi düşürmek için yapılanlar:

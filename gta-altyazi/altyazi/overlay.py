@@ -72,8 +72,10 @@ class Overlay:
             self.canvas.itemconfigure("outline", fill=palette.outline)
 
     def show(self, translated: str, original: str = "") -> None:
-        self._state = (translated, original, "")
-        self._redraw()
+        state = (translated, original, "")
+        if state != self._state:  # taslak ile DeepL aynıysa yeniden çizip titretme
+            self._state = state
+            self._redraw()
 
     def status(self, message: str) -> None:
         self._state = ("", "", message)

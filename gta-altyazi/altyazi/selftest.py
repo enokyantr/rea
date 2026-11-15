@@ -141,7 +141,43 @@ def _check_deepl(backend, report: Report) -> None:
                 f"ilk {times[0]:.0f} ms, sonraki ort. {statistics.mean(times[1:]):.0f} ms — {out!r}")
 
 
-def run(cfg: Config, backend=None) -> int:
+BENCH_LINES = [
+    "Get in the car, now!", "Where are we even going?", "I told you this was a bad idea.",
+    "Relax, I've got a plan.", "Cops are right behind us!", "Take the next left, quick!",
+    "We need to lose them first.", "Is that a helicopter?", "Just keep driving, Lucia.",
+    "Hold on to something!", "That was way too close.", "You think this is a game, Jason? This is our life now.",
+]
+
+
+def _check_local(local, report: Report) -> None:
+    times, out = [], ""
+    for line in BENCH_LINES[:6]:
+        t0 = time.perf_counter()
+        try:
+            out = local.translate(line, None)
+        except Exception as exc:
+            report.item("Yerel çeviri", "HATA", f"{type(exc).__name__}: {exc}")
+            return
+        times.append(1000 * (time.perf_counter() - t0))
+    ok = bool(out.strip())
+    report.item("Yerel çeviri", "TAMAM" if ok else "HATA",
+                f"{local.device}, medyan {statistics.median(times):.0f} ms — {BENCH_LINES[5]!r} → {out!r}")
+
+
+def bench_local(local) -> int:
+    """Örnek oyun replikleri: yerel çevirinin kalitesi ve hızı."""
+    print(local.describe())
+    times = []
+    for line in BENCH_LINES:
+        t0 = time.perf_counter()
+        out = local.translate(line, None)
+        times.append(1000 * (time.perf_counter() - t0))
+        print(f"{times[-1]:6.0f} ms  {line}  →  {out}")
+    print(f"medyan {statistics.median(times):.0f} ms, en kötü {max(times):.0f} ms")
+    return 0
+
+
+def run(cfg: Config, backend=None, local=None) -> int:
     report = Report()
     print("GTA Altyazı öz test\n")
     windows = win32.visible_windows()
@@ -154,6 +190,10 @@ def run(cfg: Config, backend=None) -> int:
         _check_overlay(cfg, report)
     except Exception as exc:
         report.item("Overlay", "HATA", f"{type(exc).__name__}: {exc}")
+    if local is not None:
+        _check_local(local, report)
+    else:
+        report.item("Yerel çeviri", "YOK", "model bulunamadı veya başlatılamadı (yukarıdaki nedene bakın)")
     if backend is not None:
         _check_deepl(backend, report)
     else:

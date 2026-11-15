@@ -1,0 +1,4 @@
+# Yerel (taslak) çeviri: CTranslate2 + SentencePiece. NVIDIA GPU için cuBLAS (CUDA 12).
+ctranslate2>=4.5
+sentencepiece>=0.2
+nvidia-cublas-cu12>=12.4

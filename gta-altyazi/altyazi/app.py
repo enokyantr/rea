@@ -5,7 +5,6 @@ from __future__ import annotations
 import queue
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable
 
@@ -16,7 +15,7 @@ from . import contrast, imageproc, textproc, win32
 from .config import Config
 from .geometry import Rect, intersect, region_to_screen, screen_to_region, union
 from .ocr import OcrUnavailable, WindowsOcr
-from .translate import CachedTranslator
+from .hybrid import DRAFT, FINAL, HybridTranslator
 
 # Görüntü aynı kalsa bile bu kadar karede bir OCR tekrarlanır; altyazı belirirken (fade-in)
 # yapılmış eksik bir okumada takılı kalmamak için.
@@ -39,7 +38,7 @@ def describe_error(exc: Exception) -> str:
 
 
 class Pipeline(threading.Thread):
-    def __init__(self, cfg: Config, translator: CachedTranslator, ui: queue.Queue, debug: bool,
+    def __init__(self, cfg: Config, translator: HybridTranslator, ui: queue.Queue, debug: bool,
                  sample_rect: Callable[[], Rect | None] = lambda: None):
         super().__init__(daemon=True, name="pipeline")
         self.cfg = cfg
@@ -55,26 +54,33 @@ class Pipeline(threading.Thread):
         self._retry = threading.Event()
         self.seq = 0
         self.base = win32.primary_screen()
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="deepl")
         self._previous_source: str | None = None
+        self._retry_not_before = 0.0
 
-    def _translate(self, seq: int, text: str, context: str | None, first_seen: float) -> None:
-        if seq != self.seq:  # kuyrukta beklerken yeni satır geldi: boşuna çevirme
-            return
-        started = time.perf_counter()
-        try:
-            translated = self.translator.translate(text, context)
-        except Exception as exc:  # ağ/kota hataları oyunu durdurmamalı
+    def _on_show(self, event: textproc.Show) -> None:
+        self.seq += 1
+        seq = self.seq
+        context, self._previous_source = self._previous_source, event.text
+        log(f"EN: {event.text}")
+
+        def on_result(stage: str, translated: str, took: float) -> None:
+            if self.debug:
+                log(f"{'taslak' if stage == DRAFT else 'çeviri'} {1000 * took:.0f} ms: {translated}")
+            self.ui.put(("show", seq, stage, translated, event.text, event.first_seen))
+
+        def on_error(exc: Exception, stage: str, draft_shown: bool) -> None:
+            if stage == DRAFT:
+                log(f"Yerel çeviri hatası: {exc}")
+                return
             message = describe_error(exc)
-            log(message)
-            self.ui.put(("error", message))
+            log(message + (" (yerel çeviri ekranda kaldı)" if draft_shown else ""))
+            if not draft_shown:
+                self.ui.put(("error", message))
             if seq == self.seq:
+                self._retry_not_before = time.monotonic() + 2.0  # çevrimdışıyken istek yağdırma
                 self._retry.set()
-            return
-        if self.debug:
-            log(f"çeviri {1000 * (time.perf_counter() - started):.0f} ms: {translated}")
-        if seq == self.seq:  # bu arada yeni satır geldiyse eski çeviriyi gösterme
-            self.ui.put(("show", seq, translated, text, first_seen))
+
+        self.translator.submit(event.text, context, lambda: seq == self.seq, on_result, on_error)
 
     def _read_text(self, ocr: WindowsOcr, gray: np.ndarray) -> str:
         cfg = self.cfg
@@ -122,7 +128,7 @@ class Pipeline(threading.Thread):
                     self.seq += 1  # bekleyen/gelmekte olan çeviriler geçersiz
                     stab.reset()
                     last_sig, last_text, reused = None, "", 0
-                if self._retry.is_set():
+                if self._retry.is_set() and tick >= self._retry_not_before:
                     self._retry.clear()
                     stab.forget_shown()
                 if self.paused.is_set():
@@ -195,10 +201,7 @@ class Pipeline(threading.Thread):
 
                 event = stab.feed(text, tick)
                 if isinstance(event, textproc.Show):
-                    self.seq += 1
-                    context, self._previous_source = self._previous_source, event.text
-                    log(f"EN: {event.text}")
-                    self._executor.submit(self._translate, self.seq, event.text, context, event.first_seen)
+                    self._on_show(event)
                 elif isinstance(event, textproc.Clear):
                     self.seq += 1
                     self.ui.put(("clear",))
@@ -209,10 +212,10 @@ class Pipeline(threading.Thread):
                 if elapsed < wait:
                     time.sleep(wait - elapsed)
 
-        self._executor.shutdown(wait=False, cancel_futures=True)
+        self.translator.shutdown()
 
 
-def run_gui(cfg: Config, cfg_path: Path, translator: CachedTranslator, debug: bool) -> None:
+def run_gui(cfg: Config, cfg_path: Path, translator: HybridTranslator, debug: bool) -> None:
     import tkinter as tk
     from tkinter import messagebox
 
@@ -227,7 +230,7 @@ def run_gui(cfg: Config, cfg_path: Path, translator: CachedTranslator, debug: bo
                if cfg.display_mode == "cover" else "Renk seçimi kendi yazımızdan etkilenebilir."))
     ui: queue.Queue = queue.Queue()
     pipeline = Pipeline(cfg, translator, ui, debug, sample_rect=lambda: overlay.sample_rect)
-    state = {"welcome": True, "picking": False}
+    state = {"welcome": True, "picking": False, "final_seq": -1}
 
     def quit_app() -> None:
         pipeline.stopped.set()
@@ -298,12 +301,16 @@ def run_gui(cfg: Config, cfg_path: Path, translator: CachedTranslator, debug: bo
                     if debug:
                         log(f"yazı rengi: {msg[1].fill} (kontur {msg[1].outline_px}px)")
                 elif kind == "show":
-                    _, seq, translated, original, first_seen = msg
-                    if seq == pipeline.seq:
+                    _, seq, stage, translated, original, first_seen = msg
+                    # Eski satırı ya da DeepL'den sonra gelen taslağı gösterme.
+                    if seq == pipeline.seq and not (stage == DRAFT and state["final_seq"] == seq):
+                        if stage == FINAL:
+                            state["final_seq"] = seq
                         state["welcome"] = False
                         overlay.show(translated, original)
                         if debug:
-                            log(f"ilk okumadan ekrana: {1000 * (time.monotonic() - first_seen):.0f} ms")
+                            what = "taslak" if stage == DRAFT else "son çeviri"
+                            log(f"ilk okumadan ekrana ({what}): {1000 * (time.monotonic() - first_seen):.0f} ms")
                 elif kind == "clear":
                     if not state["welcome"]:
                         overlay.clear()
@@ -335,7 +342,7 @@ def run_gui(cfg: Config, cfg_path: Path, translator: CachedTranslator, debug: bo
         pipeline.stopped.set()
 
 
-def run_ocr_test(cfg: Config, image_path: Path, translator: CachedTranslator, full: bool) -> None:
+def run_ocr_test(cfg: Config, image_path: Path, translator: HybridTranslator, full: bool) -> None:
     """Bir ekran görüntüsü üzerinde OCR + çeviriyi dener (ayar yapmak için)."""
     from PIL import Image
 
@@ -367,7 +374,8 @@ def run_ocr_test(cfg: Config, image_path: Path, translator: CachedTranslator, fu
         print("  satır:", line)
     text = textproc.normalize(lines)
     print("İngilizce:", text or "(metin yok)")
-    if text:
-        t0 = time.perf_counter()
-        print("Türkçe:   ", translator.translate(text))
-        log(f"Çeviri süresi: {1000 * (time.perf_counter() - t0):.0f} ms")
+    for name, backend in (("Yerel", translator.draft), ("DeepL", translator.final)):
+        if text and backend is not None:
+            t0 = time.perf_counter()
+            out = backend.translate(text, None)
+            print(f"Türkçe ({name}): {out}   [{1000 * (time.perf_counter() - t0):.0f} ms]")

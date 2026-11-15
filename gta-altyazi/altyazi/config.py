@@ -24,6 +24,12 @@ class Config:
     deepl_auth_key: str = ""
     source_lang: str = "EN"
     target_lang: str = "TR"
+    # "hybrid": yerel model hemen taslak gösterir, DeepL gelince yerine geçer (en düşük gecikme + DeepL kalitesi)
+    # "deepl":  yalnızca DeepL.   "local": yalnızca yerel model (internet/anahtar gerekmez).
+    translation_mode: str = "hybrid"
+    local_model_dir: str = "model"
+    local_device: str = "auto"  # "auto" | "cuda" | "cpu"
+    local_beam_size: int = 1
     # "latency_optimized": en hızlı yanıt. "quality_optimized": daha doğal ama daha yavaş. "": DeepL varsayılanı.
     deepl_model_type: str = "latency_optimized"
     deepl_timeout_s: float = 4.0

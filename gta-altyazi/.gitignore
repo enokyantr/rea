@@ -7,3 +7,4 @@ ceviri_onbellek.jsonl
 build/
 dist/
 *.spec
+model/
