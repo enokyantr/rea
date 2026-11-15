@@ -331,3 +331,16 @@ def test_upgrade_of_shown_line_needs_confirmation_too():
     assert s.feed("Ah, nigga, don't hat", 0.14) is None  # sıradan okuma bekleyeni bozmaz
     up = s.feed("Ah, nigga. don't hate me 'cause I'm beautiful, nigga", 0.16)
     assert isinstance(up, Show) and up.text == "Ah, nigga. don't hate me 'cause I'm beautiful, nigga"
+
+
+def test_street_slang_goes_to_llm_even_without_profanity():
+    from altyazi.textproc import needs_llm
+
+    # Gerçek loglardan: taslak model bunları bozuyordu ("Yall anlatıyor").
+    for line in ("Yall telling me.", "Who you callin a nigga?", "Can a loc come up in your crib?",
+                 "I ain't going nowhere", "'Cause this man right here.", "You trippin', dog."):
+        assert needs_llm(line), line
+    for line in ("Go to Franklin's house.", "Can you hook me up with a blimp?",
+                 "I'll send one out to you right away.", "Begin the mission again.",
+                 "That's a real man's car."):
+        assert not needs_llm(line), line

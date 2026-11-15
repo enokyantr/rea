@@ -108,7 +108,8 @@ yumuşatmaz. NVIDIA ekran kartında çalışır (8 GB VRAM yeterli: RTX 4060 Ti 
    Başka bir model denemek için `config.json` → `ollama_model` değiştirip tekrar çalıştırın.
 
 Varsayılan olarak (`ollama_only_profanity: true`) dil modeli yalnızca küfür/argo içeren satırlarda
-kullanılır; diğer satırlarda yerel taslak çeviri daha doğru ve hızlı olduğu için nihai sonuçtur.
+ve sokak ağzı (y'all, ain't, callin', crib, loc...) içeren satırlarda kullanılır; diğer satırlarda
+yerel taslak çeviri daha doğru ve hızlı olduğu için nihai sonuçtur.
 12 GB+ ekran kartında daha iyi Türkçe için `"ollama_model": "gemma3:12b"` ve `"ollama_use_context": true`.
 
 Ollama kapalıysa veya model yoksa program bunu söyler ve yalnızca yerel taslak çeviriyle devam eder.

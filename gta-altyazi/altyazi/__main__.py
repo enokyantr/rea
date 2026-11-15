@@ -103,10 +103,10 @@ def main() -> int:
         title = f"{backend.name}: {getattr(backend, 'model', cfg.final_translator)}"
         route = None
         if local is not None and cfg.final_translator == "ollama" and cfg.ollama_only_profanity:
-            from .textproc import needs_uncensored
+            from .textproc import needs_llm
 
             # Oyundaki gibi: küfürlü satır LLM'e, diğerleri yerel taslak çeviriye.
-            route = lambda line: (backend, "[LLM]    ") if needs_uncensored(line) else (local, "[taslak] ")  # noqa: E731
+            route = lambda line: (backend, "[LLM]    ") if needs_llm(line) else (local, "[taslak] ")  # noqa: E731
             title += "  (yalnızca küfürlü satırlar LLM'e gider)"
         return bench.run(backend, title, route=route)
     if args.self_test:
@@ -144,10 +144,10 @@ def main() -> int:
 
     def make_translator() -> HybridTranslator:
         # Her bölgenin kendi kuyruğu; çeviri motorları (yerel model, DeepL, önbellek) ortak.
-        from .textproc import needs_uncensored
+        from .textproc import needs_llm
 
         only_profane = cfg.final_translator == "ollama" and cfg.ollama_only_profanity
-        return HybridTranslator(final, local, final_for=needs_uncensored if only_profane else None)
+        return HybridTranslator(final, local, final_for=needs_llm if only_profane else None)
 
     app.log(f"Çeviri modu: {make_translator().mode}")
     if args.ocr_compare:

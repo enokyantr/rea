@@ -96,6 +96,22 @@ def needs_uncensored(text: str) -> bool:
     return bool(_PROFANITY.search(cleaned))
 
 
+# Sokak argosu / ağız (küfürsüz de olsa): yerel taslak model bunları anlamıyor ("Yall telling me"
+# -> "Yall anlatıyor"), dil modeline gönderilir. OCR kesme işaretini düşürebildiği için ikisi de.
+_SLANG = re.compile(
+    r"\b(?:y'?all|ain'?t|finna|tryna|gotta|lemme|gimme|imma|'?cause|cuz|'?bout|nah|yo|ya|da"
+    r"|homeboy|homes|homey|crib|loc|locs|ese|vato|playa|hood|cuh|fam|dope|ballin|trippin|frontin"
+    r"|\w{2,}in'(?!\w)|(?:call|talk|play|mess|ly|go|do|com|say|noth|someth|buzz|bugg|chill|roll|rid|"
+    r"hang|look|lov|kidd|kill|runn|work|think|try|keep|hold|gett|tell|want|need|walk)in)\b",
+    re.IGNORECASE,
+)
+
+
+def needs_llm(text: str) -> bool:
+    """Satır dil modeline gitmeli mi? Küfür/argo ya da sokak ağzı (taslak model ikisinde de zayıf)."""
+    return needs_uncensored(text) or bool(_SLANG.search(text))
+
+
 _TOKEN = re.compile(r"[^\W\d_]+(?:['’][^\W\d_]+)*")
 _VOWELS = set("aeiouyAEIOUY")
 # Tekrarlanan harfler teke indirilmiş hâlleri (hmmm -> hm, psst -> pst).
