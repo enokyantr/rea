@@ -92,11 +92,11 @@ jobs:
 
       - name: Local translation quality and speed (built exe, CPU runner)
         run: |
-          '{"local_model_dir": "' + ((Resolve-Path ../mt/alt) -replace '\\', '/') + '"}' | Set-Content alt.json
           Write-Host "=== $env:MT_MODEL (paketlenen) ==="
           ./dist/GTA-Altyazi/GTA-Altyazi.exe --mt-bench
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if (Test-Path ../mt/alt/model.bin) {
+            '{"local_model_dir": "' + ((Resolve-Path ../mt/alt) -replace '\\', '/') + '"}' | Set-Content alt.json
             Write-Host "=== $env:MT_MODEL_ALT ==="
             ./dist/GTA-Altyazi/GTA-Altyazi.exe --mt-bench --config alt.json
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
