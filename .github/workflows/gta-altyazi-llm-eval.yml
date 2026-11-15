@@ -1,0 +1,59 @@
+name: GTA Altyazi local LLM eval
+
+on:
+  push:
+    branches: [claude/gta6-auto-subtitle-tool-9uumiv]
+    paths:
+      - gta-altyazi/altyazi/llm.py
+      - gta-altyazi/altyazi/bench.py
+      - gta-altyazi/tools/llm_eval.py
+      - .github/workflows/gta-altyazi-llm-eval.yml
+  workflow_dispatch:
+    inputs:
+      models:
+        description: Boşlukla ayrılmış Ollama modelleri
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gta-altyazi-llm-eval-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      MODELS: ${{ inputs.models || 'aya-expanse:8b gemma3:12b qwen2.5:7b gemma3:4b' }}
+    defaults:
+      run:
+        working-directory: gta-altyazi
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+
+      - name: Install Ollama
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:11434/api/tags >/dev/null && break; sleep 2; done
+          ollama --version
+          python -m pip install --quiet requests
+
+      - name: Compare models (CPU only; quality, not speed)
+        run: |
+          for model in $MODELS; do
+            if ollama pull "$model"; then
+              python tools/llm_eval.py "$model" || echo "::warning::$model değerlendirilemedi"
+              ollama rm "$model"
+            else
+              echo "::warning::$model indirilemedi"
+            fi
+            df -h / | tail -1
+          done

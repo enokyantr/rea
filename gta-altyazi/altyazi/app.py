@@ -34,6 +34,12 @@ def describe_error(exc: Exception) -> str:
         return "DeepL anahtarı geçersiz (config.json → deepl_auth_key)."
     if name == "ConnectionException":
         return "DeepL'e bağlanılamadı (internet?)."
+    if name == "OllamaUnavailable":
+        return str(exc)
+    if name in ("ConnectionError", "ConnectTimeout"):
+        return "Yerel LLM'e (Ollama) bağlanılamadı — Ollama açık mı?"
+    if name in ("ReadTimeout", "Timeout"):
+        return "Yerel LLM zamanında yanıt vermedi (ollama_timeout_s artırılabilir)."
     return f"Çeviri hatası: {exc}"
 
 

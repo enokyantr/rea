@@ -51,6 +51,12 @@ class Config:
     local_model_dir: str = "model"
     local_device: str = "auto"  # "auto" | "cuda" | "cpu"
     local_beam_size: int = 1
+    # Taslağın yerine geçen son çeviri: "ollama" (ekran kartında yerel dil modeli: ücretsiz, sansürsüz)
+    # veya "deepl" (ücretsiz plan; küfürleri kısmen yumuşatır).
+    final_translator: str = "ollama"
+    ollama_model: str = "aya-expanse:8b"
+    ollama_url: str = "http://127.0.0.1:11434"
+    ollama_timeout_s: float = 10.0
     # "latency_optimized": en hızlı yanıt. "quality_optimized": daha doğal ama daha yavaş. "": DeepL varsayılanı.
     deepl_model_type: str = "latency_optimized"
     deepl_timeout_s: float = 4.0

@@ -26,7 +26,8 @@ def main() -> int:
     parser.add_argument("--full", action="store_true", help="--ocr-test: bölgeyi değil tüm resmi oku")
     parser.add_argument("--list-windows", action="store_true", help="Açık pencere başlıklarını listele")
     parser.add_argument("--self-test", action="store_true", help="OCR, overlay ve DeepL'i bu bilgisayarda dene")
-    parser.add_argument("--mt-bench", action="store_true", help="Yerel çevirinin örnek repliklerdeki kalitesi/hızı")
+    parser.add_argument("--mt-bench", action="store_true", help="Yerel taslak çevirinin örnek repliklerdeki kalitesi/hızı")
+    parser.add_argument("--llm-bench", action="store_true", help="Son çevirmenin (yerel LLM/DeepL) örnek repliklerdeki kalitesi/hızı")
     args = parser.parse_args()
 
     if sys.platform != "win32":
@@ -44,8 +45,13 @@ def main() -> int:
 
     cfg = config_mod.load(args.config)
     mode = cfg.translation_mode
-    if mode not in ("hybrid", "deepl", "local"):
-        print(f"translation_mode geçersiz: {mode!r} (hybrid | deepl | local)")
+    if mode not in ("hybrid", "final", "deepl", "local"):
+        print(f"translation_mode geçersiz: {mode!r} (hybrid | final | local)")
+        return 2
+    if mode == "deepl":  # eski ad: yalnızca son çevirmen
+        mode = "final"
+    if cfg.final_translator not in ("ollama", "deepl"):
+        print(f"final_translator geçersiz: {cfg.final_translator!r} (ollama | deepl)")
         return 2
 
     local = None
@@ -66,23 +72,29 @@ def main() -> int:
                 app.log(f"Yerel çeviri kullanılamıyor ({exc}); yalnızca DeepL kullanılacak")
 
     if args.mt_bench:
-        from . import selftest
+        from . import bench
 
-        return selftest.bench_local(local)
+        return bench.run(local, local.describe())
+    if args.llm_bench:
+        from . import bench
+
+        backend = _final_backend(cfg, args, *_glossary(cfg, args), interactive=True)
+        if backend is None:
+            return 2
+        return bench.run(backend, f"{backend.name}: {getattr(backend, 'model', cfg.final_translator)}")
     if args.self_test:
         from . import selftest
 
-        key = cfg.resolved_auth_key()
-        backend = _make_deepl(cfg, key) if key and not args.dry_run else None
-        if backend is not None:
+        backend = None
+        if not args.dry_run:
             try:
-                app.log(backend.setup_glossary(*_glossary(cfg, args)))
+                backend = _final_backend(cfg, args, *_glossary(cfg, args), interactive=False)
             except Exception as exc:
-                app.log(f"Sözlük okunamadı: {exc}")
+                app.log(f"Son çevirmen kullanılamıyor: {app.describe_error(exc)}")
         return selftest.run(cfg, backend, local)
 
     final = None
-    if mode in ("hybrid", "deepl"):
+    if mode in ("hybrid", "final"):
         try:
             entries, fp = _glossary(cfg, args)
         except Exception as exc:  # hatalı sözlük satırı: kullanıcı düzeltsin
@@ -91,14 +103,17 @@ def main() -> int:
         if args.dry_run:
             backend = DryRunBackend()
         else:
-            backend = _deepl_backend(cfg, args)
-            if backend is None:
+            backend = _final_backend(cfg, args, entries, fp, interactive=True)
+            if backend is None and not (mode == "hybrid" and local is not None):
                 return 2
-            app.log(backend.setup_glossary(entries, fp))
-            app.log("Sansürsüz çeviri: " + ("açık (küfür/argo yumuşatılmaz)" if cfg.uncensored else "kapalı"))
-        cache_path = args.config.parent / cfg.cache_file if cfg.cache_file else None
-        final = CachedTranslator(backend, cache_path)
-        app.log(f"Önbellekte {len(final)} çeviri var")
+            if backend is None:
+                app.log("Son çevirmen yok: yalnızca yerel taslak çeviri kullanılacak")
+            else:
+                app.log("Sansürsüz çeviri: " + ("açık (küfür/argo yumuşatılmaz)" if cfg.uncensored else "kapalı"))
+        if backend is not None:
+            cache_path = args.config.parent / cfg.cache_file if cfg.cache_file else None
+            final = CachedTranslator(backend, cache_path)
+            app.log(f"Önbellekte {len(final)} çeviri var")
 
     def make_translator() -> HybridTranslator:
         # Her bölgenin kendi kuyruğu; çeviri motorları (yerel model, DeepL, önbellek) ortak.
@@ -129,6 +144,41 @@ def _make_deepl(cfg, key: str) -> DeepLBackend:
 
     return DeepLBackend(key, cfg.source_lang, cfg.target_lang, cfg.deepl_model_type, cfg.deepl_timeout_s,
                         instructions=cfg.deepl_instructions if cfg.uncensored else None, log=app.log)
+
+
+def _final_backend(cfg, args, entries: dict[str, str], fp: str, interactive: bool):
+    """Taslağın yerine geçen son çevirmeni kurar. Başarısızsa None (etkileşimsiz modda hata fırlatır)."""
+    from . import app
+
+    if cfg.final_translator == "deepl":
+        if not interactive and not cfg.resolved_auth_key():
+            raise RuntimeError("DeepL anahtarı yok")
+        backend = _deepl_backend(cfg, args) if interactive else _make_deepl(cfg, cfg.resolved_auth_key())
+        if backend is not None:
+            app.log(backend.setup_glossary(entries, fp))
+        return backend
+
+    from .llm import OllamaBackend, OllamaUnavailable
+
+    backend = OllamaBackend(cfg.ollama_model, cfg.ollama_url, cfg.ollama_timeout_s, cfg.uncensored, entries)
+    try:
+        if not backend.has_model():
+            if not interactive:
+                raise OllamaUnavailable(f"Ollama'da '{cfg.ollama_model}' modeli yok (ollama pull {cfg.ollama_model})")
+            answer = input(f"'{cfg.ollama_model}' modeli yüklü değil (birkaç GB, bir kerelik). "
+                           "Şimdi indirilsin mi? [E/h]: ").strip().lower()
+            if answer not in ("", "e", "evet", "y", "yes"):
+                return None
+            backend.pull(lambda msg: print("\r" + msg.ljust(70), end="", flush=True))
+            print()
+        app.log("Yerel LLM ekran kartına yükleniyor (ilk seferde 10-60 sn sürebilir)...")
+        app.log(backend.check())
+    except Exception as exc:
+        if not interactive:
+            raise
+        print(app.describe_error(exc))
+        return None
+    return backend
 
 
 def _deepl_backend(cfg, args):

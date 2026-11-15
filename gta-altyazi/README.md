@@ -85,6 +85,21 @@ Ctrl+Alt+G / Ctrl+Alt+T ile ilgili alanı bir kez seçin; her bölge ayrı okunu
 üstünü kapatan kutuda gösterilir. Bölgeyi kaldırmak için seçiciyi açıp Delete'e basın.
 Son satırlar panelinde (Ctrl+Alt+H) bu satırlar `[Görev]` / `[Telefon]` etiketiyle görünür.
 
+## Yerel dil modeli (ücretsiz, sansürsüz son çeviri)
+
+Taslağın yerine geçen son çeviri varsayılan olarak bilgisayarınızdaki bir dil modeliyle yapılır
+(`final_translator: "ollama"`). Ücretsizdir, internet ve anahtar gerektirmez, küfür/argoyu
+yumuşatmaz. NVIDIA ekran kartında çalışır (8 GB VRAM yeterli).
+
+1. Ollama'yı kurun: <https://ollama.com/download> (Windows, ücretsiz). Kurulunca arka planda çalışır.
+2. Programı başlatın. Model (`ollama_model`, varsayılan `aya-expanse:8b`, ~5 GB) yüklü değilse
+   indirilsin mi diye sorar; bir kerelik indirilir. İlk açılışta model ekran kartına yüklenir.
+3. `.\GTA-Altyazi.exe --llm-bench` örnek repliklerin (küfürlüler dahil) çevirisini ve süresini gösterir.
+   Başka bir model denemek için `config.json` → `ollama_model` değiştirip tekrar çalıştırın.
+
+Ollama kapalıysa veya model yoksa program bunu söyler ve yalnızca yerel taslak çeviriyle devam eder.
+DeepL'e dönmek için: `"final_translator": "deepl"` (ücretsiz plan; küfürleri kısmen yumuşatır).
+
 ## Sözlük ve sansürsüz çeviri
 
 - **Sözlük (`sozluk.txt`):** her satır `İngilizce = Türkçe`. İsimler (Lucia, Vice City...) ve terimler
@@ -116,7 +131,9 @@ Canlı kullanımda süreleri görmek için `baslat.bat --debug`. Pencere başlı
 
 | Ayar | Varsayılan | Ne zaman değiştirilir |
 |---|---|---|
-| `translation_mode` | `"hybrid"` | `"deepl"` veya `"local"` |
+| `translation_mode` | `"hybrid"` | `"final"` (yalnızca son çevirmen) veya `"local"` |
+| `final_translator` | `"ollama"` | `"deepl"` |
+| `ollama_model` | `"aya-expanse:8b"` | başka bir Ollama modeli (`--llm-bench` ile karşılaştırın) |
 | `local_device` | `"auto"` | GPU sorun çıkarırsa `"cpu"` |
 | `display_mode` | `"adaptive"` | `"cover"`: İngilizceyi koyu kutuyla kapatıp sabit renkte yazar |
 | `deepl_model_type` | `"latency_optimized"` | Daha doğal ama daha yavaş çeviri için `"quality_optimized"` |

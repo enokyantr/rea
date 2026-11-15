@@ -11,6 +11,7 @@ import time
 import numpy as np
 
 from . import contrast, imageproc, textproc, win32
+from .bench import BENCH_LINES
 from .config import Config
 from .geometry import Rect
 
@@ -166,15 +167,6 @@ def _check_deepl(backend, report: Report) -> None:
                 f"talimat {'kabul edildi' if active else 'DeepL tarafından desteklenmiyor'} — {line!r} → {out!r}")
 
 
-BENCH_LINES = [
-    "Get in the car, now!", "Where are we even going?", "I told you this was a bad idea.",
-    "Relax, I've got a plan.", "Cops are right behind us!", "Take the next left, quick!",
-    "We need to lose them first.", "Is that a helicopter?", "Just keep driving, Lucia.",
-    "Hold on to something!", "That was way too close.", "You think this is a game, Jason? This is our life now.",
-    # Sansürsüz çeviri kontrolü: küfür/argo yumuşatılmamalı.
-    "What the fuck are you doing?", "Shut the fuck up, asshole!", "You stupid son of a bitch!",
-    "Holy shit, that was close.", "This motherfucker owes me money.", "Get your ass in the car, bro.",
-]
 
 
 def _check_local(local, report: Report) -> None:
@@ -190,19 +182,6 @@ def _check_local(local, report: Report) -> None:
     ok = bool(out.strip())
     report.item("Yerel çeviri", "TAMAM" if ok else "HATA",
                 f"{local.device}, medyan {statistics.median(times):.0f} ms — {BENCH_LINES[5]!r} → {out!r}")
-
-
-def bench_local(local) -> int:
-    """Örnek oyun replikleri: yerel çevirinin kalitesi ve hızı."""
-    print(local.describe())
-    times = []
-    for line in BENCH_LINES:
-        t0 = time.perf_counter()
-        out = local.translate(line, None)
-        times.append(1000 * (time.perf_counter() - t0))
-        print(f"{times[-1]:6.0f} ms  {line}  →  {out}")
-    print(f"medyan {statistics.median(times):.0f} ms, en kötü {max(times):.0f} ms")
-    return 0
 
 
 def run(cfg: Config, backend=None, local=None) -> int:
