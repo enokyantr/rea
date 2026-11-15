@@ -1,4 +1,4 @@
-"""Kullanım:  python -m altyazi [--dry-run] [--debug] [--ocr-test RESIM] [--list-windows]"""
+"""Kullanım:  python -m altyazi [--dry-run] [--debug] [--ocr-test RESIM] [--list-windows] [--self-test]"""
 
 from __future__ import annotations
 
@@ -13,6 +13,10 @@ APP_DIR = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path
 
 
 def main() -> int:
+    # Konsol dışına (dosya/pipe) yazarken Windows varsayılanı cp1252 Türkçe karakterlerde çöker.
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None and hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(prog="altyazi", description="Remote Play için anlık Türkçe altyazı")
     parser.add_argument("--config", type=Path, default=APP_DIR / "config.json")
     parser.add_argument("--dry-run", action="store_true", help="DeepL kullanmadan dene ([TR] metin)")
@@ -20,6 +24,7 @@ def main() -> int:
     parser.add_argument("--ocr-test", type=Path, metavar="RESIM", help="Ekran görüntüsünde OCR+çeviri dene")
     parser.add_argument("--full", action="store_true", help="--ocr-test: bölgeyi değil tüm resmi oku")
     parser.add_argument("--list-windows", action="store_true", help="Açık pencere başlıklarını listele")
+    parser.add_argument("--self-test", action="store_true", help="OCR, overlay ve DeepL'i bu bilgisayarda dene")
     args = parser.parse_args()
 
     if sys.platform != "win32":
@@ -36,6 +41,13 @@ def main() -> int:
         return 0
 
     cfg = config_mod.load(args.config)
+    if args.self_test:
+        from . import selftest
+
+        key = cfg.resolved_auth_key()
+        backend = DeepLBackend(key, cfg.source_lang, cfg.target_lang, cfg.deepl_model_type,
+                               cfg.deepl_timeout_s) if key and not args.dry_run else None
+        return selftest.run(cfg, backend)
     if args.dry_run:
         backend = DryRunBackend()
     else:

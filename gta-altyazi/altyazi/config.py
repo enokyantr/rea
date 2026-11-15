@@ -35,7 +35,9 @@ class Config:
 
     # OCR
     ocr_language: str = "en-US"
-    capture_interval_ms: int = 50
+    capture_interval_ms: int = 33
+    # Yeni satır görülünce doğrulama okuması bu kadar ms sonra yapılır (tam kare aralığı beklenmez).
+    confirm_delay_ms: int = 8
     upscale: float = 2.0
     # Altyazılar parlak (beyaz) yazılır: bölgede hiç parlak piksel yoksa OCR hiç çalıştırılmaz.
     skip_without_bright_text: bool = True

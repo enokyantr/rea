@@ -20,8 +20,8 @@ Overlay ekran yakalamadan gizlendiği için ölçüm kendi yazımızdan değil, 
 
 ## Gereksinimler
 
-- Windows 10/11
-- Python 3.11+ (python.org; kurulumda **Add python.exe to PATH** işaretli)
+- Windows 10 (2004+) / Windows 11
+- Hazır `.exe` kullanılmayacaksa Python 3.11+ (python.org; kurulumda **Add python.exe to PATH** işaretli)
 - DeepL API anahtarı — <https://www.deepl.com/pro-api> (Free plan: ayda 500.000 karakter)
 - Windows İngilizce OCR paketi. Windows'unuz Türkçeyse büyük ihtimalle eksiktir;
   **yönetici** PowerShell'de:
@@ -30,6 +30,20 @@ Overlay ekran yakalamadan gizlendiği için ölçüm kendi yazımızdan değil, 
   ```
 
 ## Kurulum
+
+**Hazır exe (önerilen):** GitHub'da *Actions → GTA Altyazi Windows build* altındaki son başarılı
+çalıştırmadan `GTA-Altyazi-windows` dosyasını indirin, zip'i açın ve `GTA-Altyazi.exe`'yi çalıştırın.
+Python gerekmez. Aşağıdaki `baslat.bat` komutlarının hepsi `GTA-Altyazi.exe` ile de çalışır.
+İlk iş olarak öz testi çalıştırın:
+
+```
+GTA-Altyazi.exe --self-test
+```
+
+OCR, overlay, ekran yakalamadan gizleme, beyaz sahnede renk seçimi ve (anahtar girildiyse) DeepL
+gecikmesini bu bilgisayarda dener; her satır `TAMAM`/`HATA` yazar.
+
+**Python ile:**
 
 1. `kurulum.bat` dosyasını çift tıklayın.
 2. `baslat.bat` ile çalıştırın. İlk açılışta DeepL API anahtarı sorulur; yapıştırın.
@@ -75,7 +89,7 @@ Canlı kullanımda süreleri görmek için `baslat.bat --debug`. Pencere başlı
 | `bright_threshold` | `190` | Altyazı hiç okunmuyorsa düşürün (yazı bu parlaklığın altındaysa OCR atlanır) |
 | `skip_without_bright_text` | `true` | Altyazı beyaz/parlak değilse `false` |
 | `upscale` | `2.0` | Küçük yazıda 2.5–3; yavaşsa 1.5 |
-| `capture_interval_ms` | `50` | CPU yükü fazlaysa 80–100 |
+| `capture_interval_ms` | `33` | CPU yükü fazlaysa 50–80 |
 | `stable_reads` | `2` | Yanlış/yarım satırlar çevriliyorsa 3 |
 | `clear_after_ms` | `700` | Türkçe altyazı çok erken/geç kayboluyorsa |
 | `font_size`, `font_family`, `outline_px` | `26`, `Segoe UI`, `2` | Görünüm |
@@ -86,10 +100,15 @@ Altyazının ekrana gelmesinden Türkçenin görünmesine kadar:
 
 | Adım | Süre |
 |---|---|
-| Yakalama + doğrulama (2 okuma × 50 ms) | ~50–100 ms |
+| Satırın fark edilmesi (33 ms aralık, ortalama yarısı) | ~0–33 ms |
 | Windows OCR (yalnızca yazının kırpılmış kısmı) | ~15–50 ms |
+| Doğrulama okuması (hemen yapılır, OCR genelde atlanır) | ~1–10 ms |
 | DeepL `latency_optimized` | ~100–300 ms (internete bağlı) |
 | Önbellekteki satır | ~0 ms |
+
+Sahte OCR (30 ms) ve sahte DeepL (150 ms) ile yapılan simülasyonda ortalama 197 ms ölçüldü:
+DeepL dışındaki kısım ~47 ms. Kalan sürenin neredeyse tamamı DeepL'in ağ + çeviri süresidir;
+bulut çeviri kullanıldıkça bunun altına inilemez.
 
 `baslat.bat --debug` her satır için gerçek süreyi yazar (`ilk okumadan ekrana: … ms`).
 Gecikmeyi düşürmek için yapılanlar:

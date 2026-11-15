@@ -112,6 +112,7 @@ class Pipeline(threading.Thread):
         last_window_title: str | None = None
         screen = win32.virtual_screen()
         interval = cfg.capture_interval_ms / 1000
+        confirm_delay = min(interval, cfg.confirm_delay_ms / 1000)
 
         with mss.mss() as sct:
             while not self.stopped.is_set():
@@ -202,9 +203,11 @@ class Pipeline(threading.Thread):
                     self.seq += 1
                     self.ui.put(("clear",))
 
+                # Doğrulanmayı bekleyen satır varsa hemen tekrar oku; yoksa normal kare aralığı.
+                wait = confirm_delay if stab.pending else interval
                 elapsed = time.monotonic() - tick
-                if elapsed < interval:
-                    time.sleep(interval - elapsed)
+                if elapsed < wait:
+                    time.sleep(wait - elapsed)
 
         self._executor.shutdown(wait=False, cancel_futures=True)
 

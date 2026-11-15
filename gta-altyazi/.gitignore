@@ -4,3 +4,6 @@ config.json
 config.json.tmp
 ceviri_onbellek.jsonl
 *_ocr_girdi.png
+build/
+dist/
+*.spec

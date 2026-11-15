@@ -66,6 +66,11 @@ class Stabilizer:
         self._candidate_since = 0.0
         self._last_text_at: float | None = None
 
+    @property
+    def pending(self) -> bool:
+        """Doğrulanmayı bekleyen yeni bir satır var mı (bir sonraki okuma hemen yapılmalı)."""
+        return self._candidate is not None
+
     def reset(self) -> None:
         """Ekranda hiçbir şey gösterilmiyormuş gibi baştan başla (duraklatma/devam sonrası)."""
         self.shown = None

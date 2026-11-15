@@ -146,3 +146,12 @@ def test_stabilizer_retries_after_failed_translation():
     assert s.feed("Hello there", 0.1) is None
     s.forget_shown()
     assert s.feed("Hello there", 0.2) == Show("Hello there", 0.2)
+
+
+def test_stabilizer_pending_while_unconfirmed():
+    s = Stabilizer(stable_reads=2, similarity=0.88, clear_after=0.5)
+    assert not s.pending
+    s.feed("Get in the car!", 0.0)
+    assert s.pending  # doğrulama okuması hemen yapılmalı
+    s.feed("Get in the car!", 0.01)
+    assert not s.pending
