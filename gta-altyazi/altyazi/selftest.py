@@ -10,7 +10,7 @@ import time
 
 import numpy as np
 
-from . import contrast, imageproc, textproc, win32
+from . import contrast, imageproc, reader, textproc, win32
 from .bench import BENCH_LINES
 from .config import Config
 from .geometry import Rect
@@ -59,21 +59,15 @@ def _check_ocr(cfg: Config, report: Report) -> None:
     # Koyu sahne ve açık (gökyüzü) sahne: beyaz yazı + siyah kontur her ikisinde de okunmalı.
     for scene, background in (("koyu sahne", (40, 55, 70)), ("açık sahne", (214, 226, 238))):
         gray = imageproc.to_gray(_render_subtitle(SAMPLE, background))
-        mask = imageproc.text_mask(gray, cfg.preprocess, cfg.bright_threshold, cfg.dark_threshold,
-                                   cfg.outline_radius, cfg.outline_white_threshold)
-        bbox = imageproc.bright_bbox(mask)
-        if bbox is not None:
-            top, bottom, left, right = bbox
-            gray, mask = gray[top:bottom, left:right], mask[top:bottom, left:right]
-        img = imageproc.upscale(imageproc.for_ocr(gray, mask, cfg.preprocess), cfg.upscale)
         times, text = [], ""
         for _ in range(5):
             t0 = time.perf_counter()
-            text = textproc.normalize(ocr.recognize(img))
+            result = reader.read_text(gray, ocr.recognize, cfg)  # oyundaki okuma yolunun aynısı
             times.append(1000 * (time.perf_counter() - t0))
+            text = result.text
         ok = textproc.similar(text, SAMPLE, 0.9)
         report.item(f"Windows OCR ({scene})", "TAMAM" if ok else "HATA",
-                    f"{statistics.median(times):.0f} ms, okunan: {text!r}")
+                    f"{statistics.median(times):.0f} ms, okunan: {text!r} [{result.variant}]")
 
 
 def _check_overlay(cfg: Config, report: Report) -> None:

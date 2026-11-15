@@ -11,7 +11,7 @@ from typing import Callable
 import numpy as np
 
 from . import config as config_mod
-from . import contrast, imageproc, textproc, win32
+from . import contrast, imageproc, reader, textproc, win32
 from .config import EXTRA_REGION_KEYS, EXTRA_REGION_LABELS, Config, Region
 from .geometry import Rect, intersect, region_to_screen, screen_to_region, union
 from .ocr import OcrUnavailable, WindowsOcr
@@ -72,6 +72,8 @@ class Pipeline(threading.Thread):
         self._previous_source: str | None = None
         self._retry_not_before = 0.0
         self._tag = "" if name == MAIN else f"[{EXTRA_REGION_LABELS.get(name, name)}] "
+        self.dump_dir: Path | None = None
+        self._dumped = 0
 
     def _on_show(self, event: textproc.Show) -> None:
         self.seq += 1
@@ -98,18 +100,24 @@ class Pipeline(threading.Thread):
 
         self.translator.submit(event.text, context, lambda: seq == self.seq, on_result, on_error)
 
-    def _read_text(self, ocr: WindowsOcr, gray: np.ndarray, mask: np.ndarray) -> str:
-        cfg = self.cfg
-        bbox = imageproc.bright_bbox(mask)
-        if bbox is None:
-            if cfg.skip_without_bright_text:
-                return ""
-        else:
-            top, bottom, left, right = bbox
-            gray, mask = gray[top:bottom, left:right], mask[top:bottom, left:right]
-        img = imageproc.upscale(imageproc.for_ocr(gray, mask, cfg.preprocess), cfg.upscale)
-        text = textproc.normalize(ocr.recognize(img))
-        return text if textproc.is_plausible(text, cfg.min_text_chars) else ""
+    def _read_text(self, ocr: WindowsOcr, gray: np.ndarray) -> str:
+        result = reader.read_text(gray, ocr.recognize, self.cfg)
+        if self.debug and len(result.candidates) > 1:
+            log(f"{self._tag}seçenekler: " + " | ".join(f"{n} {q:.2f} {t!r}" for n, t, q in result.candidates)
+                + f" → {result.variant}")
+        if self.dump_dir is not None and result.crop is not None and self._dumped < 300:
+            self._dump(result)
+        return result.text
+
+    def _dump(self, result: reader.ReadResult) -> None:
+        """--dump: OCR'a giren gerçek görüntüleri ve sonuçları kaydeder (ayar yapmak için)."""
+        from PIL import Image
+
+        self._dumped += 1
+        stem = self.dump_dir / f"{self.region_name}_{self._dumped:03d}"
+        Image.fromarray(result.crop).save(stem.with_suffix(".png"))
+        lines = [f"{n}\t{q:.2f}\t{t}" for n, t, q in result.candidates] + [f"seçilen\t{result.variant}\t{result.text}"]
+        stem.with_suffix(".txt").write_text("\n".join(lines), encoding="utf-8")
 
     def run(self) -> None:
         import mss
@@ -213,16 +221,14 @@ class Pipeline(threading.Thread):
                     time.sleep(interval)
                     continue
                 gray = imageproc.to_gray(sub)
-                mask = imageproc.text_mask(gray, cfg.preprocess, cfg.bright_threshold, cfg.dark_threshold,
-                                           cfg.outline_radius, cfg.outline_white_threshold)
-                sig = imageproc.signature(mask)
+                sig = imageproc.signature(gray >= cfg.bright_threshold)
                 if imageproc.same_signature(last_sig, sig) and reused < MAX_REUSE:
                     text = last_text
                     reused += 1
                 else:
                     reused = 0
                     t0 = time.perf_counter()
-                    text = self._read_text(ocr, gray, mask)
+                    text = self._read_text(ocr, gray)
                     if self.debug and text != last_text:
                         log(f"{self._tag}OCR {1000 * (time.perf_counter() - t0):.0f} ms: {text!r}")
                     last_sig, last_text = sig, text
@@ -243,7 +249,8 @@ class Pipeline(threading.Thread):
         self.translator.shutdown()
 
 
-def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTranslator], debug: bool) -> None:
+def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTranslator], debug: bool,
+            dump_dir: Path | None = None) -> None:
     import tkinter as tk
     from tkinter import messagebox
 
@@ -422,7 +429,11 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
         root.after(10, poll)
 
     hotkeys.start()
+    if dump_dir is not None:
+        dump_dir.mkdir(parents=True, exist_ok=True)
+        log(f"OCR görüntüleri kaydediliyor: {dump_dir} (bölge başına en fazla 300)")
     for p in all_pipelines():
+        p.dump_dir = dump_dir
         p.start()
     root.after(10, poll)
     root.after(1500, lambda: hotkeys.failed and log(
@@ -449,27 +460,18 @@ def run_ocr_test(cfg: Config, image_path: Path, translator: HybridTranslator, fu
         bgra = bgra[r.top:r.bottom, r.left:r.right]
         log(f"Bölge (piksel): x={r.left} y={r.top} {r.width}x{r.height}")
     gray = imageproc.to_gray(bgra)
-    mask = imageproc.text_mask(gray, cfg.preprocess, cfg.bright_threshold, cfg.dark_threshold, cfg.outline_radius,
-                                 cfg.outline_white_threshold)
-    bbox = imageproc.bright_bbox(mask)
-    if bbox is not None:
-        top, bottom, left, right = bbox
-        gray, mask = gray[top:bottom, left:right], mask[top:bottom, left:right]
-    else:
-        log("Bölgede yazı bulunamadı (bright_threshold çok yüksek ya da dark_threshold çok düşük olabilir)")
-    ocr_input = imageproc.upscale(imageproc.for_ocr(gray, mask, cfg.preprocess), cfg.upscale)
-    debug_path = image_path.with_name(image_path.stem + "_ocr_girdi.png")
-    Image.fromarray(ocr_input).save(debug_path)
-    log(f"OCR'a verilen görüntü kaydedildi: {debug_path}")
-
     ocr = WindowsOcr(cfg.ocr_language)
     t0 = time.perf_counter()
-    lines = ocr.recognize(ocr_input)
-    log(f"OCR süresi: {1000 * (time.perf_counter() - t0):.0f} ms")
-    for line in lines:
-        print("  satır:", line)
-    text = textproc.normalize(lines)
-    print("İngilizce:", text or "(metin yok)")
+    result = reader.read_text(gray, ocr.recognize, cfg)
+    log(f"OCR süresi (tüm seçenekler): {1000 * (time.perf_counter() - t0):.0f} ms")
+    if result.crop is not None:
+        debug_path = image_path.with_name(image_path.stem + "_ocr_girdi.png")
+        Image.fromarray(result.crop).save(debug_path)
+        log(f"OCR'a verilen kırpılmış görüntü: {debug_path}")
+    for name, cand, quality in result.candidates:
+        print(f"  {name:7} {quality:.2f}  {cand}")
+    text = result.text
+    print("İngilizce:", text or "(metin yok)", f"[{result.variant}]" if result.variant else "")
     for name, backend in (("Yerel", translator.draft), ("DeepL", translator.final)):
         if text and backend is not None:
             t0 = time.perf_counter()

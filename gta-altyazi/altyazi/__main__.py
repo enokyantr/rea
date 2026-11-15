@@ -30,6 +30,7 @@ def main() -> int:
     parser.add_argument("--llm-bench", action="store_true", help="Son çevirmenin (yerel LLM/DeepL) örnek repliklerdeki kalitesi/hızı")
     parser.add_argument("--ollama-model", metavar="MODEL", help="config.json'daki ollama_model yerine bunu kullan")
     parser.add_argument("--no-context", action="store_true", help="Yerel LLM'e önceki satırı gönderme")
+    parser.add_argument("--dump", action="store_true", help="OCR'a giren görüntüleri dump/ klasörüne kaydet (ayar için)")
     parser.add_argument("--cpu-draft", action="store_true", help="Yerel taslak çeviriyi işlemcide çalıştır (GPU belleği boşalır)")
     args = parser.parse_args()
 
@@ -150,7 +151,8 @@ def main() -> int:
     if args.ocr_test:
         app.run_ocr_test(cfg, args.ocr_test, make_translator(), args.full)
         return 0
-    app.run_gui(cfg, args.config, make_translator, args.debug)
+    app.run_gui(cfg, args.config, make_translator, args.debug,
+                dump_dir=(args.config.parent / "dump") if args.dump else None)
     return 0
 
 

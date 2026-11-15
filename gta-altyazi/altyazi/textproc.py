@@ -77,6 +77,20 @@ def _wordlike(token: str) -> bool:
     return longest <= 4
 
 
+_JUNK = re.compile(r"[•=|\\\[\]{}<>~^*_@#%$¦‹›«»„]|[A-Za-z]\d|\d[A-Za-z]")
+
+
+def text_quality(text: str) -> float:
+    """Okunan metnin gerçek metne benzerliği (0..1, çöp karakterler cezalandırılır). Birden çok
+    ön işleme seçeneğinin OCR sonucu arasından seçim için."""
+    tokens = _TOKEN.findall(text)
+    if not tokens:
+        return 0.0
+    total = sum(len(t) for t in tokens)
+    ratio = sum(len(t) for t in tokens if _wordlike(t)) / total
+    return max(0.0, ratio - 0.1 * len(_JUNK.findall(text)))
+
+
 def is_plausible(text: str, min_chars: int) -> bool:
     """Gerçek altyazıya benziyor mu? Harf oranı düşük gürültüyü ve OCR'ın bozuk okuduğu
     anlamsız satırları (ör. 'ntpgmfl/ Wag', '3hjc.') eler."""

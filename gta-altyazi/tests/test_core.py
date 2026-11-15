@@ -244,7 +244,7 @@ def test_config_saves_only_changes_and_migrates_frozen_old_defaults(tmp_path):
     old.pop("config_version", None)
     path.write_text(json.dumps(old), encoding="utf-8")
     cfg = config_mod.load(path)
-    assert cfg.preprocess == "outline"  # donmuş eski varsayılan yerine yeni varsayılan
+    assert cfg.preprocess == config_mod.Config().preprocess != "none"  # donmuş eski varsayılan yerine yeni
     assert cfg.capture_interval_ms == config_mod.Config().capture_interval_ms
     assert cfg.font_size == 30 and cfg.deepl_auth_key == "k:fx"  # kullanıcının seçimleri korunur
     saved = json.loads(path.read_text(encoding="utf-8"))

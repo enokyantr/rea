@@ -9,3 +9,4 @@ dist/
 *.spec
 model/
 sozluk.txt
+dump/

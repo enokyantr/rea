@@ -93,17 +93,19 @@ class Config:
     upscale: float = 2.0
     # Altyazılar parlak (beyaz) yazılır: bölgede hiç parlak piksel yoksa OCR hiç çalıştırılmaz.
     skip_without_bright_text: bool = True
-    # "outline": beyaz yazı + koyu kontur (oyun altyazıları); açık renkli sahnelerde de doğru okur.
-    # "bright": yalnızca parlak pikseller. "none": gri ton (kontursuz/renkli yazılar için).
-    preprocess: str = "outline"
+    # "auto": gri ton ve kontur maskesi denenir, gerçek metne en çok benzeyen okuma seçilir.
+    # "none": yalnızca gri ton. "outline": yalnızca kontur maskesi. "bright": yalnızca parlak pikseller.
+    preprocess: str = "auto"
     bright_threshold: int = 190
     # "outline": bu değerden koyu pikseller kontur sayılır; yazı pikselleri kontura en fazla
     # outline_radius piksel uzaklıkta olmalı.
-    dark_threshold: int = 90
-    outline_radius: int = 3
+    # Gerçek videoda (sıkıştırma: yazı saf beyaz değil, kontur tam siyah değil) sıkı eşikler
+    # (232/90/3) harfleri parçaladı; gevşek değerler.
+    dark_threshold: int = 120
+    outline_radius: int = 4
     # "outline": yazı bu değerden parlak olmalı (altyazı ~240-255; açık gökyüzü genelde daha düşük).
     # Yazı eksik okunursa düşürün, açık sahnede harfler kalınlaşıyorsa yükseltin.
-    outline_white_threshold: int = 232
+    outline_white_threshold: int = 205
     min_text_chars: int = 3
 
     # Kararlılık: aynı metin art arda kaç kez okunursa çevrilsin.
@@ -156,7 +158,7 @@ CONFIG_VERSION = 2
 # Sürüm 1 dosyaları TÜM ayarları yazıyordu. Bu anahtarlar eski bir varsayılana eşitse kullanıcı
 # seçimi değil, donmuş eski varsayılandır: atılır ki yeni varsayılan geçerli olsun.
 _OLD_DEFAULTS = {
-    "preprocess": ["none"],
+    "preprocess": ["none", "outline"],
     "capture_interval_ms": [120, 50],
     "ollama_model": ["gemma3:12b"],
     "ollama_use_context": [True],
