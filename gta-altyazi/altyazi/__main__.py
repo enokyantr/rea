@@ -71,7 +71,12 @@ def main() -> int:
         try:
             from .local_mt import LocalBackend
 
-            local = LocalBackend(model_dir, cfg.local_device, cfg.local_beam_size)
+            device = cfg.local_device
+            if device == "auto" and cfg.final_translator == "ollama" and mode != "local":
+                # RTX 4060 Ti 8 GB ölçümü: taslak model GPU'dayken Ollama satırları 1,9-6,6 sn sürdü
+                # (GPU paylaşımı); taslak işlemcideyken 0,28-0,43 sn. Taslak işlemcide ~0,1 sn.
+                device = "cpu"
+            local = LocalBackend(model_dir, device, cfg.local_beam_size)
             app.log(local.describe())
         except Exception as exc:
             if args.mt_bench or (mode == "local" and not args.self_test):

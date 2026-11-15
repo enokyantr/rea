@@ -49,7 +49,9 @@ class Config:
     # "deepl":  yalnızca DeepL.   "local": yalnızca yerel model (internet/anahtar gerekmez).
     translation_mode: str = "hybrid"
     local_model_dir: str = "model"
-    local_device: str = "auto"  # "auto" | "cuda" | "cpu"
+    # "auto": GPU varsa GPU; ancak son çevirmen yerel LLM (ollama) ise işlemci — ikisi GPU'yu
+    # paylaşınca LLM satırları ~10 kat yavaşlıyor. "cuda" / "cpu": zorla.
+    local_device: str = "auto"
     local_beam_size: int = 1
     # Taslağın yerine geçen son çeviri: "ollama" (ekran kartında yerel dil modeli: ücretsiz, sansürsüz)
     # veya "deepl" (ücretsiz plan; küfürleri kısmen yumuşatır).
