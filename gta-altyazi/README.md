@@ -158,6 +158,7 @@ Canlı kullanımda süreleri görmek için `baslat.bat --debug`. Pencere başlı
 | `upscale` | `2.0` | Küçük yazıda 2.5–3; yavaşsa 1.5 |
 | `capture_interval_ms` | `33` | CPU yükü fazlaysa 50–80 |
 | `stable_reads` | `2` | Yanlış/yarım satırlar çevriliyorsa 3 |
+| `confirm_hold_ms` | `40` | Geçiş karelerindeki bozuk satırlar hâlâ çevriliyorsa 60-80 (gecikme o kadar artar) |
 | `clear_after_ms` | `700` | Türkçe altyazı çok erken/geç kayboluyorsa |
 | `font_size`, `font_family`, `outline_px` | `26`, `Segoe UI`, `2` | Görünüm |
 

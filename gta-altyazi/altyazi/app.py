@@ -132,7 +132,8 @@ class Pipeline(threading.Thread):
             return
 
         cfg = self.cfg
-        stab = textproc.Stabilizer(cfg.stable_reads, cfg.similarity, cfg.clear_after_ms / 1000)
+        stab = textproc.Stabilizer(cfg.stable_reads, cfg.similarity, cfg.clear_after_ms / 1000,
+                                   cfg.confirm_hold_ms / 1000)
         picker = contrast.ColorPicker(cfg.outline_px) if self.display_mode != "cover" else None
         last_sig: np.ndarray | None = None
         last_text = ""

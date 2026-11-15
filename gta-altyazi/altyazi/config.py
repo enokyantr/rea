@@ -111,6 +111,9 @@ class Config:
     # Kararlılık: aynı metin art arda kaç kez okunursa çevrilsin.
     stable_reads: int = 2
     similarity: float = 0.88
+    # Yeni satır, ilk okumasından en az bu kadar ms sonra da aynı okunmalı (videonun farklı bir
+    # karesi). Geçiş/solma karelerinin bozuk okumalarının çevrilmesini önler.
+    confirm_hold_ms: int = 40
     # Altyazı kaybolduktan kaç ms sonra Türkçesi de silinsin.
     clear_after_ms: int = 700
 

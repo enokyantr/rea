@@ -296,6 +296,8 @@ import pytest  # noqa: E402
     ("that's exect[y it", "that's exectly it"),
     ("Itrs fine, yourre late, we can't", "It's fine, you're late, we can't"),
     ("I wonrt go, I cAnrt", "I won't go, I cAn't"),
+    ("me 'cause lfm beautiful", "me 'cause I'm beautiful"),
+    ("exactly how I Ilke my women", "exactly how I like my women"),
     # Doğru okumalara ve gerçek parantezlere dokunulmaz
     ("I [laughs] am here", "I [laughs] am here"),
     ("We (the crew) go", "We (the crew) go"),
@@ -303,3 +305,29 @@ import pytest  # noqa: E402
 ])
 def test_normalize_fixes_outline_ocr_confusions(raw, expected):
     assert normalize([raw]) == expected
+
+
+def test_same_video_frame_cannot_confirm_a_garbage_reading():
+    # Gerçek log: "I'll see you at work" gösterilirken bir geçiş karesi "I'll se - ouewo" okundu ve
+    # 8 ms sonraki okuma (aynı kare) onu "doğruladı"; çöp satır çevrildi.
+    s = Stabilizer(stable_reads=2, similarity=0.88, clear_after=0.7, min_hold=0.04)
+    t = 10.0
+    assert s.feed("I'll see you at work", t) is None
+    assert s.feed("I'll see you at work", t + 0.008) is None  # aynı kare: henüz değil
+    shown = s.feed("I'll see you at work", t + 0.05)  # sonraki kare de aynı: gerçek satır
+    assert isinstance(shown, Show) and shown.first_seen == t
+    assert s.feed("I'll se - ouewo", t + 0.1) is None
+    assert s.feed("I'll se - ouewo", t + 0.108) is None  # aynı karenin tekrarı
+    assert s.feed("I'll see you at work", t + 0.14) is None  # sonraki kare: satır değişmedi
+
+
+def test_upgrade_of_shown_line_needs_confirmation_too():
+    # Gerçek log: tek bir uzun ama bozuk okuma gösterilen satırı hemen "güncelliyordu".
+    s = Stabilizer(stable_reads=2, similarity=0.88, clear_after=0.7, min_hold=0.04)
+    s.feed("Ah, nigga, don't hat", 0.0)
+    assert isinstance(s.feed("Ah, nigga, don't hat", 0.05), Show)
+    assert s.feed("Ah, nigga, don't hat c zuciil&l, niggz.", 0.1) is None
+    assert s.feed("Ah, nigga. don't hate me 'cause I'm beautiful, nigga", 0.12) is None
+    assert s.feed("Ah, nigga, don't hat", 0.14) is None  # sıradan okuma bekleyeni bozmaz
+    up = s.feed("Ah, nigga. don't hate me 'cause I'm beautiful, nigga", 0.16)
+    assert isinstance(up, Show) and up.text == "Ah, nigga. don't hate me 'cause I'm beautiful, nigga"

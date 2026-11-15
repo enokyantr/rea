@@ -41,6 +41,11 @@ _CONTRACTIONS = re.compile(
 _L_LOOKALIKE = re.compile(r"(?<=[A-Za-z])[\[{(](?=[a-z])|(?<![\w])[\[{(](?=[a-z]{2})")
 
 
+# Logda tekrar tekrar görülen, İngilizcede olmayan okumalar (büyük/küçük harf duyarlı).
+_WORD_FIXES = {"lfm": "I'm", "Ifm": "I'm", "lrm": "I'm", "Ilke": "like", "Ilike": "I like"}
+_WORD_FIX = re.compile(r"(?<![\w'])(" + "|".join(_WORD_FIXES) + r")(?![\w'])")
+
+
 def _contraction(m: re.Match) -> str:
     groups = [g for g in m.groups() if g is not None]
     return f"{groups[0]}'{groups[1]}"
@@ -49,6 +54,7 @@ def _contraction(m: re.Match) -> str:
 def _fix_ocr_confusions(text: str) -> str:
     text = _NRT.sub(r"\1n't", text)
     text = _CONTRACTIONS.sub(_contraction, text)
+    text = _WORD_FIX.sub(lambda m: _WORD_FIXES[m.group(1)], text)
     # Gerçek parantez/köşeli parantez kapanışıyla gelir ("[laughs]"); kapanış yoksa harf l'dir.
     if not any(c in text for c in ")]}"):
         text = _L_LOOKALIKE.sub("l", text)
@@ -186,10 +192,12 @@ class Clear:
 class Stabilizer:
     """OCR okumalarını olaylara çevirir.
 
-    - Aynı satırın okuması `stable_reads` kez art arda gelirse `Show` üretir; o okumalar içinden en
-      değerlisi (reading_score) gösterilir.
-    - Gösterilen satırın okumaları (titreşen ya da kısmi) yeni satır sayılmaz; ama belirgin şekilde
-      daha iyi bir okuma gelirse `Show` ile güncellenir (eksik okunan satır tamamlanır).
+    - Aynı satırın okuması `stable_reads` kez art arda gelir ve ilk okumadan bu yana en az
+      `min_hold` saniye geçerse `Show` üretir; o okumalar içinden en değerlisi (reading_score)
+      gösterilir. Süre şartı önemli: 8 ms arayla yapılan iki okuma çoğu zaman videonun AYNI
+      karesidir; geçiş/solma karesinin bozuk okuması böylece kendini "doğrulardı".
+    - Gösterilen satırın okumaları (titreşen ya da kısmi) yeni satır sayılmaz; belirgin şekilde
+      daha iyi bir okuma aynı şartla doğrulanırsa `Show` ile güncellenir (eksik satır tamamlanır).
     - `clear_after` saniye boyunca metin yoksa `Clear` üretir.
     """
 
@@ -198,10 +206,11 @@ class Stabilizer:
     UPGRADE_MARGIN = 4
     UPGRADE_RATIO = 0.25
 
-    def __init__(self, stable_reads: int, similarity: float, clear_after: float):
+    def __init__(self, stable_reads: int, similarity: float, clear_after: float, min_hold: float = 0.0):
         self.stable_reads = max(1, stable_reads)
         self.similarity = similarity
         self.clear_after = clear_after
+        self.min_hold = max(0.0, min_hold)
         self.shown: str | None = None
         self._shown_score = 0.0
         self._candidate: str | None = None
@@ -236,11 +245,10 @@ class Stabilizer:
         self._last_text_at = now
         score = reading_score(text)
         if self.shown is not None and same_line(text, self.shown, self.similarity):
-            self._candidate, self._candidate_count = None, 0
-            if score >= self._shown_score + max(self.UPGRADE_MARGIN, self.UPGRADE_RATIO * self._shown_score):
-                self.shown, self._shown_score = text, score  # aynı satırın daha iyi okuması
-                return Show(text, now)
-            return None
+            needed = self._shown_score + max(self.UPGRADE_MARGIN, self.UPGRADE_RATIO * self._shown_score)
+            if score < needed:
+                return None  # gösterilen satırın sıradan/kısmi okuması: bekleyen güncellemeyi bozmaz
+            # Daha iyi okuma: yeni satır gibi doğrulanması gerekir (tek bozuk kare güncelleyemez).
 
         if self._candidate is not None and same_line(text, self._candidate, self.similarity):
             self._candidate_count += 1
@@ -250,7 +258,8 @@ class Stabilizer:
             self._candidate, self._candidate_score = text, score
             self._candidate_count, self._candidate_since = 1, now
 
-        if self._candidate_count >= self.stable_reads:
+        if (self._candidate_count >= self.stable_reads
+                and now - self._candidate_since >= self.min_hold):
             self.shown, self._shown_score = self._candidate, self._candidate_score
             self._candidate, self._candidate_count = None, 0
             return Show(self.shown, self._candidate_since)
