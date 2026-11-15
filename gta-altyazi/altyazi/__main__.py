@@ -81,6 +81,8 @@ def main() -> int:
         backend = _final_backend(cfg, args, *_glossary(cfg, args), interactive=True)
         if backend is None:
             return 2
+        if hasattr(backend, "_timeout"):
+            backend._timeout = 120  # ölçümde gerçek süreyi görmek için oyundaki zaman aşımı uygulanmaz
         return bench.run(backend, f"{backend.name}: {getattr(backend, 'model', cfg.final_translator)}")
     if args.self_test:
         from . import selftest

@@ -22,7 +22,10 @@ def run(backend, title: str, lines=BENCH_LINES) -> int:
     previous = None
     for line in lines:
         t0 = time.perf_counter()
-        out = backend.translate(line, previous)
+        try:
+            out = backend.translate(line, previous)
+        except Exception as exc:  # tek satırın hatası ölçümü bitirmesin
+            out = f"HATA: {type(exc).__name__}: {exc}"
         times.append(1000 * (time.perf_counter() - t0))
         print(f"{times[-1]:6.0f} ms  {line}  →  {out}", flush=True)
         previous = line
