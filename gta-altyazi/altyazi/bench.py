@@ -16,18 +16,20 @@ BENCH_LINES = [
 ]
 
 
-def run(backend, title: str, lines=BENCH_LINES) -> int:
+def run(backend, title: str, lines=BENCH_LINES, route=None) -> int:
+    """route(satır) -> (çevirmen, etiket): oyundaki gibi satır başına çevirmen seçimi (isteğe bağlı)."""
     print(title, flush=True)
     times = []
     previous = None
     for line in lines:
+        engine, label = route(line) if route else (backend, "")
         t0 = time.perf_counter()
         try:
-            out = backend.translate(line, previous)
+            out = engine.translate(line, previous)
         except Exception as exc:  # tek satırın hatası ölçümü bitirmesin
             out = f"HATA: {type(exc).__name__}: {exc}"
         times.append(1000 * (time.perf_counter() - t0))
-        print(f"{times[-1]:6.0f} ms  {line}  →  {out}", flush=True)
+        print(f"{times[-1]:6.0f} ms  {label}{line}  →  {out}", flush=True)
         previous = line
     print(f"medyan {statistics.median(times):.0f} ms, en kötü {max(times):.0f} ms", flush=True)
     return 0

@@ -173,3 +173,15 @@ def test_repicking_extra_region_keeps_display_mode():
     assert cfg.extra("gorev").display_mode == "adaptive"
     cfg.set_extra("gorev", None)
     assert cfg.extra("gorev") is None
+
+
+def test_needs_uncensored_detects_profanity_not_lookalikes():
+    from altyazi.textproc import needs_uncensored
+    for line in ["What the fuck are you doing?", "Shut the fuck up, asshole!", "You stupid son of a bitch!",
+                 "Holy shit, that was close.", "This motherfucker owes me money.", "Get your ass in the car, bro.",
+                 "Damn it!", "Screw you, man.", "You dumbass.", "Fucking cops!"]:
+        assert needs_uncensored(line), line
+    for line in ["Get in the car, now!", "Cops are right behind us!", "We need to pass them on the left.",
+                 "First class tickets.", "The grass is wet.", "Don't embarrass me.", "Take the next left, quick!",
+                 "Ask her about the brass knuckles.", "Assassin's creed."]:
+        assert not needs_uncensored(line), line

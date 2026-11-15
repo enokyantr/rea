@@ -99,13 +99,17 @@ Son satırlar panelinde (Ctrl+Alt+H) bu satırlar `[Görev]` / `[Telefon]` etike
 
 Taslağın yerine geçen son çeviri varsayılan olarak bilgisayarınızdaki bir dil modeliyle yapılır
 (`final_translator: "ollama"`). Ücretsizdir, internet ve anahtar gerektirmez, küfür/argoyu
-yumuşatmaz. NVIDIA ekran kartında çalışır (12 GB+ VRAM önerilir; 8 GB kartta model kısmen işlemciye taşar ve yavaşlar).
+yumuşatmaz. NVIDIA ekran kartında çalışır (8 GB VRAM yeterli: RTX 4060 Ti 8 GB'ta model tamamen ekran kartında, satır başına ~0,3 sn).
 
 1. Ollama'yı kurun: <https://ollama.com/download> (Windows, ücretsiz). Kurulunca arka planda çalışır.
-2. Programı başlatın. Model (`ollama_model`, varsayılan `gemma3:12b`, ~8 GB) yüklü değilse
+2. Programı başlatın. Model (`ollama_model`, varsayılan `aya-expanse:8b`, ~5 GB) yüklü değilse
    indirilsin mi diye sorar; bir kerelik indirilir. İlk açılışta model ekran kartına yüklenir.
 3. `.\GTA-Altyazi.exe --llm-bench` örnek repliklerin (küfürlüler dahil) çevirisini ve süresini gösterir.
    Başka bir model denemek için `config.json` → `ollama_model` değiştirip tekrar çalıştırın.
+
+Varsayılan olarak (`ollama_only_profanity: true`) dil modeli yalnızca küfür/argo içeren satırlarda
+kullanılır; diğer satırlarda yerel taslak çeviri daha doğru ve hızlı olduğu için nihai sonuçtur.
+12 GB+ ekran kartında daha iyi Türkçe için `"ollama_model": "gemma3:12b"` ve `"ollama_use_context": true`.
 
 Ollama kapalıysa veya model yoksa program bunu söyler ve yalnızca yerel taslak çeviriyle devam eder.
 DeepL'e dönmek için: `"final_translator": "deepl"` (ücretsiz plan; küfürleri kısmen yumuşatır).
@@ -143,7 +147,7 @@ Canlı kullanımda süreleri görmek için `baslat.bat --debug`. Pencere başlı
 |---|---|---|
 | `translation_mode` | `"hybrid"` | `"final"` (yalnızca son çevirmen) veya `"local"` |
 | `final_translator` | `"ollama"` | `"deepl"` |
-| `ollama_model` | `"gemma3:12b"` | başka bir Ollama modeli (`--llm-bench` ile karşılaştırın) |
+| `ollama_model` | `"aya-expanse:8b"` | başka bir Ollama modeli (`--llm-bench` ile karşılaştırın) |
 | `local_device` | `"auto"` | GPU sorun çıkarırsa `"cpu"` |
 | `display_mode` | `"adaptive"` | `"cover"`: İngilizceyi koyu kutuyla kapatıp sabit renkte yazar |
 | `deepl_model_type` | `"latency_optimized"` | Daha doğal ama daha yavaş çeviri için `"quality_optimized"` |

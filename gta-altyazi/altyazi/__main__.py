@@ -92,7 +92,15 @@ def main() -> int:
             return 2
         if hasattr(backend, "_timeout"):
             backend._timeout = 120  # ölçümde gerçek süreyi görmek için oyundaki zaman aşımı uygulanmaz
-        return bench.run(backend, f"{backend.name}: {getattr(backend, 'model', cfg.final_translator)}")
+        title = f"{backend.name}: {getattr(backend, 'model', cfg.final_translator)}"
+        route = None
+        if local is not None and cfg.final_translator == "ollama" and cfg.ollama_only_profanity:
+            from .textproc import needs_uncensored
+
+            # Oyundaki gibi: küfürlü satır LLM'e, diğerleri yerel taslak çeviriye.
+            route = lambda line: (backend, "[LLM]    ") if needs_uncensored(line) else (local, "[taslak] ")  # noqa: E731
+            title += "  (yalnızca küfürlü satırlar LLM'e gider)"
+        return bench.run(backend, title, route=route)
     if args.self_test:
         from . import selftest
 
@@ -128,7 +136,10 @@ def main() -> int:
 
     def make_translator() -> HybridTranslator:
         # Her bölgenin kendi kuyruğu; çeviri motorları (yerel model, DeepL, önbellek) ortak.
-        return HybridTranslator(final, local)
+        from .textproc import needs_uncensored
+
+        only_profane = cfg.final_translator == "ollama" and cfg.ollama_only_profanity
+        return HybridTranslator(final, local, final_for=needs_uncensored if only_profane else None)
 
     app.log(f"Çeviri modu: {make_translator().mode}")
     if args.ocr_test:

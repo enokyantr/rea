@@ -28,12 +28,16 @@ ErrorFn = Callable[[Exception, str, bool], None]
 
 
 class HybridTranslator:
-    def __init__(self, final: FinalTranslator | None, draft: Backend | None):
+    def __init__(self, final: FinalTranslator | None, draft: Backend | None,
+                 final_for: Callable[[str], bool] | None = None):
         # Not: `if final` kullanma — CachedTranslator boş önbellekte len()==0 olduğu için False sayılır.
         if final is None and draft is None:
             raise ValueError("en az bir çevirmen gerekli")
         self.final = final
         self.draft = draft
+        # Son çevirmen yalnızca bu koşulu sağlayan satırlarda kullanılır (ör. küfürlü satırlar);
+        # diğerlerinde taslak çeviri nihai sonuçtur. None: her satır.
+        self.final_for = final_for
         # Ayrı işçiler: yavaş DeepL isteği hızlı yerel taslağı bekletmesin.
         self._draft_exec = ThreadPoolExecutor(max_workers=1, thread_name_prefix="local-mt") if draft is not None else None
         self._final_exec = ThreadPoolExecutor(max_workers=1, thread_name_prefix="deepl") if final is not None else None
@@ -46,7 +50,9 @@ class HybridTranslator:
 
     def submit(self, text: str, context: str | None, is_current: Callable[[], bool],
                on_result: ResultFn, on_error: ErrorFn) -> None:
-        if self.final is not None:
+        use_final = self.final is not None and (
+            self.draft is None or self.final_for is None or self.final_for(text))
+        if use_final:
             hit = self.final.cached(text)
             if hit is not None:  # önbellek: kaliteli çeviri anında, taslağa gerek yok
                 on_result(FINAL, hit, 0.0)
@@ -54,8 +60,8 @@ class HybridTranslator:
 
         lock = threading.Lock()
         state = {"final_done": False, "draft_shown": False}
-        # Yalnızca yerel model varsa onun sonucu nihai sonuçtur.
-        draft_stage = DRAFT if self.final is not None else FINAL
+        # Son çevirmen kullanılmayacaksa taslak nihai sonuçtur.
+        draft_stage = DRAFT if use_final else FINAL
 
         def run_draft() -> None:
             if not is_current():  # kuyrukta beklerken yeni satır geldi
@@ -92,7 +98,7 @@ class HybridTranslator:
 
         if self._draft_exec is not None:
             self._draft_exec.submit(run_draft)
-        if self._final_exec is not None:
+        if use_final:
             self._final_exec.submit(run_final)
 
     def shutdown(self) -> None:

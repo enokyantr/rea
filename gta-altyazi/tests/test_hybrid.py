@@ -129,3 +129,19 @@ def test_local_only_mode_result_is_final():
 def test_requires_a_translator():
     with pytest.raises(ValueError):
         HybridTranslator(None, None)
+
+
+def test_final_only_for_selected_lines_draft_is_final_otherwise():
+    local, deepl = Gate("yerel"), Gate("llm")
+    local.release.set()
+    deepl.release.set()
+    h = HybridTranslator(CachedTranslator(deepl, None), local, final_for=lambda t: "fuck" in t)
+    c = Collector()
+    h.submit("Get in the car", None, lambda: True, c.on_result, c.on_error)
+    assert c.done.wait(2)
+    assert c.results == [(FINAL, "yerel:Get in the car")]  # küfürsüz: taslak nihai, LLM çağrılmadı
+    assert deepl.calls == 0
+    c2 = Collector()
+    h.submit("Shut the fuck up", None, lambda: True, c2.on_result, c2.on_error)
+    assert c2.done.wait(2)
+    assert c2.results[-1] == (FINAL, "llm:Shut the fuck up") and deepl.calls == 1

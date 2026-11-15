@@ -36,6 +36,26 @@ def split_sentences(text: str) -> list[str]:
     return [p for p in parts if p] or [text]
 
 
+# Küfür/argo içeren satırlar: yerel taslak model bunları yumuşatıyor, son çevirmene gönderilir.
+_PROFANITY = re.compile(
+    r"\b(?:\w*fuck\w*|\w*shit\w*|bitch\w*|sons? of a bitch|ass|asses|\w+ass(?:es)?|ass(?:hole|hat|wipe)s?"
+    r"|bastards?|dicks?|dickhead\w*|cocks?(?:sucker)?s?|puss(?:y|ies)|cunts?|piss\w*|damn\w*|goddamn\w*"
+    r"|crap\w*|bullshit|hoes?|whores?|sluts?|twats?|pricks?|wankers?|bollocks|screw (?:you|this|that|off)"
+    r"|wtf|stfu|bro|bruh|homie|dawg)\b",
+    re.IGNORECASE,
+)
+# "ass" ile biten ama küfür olmayan sık kelimeler (\w+ass yakalamasın).
+_NOT_PROFANE = re.compile(r"\b(?:class|glass|grass|pass|mass|brass|bass|lass|compass|embarrass|harass|"
+                          r"surpass|bypass|amass|carcass|morass|trespass|crass|overpass|underpass|"
+                          r"sunglass|eyeglass|hourglass|wineglass)(?:es|ed|ing)?\b", re.IGNORECASE)
+
+
+def needs_uncensored(text: str) -> bool:
+    """Satırda küfür/argo var mı? (Bu satırlar sansürsüz son çevirmene gider.)"""
+    cleaned = _NOT_PROFANE.sub(" ", text)
+    return bool(_PROFANITY.search(cleaned))
+
+
 def is_plausible(text: str, min_chars: int) -> bool:
     """Gerçek altyazıya benziyor mu? Harf oranı düşük gürültüyü eler."""
     if len(text) < min_chars:

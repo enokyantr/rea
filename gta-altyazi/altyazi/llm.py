@@ -179,7 +179,14 @@ class OllamaBackend:
         })
         if r.status_code == 404:
             raise OllamaUnavailable(f"Ollama'da '{self.model}' modeli yok (ollama pull {self.model})")
-        r.raise_for_status()
+        if r.status_code >= 400:
+            try:
+                detail = r.json().get("error", r.text)
+            except ValueError:
+                detail = r.text
+            hint = (" — ekran kartı belleği yetmiyor olabilir; daha küçük bir model deneyin"
+                    if "memory" in detail.lower() or "cuda" in detail.lower() else "")
+            raise OllamaUnavailable(f"Ollama hatası ({r.status_code}): {detail.strip()[:300]}{hint}")
         return r.json().get("message", {}).get("content", "")
 
     def translate(self, text: str, context: str | None) -> str:

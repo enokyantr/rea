@@ -54,13 +54,17 @@ class Config:
     # Taslağın yerine geçen son çeviri: "ollama" (ekran kartında yerel dil modeli: ücretsiz, sansürsüz)
     # veya "deepl" (ücretsiz plan; küfürleri kısmen yumuşatır).
     final_translator: str = "ollama"
-    # CI karşılaştırması (18 replik, 6 küfürlü): en iyi Türkçe ve küfür sertliği, küfür eklemiyor.
-    ollama_model: str = "gemma3:12b"
+    # 8 GB ekran kartına sığan ve küfürü çeviren model (RTX 4060 Ti 8 GB: %100 GPU, ~330 ms/satır).
+    # gemma3:12b Türkçede daha iyi ama ~8 GB; 12 GB+ kartlarda tercih edilebilir (ollama_use_context: true ile).
+    ollama_model: str = "aya-expanse:8b"
     ollama_url: str = "http://127.0.0.1:11434"
     ollama_timeout_s: float = 10.0
     ollama_num_ctx: int = 2048
+    # true: yerel LLM yalnızca küfür/argo içeren satırlarda kullanılır; diğer satırlarda yerel taslak
+    # çeviri (daha doğru ve hızlı) nihai sonuçtur. false: her satır LLM'e gider.
+    ollama_only_profanity: bool = True
     # Önceki satırı bağlam olarak gönder. Bağlamı da çeviren modellerde (ör. aya-expanse) false yapın.
-    ollama_use_context: bool = True
+    ollama_use_context: bool = False
     # "latency_optimized": en hızlı yanıt. "quality_optimized": daha doğal ama daha yavaş. "": DeepL varsayılanı.
     deepl_model_type: str = "latency_optimized"
     deepl_timeout_s: float = 4.0
