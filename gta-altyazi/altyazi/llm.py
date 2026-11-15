@@ -77,8 +77,13 @@ class OllamaBackend:
     name = "Yerel LLM"
 
     def __init__(self, model: str, url: str = "http://127.0.0.1:11434", timeout_s: float = 10.0,
-                 uncensored: bool = True, glossary: dict[str, str] | None = None, keep_alive: str = "60m"):
+                 uncensored: bool = True, glossary: dict[str, str] | None = None, keep_alive: str = "60m",
+                 num_ctx: int = 2048, use_context: bool = True):
         self.model = model
+        # Küçük bağlam penceresi: istem ~600 token; daha büyük pencere ekran kartı belleğini boşa harcar.
+        self._num_ctx = num_ctx
+        # Bazı modeller (CI'da aya-expanse) <context> satırını da çeviriyor: kapatılabilir.
+        self._use_context = use_context
         self._url = url.rstrip("/")
         self._timeout = timeout_s
         self._keep_alive = keep_alive
@@ -95,7 +100,7 @@ class OllamaBackend:
 
     def cache_namespace(self) -> str:
         # Model veya talimat (sansürsüz kural, örnekler, sözlük) değişince eski çeviriler kullanılmaz.
-        return f"ollama-{self.model}-{self._fingerprint}"
+        return f"ollama-{self.model}-{self._fingerprint}-c{int(self._use_context)}"
 
     # --- Ollama yönetimi -------------------------------------------------------------------
 
@@ -132,10 +137,28 @@ class OllamaBackend:
                     progress(line)
                     last = line
 
+    def gpu_share(self) -> float | None:
+        """Yüklü modelin ekran kartı belleğindeki oranı (1.0 = tamamen GPU'da). Bilinmiyorsa None."""
+        try:
+            r = self._http.get(f"{self._url}/api/ps", timeout=3)
+            r.raise_for_status()
+        except requests.RequestException:
+            return None
+        for m in r.json().get("models", []):
+            if m.get("name") == self.model or m.get("model") == self.model:
+                size, vram = m.get("size") or 0, m.get("size_vram") or 0
+                return vram / size if size else None
+        return None
+
     def check(self) -> str:
-        """Modeli belleğe yükler (ilk çeviri gecikmesini oyundan önce öder)."""
+        """Modeli belleğe yükler (ilk çeviri gecikmesini oyundan önce öder) ve GPU payını bildirir."""
         self._chat("<line>Warm up.</line>", timeout=180)
-        return f"Yerel LLM hazır: {self.model}"
+        share = self.gpu_share()
+        if share is None:
+            return f"Yerel LLM hazır: {self.model}"
+        note = "" if share >= 0.99 else (" — model ekran kartı belleğine sığmadı, kısmen işlemcide çalışıyor "
+                                         "(yavaş). Daha küçük bir model seçin veya local_device: \"cpu\" yapın.")
+        return f"Yerel LLM hazır: {self.model} (%{100 * share:.0f} ekran kartında){note}"
 
     usage_summary = check
 
@@ -152,7 +175,7 @@ class OllamaBackend:
             "messages": messages,
             "stream": False,
             "keep_alive": self._keep_alive,  # model GPU'da kalsın, her satırda yeniden yüklenmesin
-            "options": {"temperature": 0.1, "num_predict": 120},
+            "options": {"temperature": 0.1, "num_predict": 120, "num_ctx": self._num_ctx},
         })
         if r.status_code == 404:
             raise OllamaUnavailable(f"Ollama'da '{self.model}' modeli yok (ollama pull {self.model})")
@@ -160,6 +183,7 @@ class OllamaBackend:
         return r.json().get("message", {}).get("content", "")
 
     def translate(self, text: str, context: str | None) -> str:
+        context = context if self._use_context else None
         out = clean_output(self._chat(_user_message(context, text), timeout=self._timeout))
         if not out:
             raise RuntimeError("Yerel LLM boş yanıt verdi")

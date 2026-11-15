@@ -129,3 +129,12 @@ def test_cache_namespace_tracks_model_and_rules(fake, tmp_path):
 ])
 def test_clean_output(raw, expected):
     assert clean_output(raw) == expected
+
+
+def test_num_ctx_and_context_switch(fake):
+    backend = OllamaBackend("aya-expanse:8b", fake.url, num_ctx=1024, use_context=False)
+    backend.translate("Hi", "Previous line")
+    body = fake.chats[-1]
+    assert body["options"]["num_ctx"] == 1024
+    assert body["messages"][-1]["content"] == "<line>Hi</line>"  # bağlam gönderilmedi
+    assert backend.cache_namespace() != OllamaBackend("aya-expanse:8b", fake.url).cache_namespace()

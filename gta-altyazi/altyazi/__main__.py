@@ -28,6 +28,9 @@ def main() -> int:
     parser.add_argument("--self-test", action="store_true", help="OCR, overlay ve DeepL'i bu bilgisayarda dene")
     parser.add_argument("--mt-bench", action="store_true", help="Yerel taslak çevirinin örnek repliklerdeki kalitesi/hızı")
     parser.add_argument("--llm-bench", action="store_true", help="Son çevirmenin (yerel LLM/DeepL) örnek repliklerdeki kalitesi/hızı")
+    parser.add_argument("--ollama-model", metavar="MODEL", help="config.json'daki ollama_model yerine bunu kullan")
+    parser.add_argument("--no-context", action="store_true", help="Yerel LLM'e önceki satırı gönderme")
+    parser.add_argument("--cpu-draft", action="store_true", help="Yerel taslak çeviriyi işlemcide çalıştır (GPU belleği boşalır)")
     args = parser.parse_args()
 
     if sys.platform != "win32":
@@ -44,6 +47,12 @@ def main() -> int:
         return 0
 
     cfg = config_mod.load(args.config)
+    if args.ollama_model:
+        cfg.ollama_model = args.ollama_model
+    if args.no_context:
+        cfg.ollama_use_context = False
+    if args.cpu_draft:
+        cfg.local_device = "cpu"
     mode = cfg.translation_mode
     if mode not in ("hybrid", "final", "deepl", "local"):
         print(f"translation_mode geçersiz: {mode!r} (hybrid | final | local)")
@@ -162,7 +171,8 @@ def _final_backend(cfg, args, entries: dict[str, str], fp: str, interactive: boo
 
     from .llm import OllamaBackend, OllamaUnavailable
 
-    backend = OllamaBackend(cfg.ollama_model, cfg.ollama_url, cfg.ollama_timeout_s, cfg.uncensored, entries)
+    backend = OllamaBackend(cfg.ollama_model, cfg.ollama_url, cfg.ollama_timeout_s, cfg.uncensored, entries,
+                            num_ctx=cfg.ollama_num_ctx, use_context=cfg.ollama_use_context)
     try:
         if not backend.has_model():
             if not interactive:

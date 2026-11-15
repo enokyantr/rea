@@ -58,6 +58,9 @@ class Config:
     ollama_model: str = "gemma3:12b"
     ollama_url: str = "http://127.0.0.1:11434"
     ollama_timeout_s: float = 10.0
+    ollama_num_ctx: int = 2048
+    # Önceki satırı bağlam olarak gönder. Bağlamı da çeviren modellerde (ör. aya-expanse) false yapın.
+    ollama_use_context: bool = True
     # "latency_optimized": en hızlı yanıt. "quality_optimized": daha doğal ama daha yavaş. "": DeepL varsayılanı.
     deepl_model_type: str = "latency_optimized"
     deepl_timeout_s: float = 4.0
