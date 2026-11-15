@@ -54,7 +54,8 @@ class Config:
     # Taslağın yerine geçen son çeviri: "ollama" (ekran kartında yerel dil modeli: ücretsiz, sansürsüz)
     # veya "deepl" (ücretsiz plan; küfürleri kısmen yumuşatır).
     final_translator: str = "ollama"
-    ollama_model: str = "aya-expanse:8b"
+    # CI karşılaştırması (18 replik, 6 küfürlü): en iyi Türkçe ve küfür sertliği, küfür eklemiyor.
+    ollama_model: str = "gemma3:12b"
     ollama_url: str = "http://127.0.0.1:11434"
     ollama_timeout_s: float = 10.0
     # "latency_optimized": en hızlı yanıt. "quality_optimized": daha doğal ama daha yavaş. "": DeepL varsayılanı.

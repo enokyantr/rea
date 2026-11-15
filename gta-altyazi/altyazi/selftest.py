@@ -151,19 +151,19 @@ def _check_deepl(backend, report: Report) -> None:
         try:
             out = backend.translate(text, None)
         except Exception as exc:
-            report.item("DeepL", "HATA", f"{type(exc).__name__}: {exc}")
+            report.item(getattr(backend, "name", "Son çeviri"), "HATA", f"{type(exc).__name__}: {exc}")
             return
         times.append(1000 * (time.perf_counter() - t0))
-    report.item("DeepL", "TAMAM",
+    report.item(getattr(backend, "name", "Son çeviri"), "TAMAM",
                 f"ilk {times[0]:.0f} ms, sonraki ort. {statistics.mean(times[1:]):.0f} ms — {out!r}")
     line = "Shut the fuck up, asshole!"
     try:
         out = backend.translate(line, None)
     except Exception as exc:
-        report.item("DeepL sansürsüz", "HATA", f"{type(exc).__name__}: {exc}")
+        report.item(f"{getattr(backend, 'name', 'Son çeviri')} sansürsüz", "HATA", f"{type(exc).__name__}: {exc}")
         return
     active = getattr(backend, "instructions_active", False)
-    report.item("DeepL sansürsüz", "TAMAM" if active else "BİLGİ",
+    report.item(f"{getattr(backend, 'name', 'Son çeviri')} sansürsüz", "TAMAM" if active else "BİLGİ",
                 f"talimat {'kabul edildi' if active else 'DeepL tarafından desteklenmiyor'} — {line!r} → {out!r}")
 
 
@@ -204,6 +204,6 @@ def run(cfg: Config, backend=None, local=None) -> int:
     if backend is not None:
         _check_deepl(backend, report)
     else:
-        report.item("DeepL", "ATLANDI", "anahtar yok")
+        report.item("Son çeviri", "ATLANDI", "son çevirmen kullanılamıyor (yukarıdaki nedene bakın)")
     print("\nSonuç:", "BAŞARILI" if report.failed == 0 else f"{report.failed} HATA")
     return 1 if report.failed else 0
