@@ -49,7 +49,7 @@ jobs:
       - name: Compare models (CPU only; quality, not speed)
         run: |
           for model in $MODELS; do
-            if ollama pull "$model"; then
+            if ollama pull "$model" > /dev/null 2>&1; then
               python tools/llm_eval.py "$model" || echo "::warning::$model değerlendirilemedi"
               ollama rm "$model"
             else

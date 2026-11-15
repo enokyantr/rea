@@ -28,18 +28,27 @@ strong, natural Turkish street-language equivalents chosen for the context (for 
 siktir / siktiğimin / amına koyayım, "asshole" -> göt herif / şerefsiz, "shit" -> bok / hassiktir, \
 "bitch" -> orospu / kaltak, "bro" -> kanka). Never soften, censor, euphemize or omit swearing; if \
 the original is vulgar, the Turkish must be just as vulgar.
+- Equally important: never ADD swearing or slang that is not in the original. A neutral line stays \
+neutral; translate the meaning exactly (left stays left, numbers and names stay the same).
 """
 
-# Küçük modeller örnekle çok daha tutarlı davranır: üslubu ve çıktı biçimini sabitler.
+# Küçük modeller örnekle çok daha tutarlı davranır. Örnekler (CI karşılaştırmasında görülen
+# hatalara karşı) üç şeyi gösterir: küfrün sertliği korunur, küfürsüz satıra küfür eklenmez ve
+# <context> satırı çevrilmez/tekrarlanmaz. Biçim: (bağlam, satır, çeviri).
 EXAMPLES_UNCENSORED = [
-    ("Shut the fuck up and drive!", "Kapa lan şu siktiğimin çeneni de sür!"),
-    ("You stupid asshole, you almost got us killed.", "Seni salak göt herif, az kalsın bizi öldürtüyordun."),
-    ("Holy shit, bro. That was close.", "Hassiktir kanka. Kıl payı kurtulduk."),
+    ("Where's my money?", "Shut the fuck up and drive!", "Kapa lan şu siktiğimin çeneni de sür!"),
+    ("Shut the fuck up and drive!", "Take the next exit on the right.", "Sağdaki ilk çıkıştan sap."),
+    ("You stupid asshole, you almost got us killed.", "Holy shit, bro. That was close.",
+     "Hassiktir kanka. Kıl payı kurtulduk."),
 ]
 EXAMPLES_PLAIN = [
-    ("Get in the car, we're leaving.", "Arabaya bin, gidiyoruz."),
-    ("Where did you get the money?", "Parayı nereden buldun?"),
+    ("Holy shit, bro. That was close.", "Get in the car, we're leaving.", "Arabaya bin, gidiyoruz."),
+    (None, "Where did you get the money?", "Parayı nereden buldun?"),
 ]
+
+
+def _user_message(context: str | None, line: str) -> str:
+    return (f"<context>{context}</context>\n" if context else "") + f"<line>{line}</line>"
 
 _LABEL = re.compile(r"^(?:türkçe|turkish|çeviri|translation)\s*:\s*", re.IGNORECASE)
 _TAGS = re.compile(r"</?(?:line|context)>")
@@ -134,8 +143,8 @@ class OllamaBackend:
 
     def _chat(self, user: str, timeout: float) -> str:
         messages = [{"role": "system", "content": self._system}]
-        for src, dst in self._examples:
-            messages.append({"role": "user", "content": f"<line>{src}</line>"})
+        for context, src, dst in self._examples:
+            messages.append({"role": "user", "content": _user_message(context, src)})
             messages.append({"role": "assistant", "content": dst})
         messages.append({"role": "user", "content": user})
         r = self._http.post(f"{self._url}/api/chat", timeout=timeout, json={
@@ -143,7 +152,7 @@ class OllamaBackend:
             "messages": messages,
             "stream": False,
             "keep_alive": self._keep_alive,  # model GPU'da kalsın, her satırda yeniden yüklenmesin
-            "options": {"temperature": 0.2, "num_predict": 160},
+            "options": {"temperature": 0.1, "num_predict": 120},
         })
         if r.status_code == 404:
             raise OllamaUnavailable(f"Ollama'da '{self.model}' modeli yok (ollama pull {self.model})")
@@ -151,8 +160,7 @@ class OllamaBackend:
         return r.json().get("message", {}).get("content", "")
 
     def translate(self, text: str, context: str | None) -> str:
-        user = (f"<context>{context}</context>\n" if context else "") + f"<line>{text}</line>"
-        out = clean_output(self._chat(user, timeout=self._timeout))
+        out = clean_output(self._chat(_user_message(context, text), timeout=self._timeout))
         if not out:
             raise RuntimeError("Yerel LLM boş yanıt verdi")
         return out

@@ -72,6 +72,9 @@ def test_chat_request_has_rules_examples_context_and_keeps_model_loaded(fake):
     assert msgs[0]["role"] == "system" and "Never soften" in msgs[0]["content"]
     assert "Vice City = Vice City" in msgs[0]["content"]
     assert any(m["role"] == "assistant" and "siktiğimin" in m["content"] for m in msgs)  # üslup örneği
+    assert "never ADD swearing" in msgs[0]["content"]  # küfürsüz satıra küfür eklenmesin
+    # Bağlamın çevrilmediğini gösteren örnek: bağlamlı kullanıcı mesajına yalnızca satırın çevirisi
+    assert {"role": "assistant", "content": "Sağdaki ilk çıkıştan sap."} in msgs
     assert msgs[-1] == {"role": "user",
                         "content": "<context>Where's my money?</context>\n<line>Shut the fuck up, asshole!</line>"}
     assert body["stream"] is False and body["keep_alive"] == "60m"
