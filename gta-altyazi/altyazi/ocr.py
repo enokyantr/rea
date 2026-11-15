@@ -35,7 +35,7 @@ class WindowsOcr:
 
     def recognize(self, gray: np.ndarray) -> list[str]:
         """Gri ton (uint8, HxW) görüntüdeki satırları döndürür."""
-        from winrt.windows.graphics.imaging import BitmapAlphaMode, BitmapPixelFormat, SoftwareBitmap
+        from winrt.windows.graphics.imaging import BitmapPixelFormat, SoftwareBitmap
 
         h, w = gray.shape
         if h < 8 or w < 8:
@@ -48,9 +48,8 @@ class WindowsOcr:
         bgra[..., 0] = bgra[..., 1] = bgra[..., 2] = gray
         bgra[..., 3] = 255
 
-        bitmap = SoftwareBitmap.create_copy_from_buffer(
-            memoryview(bgra).cast("B"), BitmapPixelFormat.BGRA8, w, h, BitmapAlphaMode.PREMULTIPLIED
-        )
+        # 4 argümanlı biçim pywinrt v3 ve v4'te aynı (alfa varsayılan: premultiplied; alfa zaten 255).
+        bitmap = SoftwareBitmap.create_copy_from_buffer(memoryview(bgra).cast("B"), BitmapPixelFormat.BGRA8, w, h)
         result = self._loop.run_until_complete(self._recognize(bitmap))
         return [line.text for line in result.lines]
 

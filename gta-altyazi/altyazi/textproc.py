@@ -66,6 +66,15 @@ class Stabilizer:
         self._candidate_since = 0.0
         self._last_text_at: float | None = None
 
+    def reset(self) -> None:
+        """Ekranda hiçbir şey gösterilmiyormuş gibi baştan başla (duraklatma/devam sonrası)."""
+        self.shown = None
+        self._candidate, self._candidate_count = None, 0
+
+    def forget_shown(self) -> None:
+        """Gösterilen satır başarısız olduysa (çeviri hatası) aynı satır tekrar okununca yeniden dene."""
+        self.shown = None
+
     def feed(self, text: str, now: float) -> Show | Clear | None:
         if not text:
             self._candidate, self._candidate_count = None, 0

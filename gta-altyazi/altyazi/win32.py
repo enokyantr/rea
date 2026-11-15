@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ctypes
+import os
 import threading
 from ctypes import wintypes
 from typing import Callable
@@ -64,11 +65,19 @@ def _client_rect(hwnd: int) -> Rect | None:
     return Rect(origin.x, origin.y, width, height)
 
 
+def _window_pid(hwnd: int) -> int:
+    pid = wintypes.DWORD()
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    return pid.value
+
+
 def visible_windows() -> list[tuple[int, str, Rect]]:
     found: list[tuple[int, str, Rect]] = []
+    own_pid = os.getpid()
 
     def callback(hwnd, _lparam):
-        if user32.IsWindowVisible(hwnd) and not user32.IsIconic(hwnd):
+        # Kendi pencerelerimizin başlığını okumak Tk ana iş parçacığını beklerdi; zaten hedef değiller.
+        if user32.IsWindowVisible(hwnd) and not user32.IsIconic(hwnd) and _window_pid(hwnd) != own_pid:
             title = _window_title(hwnd)
             if title:
                 rect = _client_rect(hwnd)

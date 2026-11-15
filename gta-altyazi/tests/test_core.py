@@ -129,3 +129,20 @@ def test_config_defaults_and_unknown_keys(tmp_path):
     path.write_text(json.dumps(data), encoding="utf-8")
     cfg = config_mod.load(path)
     assert cfg.region == Region(0.1, 0.7, 0.8, 0.2) and cfg.font_size == 30
+
+
+def test_stabilizer_reset_shows_same_line_again():
+    s = Stabilizer(stable_reads=2, similarity=0.88, clear_after=0.5)
+    s.feed("Get in the car!", 0.0)
+    assert s.feed("Get in the car!", 0.1) == Show("Get in the car!", 0.0)
+    s.reset()  # duraklat/devam: ekranda hâlâ aynı satır var
+    assert s.feed("Get in the car!", 0.2) is None
+    assert s.feed("Get in the car!", 0.3) == Show("Get in the car!", 0.2)
+
+
+def test_stabilizer_retries_after_failed_translation():
+    s = Stabilizer(stable_reads=1, similarity=0.88, clear_after=0.5)
+    assert s.feed("Hello there", 0.0) == Show("Hello there", 0.0)
+    assert s.feed("Hello there", 0.1) is None
+    s.forget_shown()
+    assert s.feed("Hello there", 0.2) == Show("Hello there", 0.2)

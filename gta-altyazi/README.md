@@ -21,7 +21,7 @@ Overlay ekran yakalamadan gizlendiği için ölçüm kendi yazımızdan değil, 
 ## Gereksinimler
 
 - Windows 10/11
-- Python 3.10+ (python.org; kurulumda **Add python.exe to PATH** işaretli)
+- Python 3.11+ (python.org; kurulumda **Add python.exe to PATH** işaretli)
 - DeepL API anahtarı — <https://www.deepl.com/pro-api> (Free plan: ayda 500.000 karakter)
 - Windows İngilizce OCR paketi. Windows'unuz Türkçeyse büyük ihtimalle eksiktir;
   **yönetici** PowerShell'de:

@@ -49,6 +49,10 @@ class Pipeline(threading.Thread):
         self.sample_rect = sample_rect
         self.paused = threading.Event()
         self.stopped = threading.Event()
+        # Arayüz duraklat/devam ettiğinde: ekrandaki altyazı yeniden okunup gösterilsin.
+        self.reset = threading.Event()
+        # Çeviri başarısız oldu: aynı satır tekrar okununca yeniden dene.
+        self._retry = threading.Event()
         self.seq = 0
         self.base = win32.primary_screen()
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="deepl")
@@ -64,6 +68,8 @@ class Pipeline(threading.Thread):
             message = describe_error(exc)
             log(message)
             self.ui.put(("error", message))
+            if seq == self.seq:
+                self._retry.set()
             return
         if self.debug:
             log(f"çeviri {1000 * (time.perf_counter() - started):.0f} ms: {translated}")
@@ -110,6 +116,14 @@ class Pipeline(threading.Thread):
         with mss.mss() as sct:
             while not self.stopped.is_set():
                 tick = time.monotonic()
+                if self.reset.is_set():
+                    self.reset.clear()
+                    self.seq += 1  # bekleyen/gelmekte olan çeviriler geçersiz
+                    stab.reset()
+                    last_sig, last_text, reused = None, "", 0
+                if self._retry.is_set():
+                    self._retry.clear()
+                    stab.forget_shown()
                 if self.paused.is_set():
                     time.sleep(0.05)
                     continue
@@ -218,6 +232,7 @@ def run_gui(cfg: Config, cfg_path: Path, translator: CachedTranslator, debug: bo
         root.destroy()
 
     def toggle_pause() -> None:
+        pipeline.reset.set()
         if pipeline.paused.is_set():
             pipeline.paused.clear()
             overlay.unhide()
@@ -233,7 +248,9 @@ def run_gui(cfg: Config, cfg_path: Path, translator: CachedTranslator, debug: bo
             return
         state["picking"] = True
         was_paused = pipeline.paused.is_set()
+        pipeline.reset.set()
         pipeline.paused.set()
+        overlay.clear()
         overlay.hide()
 
         def done(rect: Rect | None) -> None:
