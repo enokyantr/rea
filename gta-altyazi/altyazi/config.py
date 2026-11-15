@@ -51,14 +51,6 @@ class Config:
     local_model_dir: str = "model"
     local_device: str = "auto"  # "auto" | "cuda" | "cpu"
     local_beam_size: int = 1
-    # Taslağın yerine geçen son çeviri: "claude" (talimatları birebir uygular, sansürsüz) veya "deepl".
-    final_translator: str = "claude"
-    # Claude anahtarı. Boş bırakılırsa ANTHROPIC_API_KEY ortam değişkeni kullanılır.
-    anthropic_api_key: str = ""
-    claude_model: str = "claude-opus-5-5"
-    # "low": en hızlı yanıt (kısa çeviri için yeterli). "medium"/"high": daha özenli, daha yavaş.
-    claude_effort: str = "low"
-    claude_timeout_s: float = 8.0
     # "latency_optimized": en hızlı yanıt. "quality_optimized": daha doğal ama daha yavaş. "": DeepL varsayılanı.
     deepl_model_type: str = "latency_optimized"
     deepl_timeout_s: float = 4.0
@@ -124,9 +116,6 @@ class Config:
         self.extra_regions = [r for r in self.extra_regions if r.name != name]
         if region is not None:
             self.extra_regions.append(ExtraRegion(name, region, old.display_mode if old else "cover"))
-
-    def resolved_anthropic_key(self) -> str:
-        return self.anthropic_api_key.strip() or os.environ.get("ANTHROPIC_API_KEY", "").strip()
 
     def resolved_auth_key(self) -> str:
         return self.deepl_auth_key.strip() or os.environ.get("DEEPL_AUTH_KEY", "").strip()

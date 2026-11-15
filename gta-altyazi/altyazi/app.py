@@ -34,16 +34,6 @@ def describe_error(exc: Exception) -> str:
         return "DeepL anahtarı geçersiz (config.json → deepl_auth_key)."
     if name == "ConnectionException":
         return "DeepL'e bağlanılamadı (internet?)."
-    if name in ("AuthenticationError", "PermissionDeniedError"):
-        return "Claude API anahtarı geçersiz veya yetkisiz (config.json → anthropic_api_key)."
-    if name == "RateLimitError":
-        return "Claude hız sınırına takıldı; birazdan tekrar denenecek."
-    if name in ("APIConnectionError", "APITimeoutError"):
-        return "Claude'a bağlanılamadı (internet?)."
-    if name == "TranslationRefused":
-        return str(exc)
-    if name in ("InternalServerError", "OverloadedError", "ServiceUnavailableError"):
-        return "Claude şu an yoğun; birazdan tekrar denenecek."
     return f"Çeviri hatası: {exc}"
 
 

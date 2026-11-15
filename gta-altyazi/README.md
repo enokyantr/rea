@@ -92,14 +92,6 @@ Son satırlar panelinde (Ctrl+Alt+H) bu satırlar `[Görev]` / `[Telefon]` etike
   değiştirip programı yeniden başlatın. Sözlük değişince eski çeviriler önbellekten kullanılmaz.
   Not: yerel taslak çeviri sözlüğü kullanmaz; DeepL çevirisi gelince sözlüklü hâli yerine geçer.
   Çok anlamlı tek kelimeleri (ör. "shit") sözlüğe eklemeyin; her bağlamda aynı karşılık kullanılır.
-- **Son çevirmen (`final_translator`):** taslağın yerine geçen çeviri. Varsayılan `"claude"`:
-  Claude (`claude_model`, varsayılan Claude Opus 5.5, `claude_effort: "low"` ile en hızlı ayarda)
-  talimatları birebir uygular; küfür/argo aynı sertlikte çevrilir, sözlük ve karakterin tonu korunur.
-  İlk açılışta Anthropic API anahtarı sorulur (console.anthropic.com → API Keys) ve `config.json`
-  dosyasına kaydedilir. Claude bir satırı reddederse sunucu otomatik olarak başka bir modele geçer;
-  yine çevrilemezse yerel taslak ekranda kalır. `"deepl"` seçilirse DeepL kullanılır (testte DeepL,
-  talimata rağmen küfürleri yumuşattı: "Shut the fuck up, asshole!" → "Kapa çeneni lan, pislik!").
-  Daha ucuz/hızlı ama daha zayıf bir model için `claude_model` değiştirilebilir (ör. `claude-haiku-5-5`).
 - **Sansürsüz (`uncensored: true`, varsayılan):** DeepL'e küfür ve argoyu aynı sertlikte çevirmesi,
   asla yumuşatmaması talimatı gönderilir (`deepl_instructions`). DeepL bu talimatı hızlı modelde kabul
   etmezse program otomatik olarak kalite modeline geçer; o da kabul etmezse talimatsız devam eder ve
@@ -124,9 +116,7 @@ Canlı kullanımda süreleri görmek için `baslat.bat --debug`. Pencere başlı
 
 | Ayar | Varsayılan | Ne zaman değiştirilir |
 |---|---|---|
-| `translation_mode` | `"hybrid"` | `"final"` (yalnızca son çevirmen) veya `"local"` |
-| `final_translator` | `"claude"` | `"deepl"` |
-| `claude_model`, `claude_effort` | `claude-opus-5-5`, `low` | daha ucuz/hızlı: `claude-haiku-5-5` |
+| `translation_mode` | `"hybrid"` | `"deepl"` veya `"local"` |
 | `local_device` | `"auto"` | GPU sorun çıkarırsa `"cpu"` |
 | `display_mode` | `"adaptive"` | `"cover"`: İngilizceyi koyu kutuyla kapatıp sabit renkte yazar |
 | `deepl_model_type` | `"latency_optimized"` | Daha doğal ama daha yavaş çeviri için `"quality_optimized"` |
