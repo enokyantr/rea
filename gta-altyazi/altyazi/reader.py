@@ -45,6 +45,20 @@ def variants(gray: np.ndarray, cfg, mode: str | None = None) -> list[tuple[str, 
     return out
 
 
+# Windows OCR küçük ve bulanık yazıda harfleri bölüyor ("some" -> "sorrje", "dick" -> "click").
+# Yazı satırı bu yükseklikten (piksel) kısaysa OCR'dan önce daha çok büyütülür.
+TARGET_TEXT_HEIGHT = 40
+MAX_UPSCALE = 4.0
+
+
+def upscale_factor(crop_height: int, cfg) -> float:
+    """`crop_height`: yazı kutusunun yüksekliği (bright_bbox kenar payı dahil, 2 x 8 px)."""
+    text_h = crop_height - 16
+    if text_h <= 0:
+        return cfg.upscale
+    return max(cfg.upscale, min(MAX_UPSCALE, TARGET_TEXT_HEIGHT / text_h))
+
+
 def read_text(gray: np.ndarray, recognize: Callable[[np.ndarray], list[str]], cfg) -> ReadResult:
     """`gray`: bölgenin gri tonu. `recognize`: görüntü -> satırlar (Windows OCR)."""
     bbox = imageproc.bright_bbox(gray >= cfg.bright_threshold)
@@ -56,9 +70,10 @@ def read_text(gray: np.ndarray, recognize: Callable[[np.ndarray], list[str]], cf
         gray = gray[top:bottom, left:right]
 
     result = ReadResult("", crop=gray)
+    factor = upscale_factor(gray.shape[0] if bbox is not None else 0, cfg)
     best_score = None
     for name, image in variants(gray, cfg):
-        text = textproc.normalize(recognize(imageproc.upscale(image, cfg.upscale)))
+        text = textproc.normalize(recognize(imageproc.upscale(image, factor)))
         score = textproc.reading_score(text)
         result.candidates.append((name, text, score))
         # Uzun ve temiz okuma kazanır; kısmi okuma ("Go to") tam okumayı yenemez.

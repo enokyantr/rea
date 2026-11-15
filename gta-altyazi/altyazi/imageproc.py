@@ -65,7 +65,7 @@ def _minmax(gray: np.ndarray, radius: int, fn) -> np.ndarray:
     return out
 
 
-def tophat(gray: np.ndarray, radius: int = 3, floor: int = 60) -> np.ndarray:
+def tophat(gray: np.ndarray, radius: int = 3, floor: int = 25) -> np.ndarray:
     """Beyaz top-hat: her pikselin yerel arka plandan (açma) ne kadar parlak olduğu.
 
     İnce parlak harf vuruşları kalır; harften geniş parlak alanlar (gökyüzü, kar, duvar) silinir.
@@ -73,8 +73,9 @@ def tophat(gray: np.ndarray, radius: int = 3, floor: int = 60) -> np.ndarray:
     altyazı kırpıntılarında kontur maskesinden belirgin daha iyi okundu (CER 0.45 -> 0.09)."""
     opened = _minmax(_minmax(gray, radius, np.minimum), radius, np.maximum)
     th = gray.astype(np.int16) - opened
-    strong = th >= floor
-    hi = max(int(np.percentile(th[strong], 90)) if strong.any() else 255, floor)
+    # Germe: en parlak vuruşlara göre. Sabit bir eşik (ör. 60) kontursuz, açık zemindeki silik
+    # altyazıyı (açık gri betonda beyaz yazı: fark ~40-50) tamamen siliyordu.
+    hi = max(int(np.percentile(th, 99.5)), floor)
     return (255 - np.clip(th * (255.0 / hi), 0, 255)).astype(np.uint8)
 
 

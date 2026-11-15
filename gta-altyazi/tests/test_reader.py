@@ -74,3 +74,20 @@ def test_tophat_keeps_thin_strokes_and_drops_wide_bright_background():
     out = tophat(gray, radius=3)
     assert out[20, 20] < 60 and out[20, 160] < 128   # yazı koyu
     assert out[20, 140] > 200 and out[20, 60] > 200  # zemin (gökyüzü dahil) beyaz
+
+
+def test_tophat_keeps_faint_outline_less_text_on_light_background():
+    # Kullanıcının ekran görüntüsü: kontursuz beyaz yazı, açık gri beton (fark ~45).
+    from altyazi.imageproc import tophat
+
+    gray = np.full((40, 200), 195, dtype=np.uint8)
+    gray[10:30, 50:52] = 240
+    out = tophat(gray, radius=3)
+    assert out[20, 50] < 60 and out[20, 100] > 200
+
+
+def test_small_text_is_upscaled_more():
+    cfg = Config()
+    assert reader.upscale_factor(16 + 14, cfg) > 2.5   # ~14 px yazı (düşük çözünürlüklü video)
+    assert reader.upscale_factor(16 + 40, cfg) == cfg.upscale
+    assert reader.upscale_factor(16 + 4, cfg) == 4.0
