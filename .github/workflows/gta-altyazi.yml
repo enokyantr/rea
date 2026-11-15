@@ -18,7 +18,8 @@ concurrency:
 env:
   # Paketlenecek yerel çeviri modeli (taslak çeviri). Karşılaştırma için ikinci model de ölçülür.
   MT_MODEL: Helsinki-NLP/opus-mt-tc-big-en-tr
-  MT_MODEL_ALT: Helsinki-NLP/opus-mt-en-tr
+  # Yalnızca karşılaştırma için; bulunamazsa atlanır.
+  MT_MODEL_ALT: Helsinki-NLP/opus-mt-tc-base-en-tr
 
 jobs:
   build:
@@ -55,6 +56,8 @@ jobs:
             --quantization int8 --copy_files source.spm target.spm
           ../convenv/Scripts/ct2-transformers-converter --model $env:MT_MODEL_ALT --output_dir ../mt/alt `
             --quantization int8 --copy_files source.spm target.spm
+          if ($LASTEXITCODE -ne 0) { Write-Host "::warning::Karşılaştırma modeli dönüştürülemedi: $env:MT_MODEL_ALT" }
+          $global:LASTEXITCODE = 0
           Get-ChildItem ../mt -Recurse | Select-Object FullName, Length | Format-Table -AutoSize
 
       - name: Ensure English OCR language
@@ -93,9 +96,11 @@ jobs:
           Write-Host "=== $env:MT_MODEL (paketlenen) ==="
           ./dist/GTA-Altyazi/GTA-Altyazi.exe --mt-bench
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Write-Host "=== $env:MT_MODEL_ALT ==="
-          ./dist/GTA-Altyazi/GTA-Altyazi.exe --mt-bench --config alt.json
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (Test-Path ../mt/alt/model.bin) {
+            Write-Host "=== $env:MT_MODEL_ALT ==="
+            ./dist/GTA-Altyazi/GTA-Altyazi.exe --mt-bench --config alt.json
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
 
       - name: Self-test of the built exe (real Windows OCR, overlay, capture exclusion)
         run: |
