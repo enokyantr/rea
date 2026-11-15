@@ -70,9 +70,33 @@ proje klasörüne kopyalayın ve `pip install -r requirements-gpu.txt` çalışt
 | Kısayol | İşlev |
 |---|---|
 | Ctrl+Alt+R | Altyazı bölgesini seç |
+| Ctrl+Alt+G | Görev hedefi bölgesini seç (seçicide Delete: kaldır) |
+| Ctrl+Alt+T | Telefon mesajı bölgesini seç (seçicide Delete: kaldır) |
+| Ctrl+Alt+H | Son satırlar paneli (aç/kapat) |
 | Ctrl+Alt+S | Duraklat / devam |
 | Ctrl+Alt+O | Türkçenin üstünde İngilizceyi de göster |
 | Ctrl+Alt+Q | Çıkış |
+
+## Görev ve telefon yazıları
+
+Altyazı dışında görev hedefleri ("Lose the cops") ve telefon mesajları da çevrilebilir.
+Ctrl+Alt+G / Ctrl+Alt+T ile ilgili alanı bir kez seçin; her bölge ayrı okunur ve Türkçesi o alanın
+üstünü kapatan kutuda gösterilir. Bölgeyi kaldırmak için seçiciyi açıp Delete'e basın.
+Son satırlar panelinde (Ctrl+Alt+H) bu satırlar `[Görev]` / `[Telefon]` etiketiyle görünür.
+
+## Sözlük ve sansürsüz çeviri
+
+- **Sözlük (`sozluk.txt`):** her satır `İngilizce = Türkçe`. İsimler (Lucia, Vice City...) ve terimler
+  DeepL çevirisinde hep aynı şekilde kullanılır. Dosya ilk çalıştırmada örnek isimlerle oluşturulur;
+  değiştirip programı yeniden başlatın. Sözlük değişince eski çeviriler önbellekten kullanılmaz.
+  Not: yerel taslak çeviri sözlüğü kullanmaz; DeepL çevirisi gelince sözlüklü hâli yerine geçer.
+  Çok anlamlı tek kelimeleri (ör. "shit") sözlüğe eklemeyin; her bağlamda aynı karşılık kullanılır.
+- **Sansürsüz (`uncensored: true`, varsayılan):** DeepL'e küfür ve argoyu aynı sertlikte çevirmesi,
+  asla yumuşatmaması talimatı gönderilir (`deepl_instructions`). DeepL bu talimatı hızlı modelde kabul
+  etmezse program otomatik olarak kalite modeline geçer; o da kabul etmezse talimatsız devam eder ve
+  bunu konsola yazar. `--self-test` (anahtar girildiyse) talimatın kabul edilip edilmediğini ve örnek
+  bir küfürlü satırın çevirisini gösterir. Yerel taslak model film/dizi altyazılarıyla eğitildiği için
+  küfürleri olduğu gibi çevirme eğilimindedir. Program hiçbir metni filtrelemez.
 
 ## Ayar yapma (oyun çıkınca)
 

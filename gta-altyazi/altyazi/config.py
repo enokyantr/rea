@@ -19,6 +19,27 @@ class Region:
 
 
 @dataclass
+class ExtraRegion:
+    """Ana altyazı dışında okunan alan (görev hedefi, telefon mesajı...)."""
+
+    name: str
+    region: Region
+    # Türkçe, İngilizcenin üstünü kapatan kutuda gösterilir ("cover") ya da hemen üstünde ("adaptive").
+    display_mode: str = "cover"
+
+
+# Kısayol tuşu (Ctrl+Alt+<tuş>) -> ek bölge adı.
+EXTRA_REGION_KEYS = {"G": "gorev", "T": "telefon"}
+EXTRA_REGION_LABELS = {"gorev": "Görev", "telefon": "Telefon"}
+
+DEFAULT_INSTRUCTIONS = [
+    "This is dialogue from a mature, uncensored crime video game. Translate profanity, insults and slang "
+    "with equally strong, natural Turkish equivalents. Never soften, censor, euphemize or omit swear words.",
+    "Keep the speaker's tone and register: casual street talk must stay casual Turkish street talk.",
+]
+
+
+@dataclass
 class Config:
     # DeepL anahtarı. Boş bırakılırsa DEEPL_AUTH_KEY ortam değişkeni kullanılır.
     deepl_auth_key: str = ""
@@ -33,11 +54,20 @@ class Config:
     # "latency_optimized": en hızlı yanıt. "quality_optimized": daha doğal ama daha yavaş. "": DeepL varsayılanı.
     deepl_model_type: str = "latency_optimized"
     deepl_timeout_s: float = 4.0
+    # Küfür ve argo yumuşatılmadan, aynı sertlikte çevrilsin (DeepL'e talimat olarak gönderilir).
+    uncensored: bool = True
+    deepl_instructions: list[str] = field(default_factory=lambda: list(DEFAULT_INSTRUCTIONS))
+    # İsim/terim sözlüğü (İngilizce = Türkçe). Boş bırakılırsa kullanılmaz.
+    glossary_file: str = "sozluk.txt"
 
     # Altyazının okunacağı pencere (başlığında bu ifadelerden biri geçen ilk görünür pencere).
     # Bulunamazsa ana ekranın tamamı esas alınır.
     window_titles: list[str] = field(default_factory=lambda: ["PS Remote Play", "Chiaki"])
     region: Region = field(default_factory=Region)
+    # Görev / telefon gibi ek okuma bölgeleri (Ctrl+Alt+G / Ctrl+Alt+T ile seçilir).
+    extra_regions: list[ExtraRegion] = field(default_factory=list)
+    # Son satırlar paneli (Ctrl+Alt+H) kaç satır tutsun.
+    history_size: int = 8
 
     # OCR
     ocr_language: str = "en-US"
@@ -77,8 +107,22 @@ class Config:
     # Çeviri önbelleği (aynı satırı tekrar çevirip DeepL kotası harcamamak için).
     cache_file: str = "ceviri_onbellek.jsonl"
 
+    def extra(self, name: str) -> ExtraRegion | None:
+        return next((r for r in self.extra_regions if r.name == name), None)
+
+    def set_extra(self, name: str, region: Region | None) -> None:
+        """Ek bölgeyi ekler/günceller; None verilirse kaldırır."""
+        self.extra_regions = [r for r in self.extra_regions if r.name != name]
+        if region is not None:
+            self.extra_regions.append(ExtraRegion(name, region))
+
     def resolved_auth_key(self) -> str:
         return self.deepl_auth_key.strip() or os.environ.get("DEEPL_AUTH_KEY", "").strip()
+
+
+def _region(value: dict) -> Region:
+    known = {f.name for f in fields(Region)}
+    return Region(**{k: float(v) for k, v in value.items() if k in known})
 
 
 def _from_dict(data: dict) -> Config:
@@ -88,8 +132,13 @@ def _from_dict(data: dict) -> Config:
         if key not in known:
             continue
         if key == "region":
-            region_known = {f.name for f in fields(Region)}
-            cfg.region = Region(**{k: float(v) for k, v in value.items() if k in region_known})
+            cfg.region = _region(value)
+        elif key == "extra_regions":
+            cfg.extra_regions = [
+                ExtraRegion(str(item["name"]), _region(item["region"]), str(item.get("display_mode", "cover")))
+                for item in value
+                if isinstance(item, dict) and "name" in item and "region" in item
+            ]
         else:
             setattr(cfg, key, value)
     return cfg

@@ -13,34 +13,96 @@ class Backend(Protocol):
     def translate(self, text: str, context: str | None) -> str: ...
 
 
+GLOSSARY_PREFIX = "gta-altyazi-"
+
+
 class DeepLBackend:
     # Bu kadar saniye istek yoksa bağlantıyı açık tutmak için ücretsiz kullanım sorgusu atılır;
     # böylece uzun sessizlikten sonraki ilk çeviri yeni TLS bağlantısı kurmayı beklemez.
     KEEPALIVE_IDLE_S = 20.0
 
     def __init__(self, auth_key: str, source_lang: str, target_lang: str,
-                 model_type: str = "latency_optimized", timeout_s: float = 4.0):
+                 model_type: str = "latency_optimized", timeout_s: float = 4.0,
+                 instructions: list[str] | None = None, log=print, _translator=None):
         import deepl  # yalnızca gerçek kullanımda gerekir
 
+        self._deepl = deepl
         # Oyun sırasında uzun yeniden deneme beklemeleri yerine hızlı hata: bir sonraki satır zaten gelecek.
-        self._translator = deepl.Translator(auth_key, max_retries=1, timeout_s=timeout_s)
+        self._translator = _translator or deepl.Translator(auth_key, max_retries=1, timeout_s=timeout_s)
         self._source = source_lang
         self._target = target_lang
-        self._model_type = model_type or None
+        self._log = log
+        self._glossary = None
+        model_type = model_type or None
+        # Talimatlar (sansürsüz çeviri) DeepL'in her dil/model için desteklediği bir özellik
+        # olmayabilir: reddedilirse sırayla bir sonraki ayara geçilir.
+        self._attempts: list[tuple[str | None, list[str] | None]] = []
+        if instructions:
+            self._attempts.append((model_type, instructions))
+            if model_type != "quality_optimized":
+                self._attempts.append(("quality_optimized", instructions))
+        self._attempts.append((model_type, None))
+        self._attempt = 0
+        self._attempt_lock = threading.Lock()
         self._last_used = time.monotonic()
         self._stop = threading.Event()
-        threading.Thread(target=self._keepalive, daemon=True, name="deepl-keepalive").start()
+        if _translator is None:
+            threading.Thread(target=self._keepalive, daemon=True, name="deepl-keepalive").start()
+
+    @property
+    def instructions_active(self) -> bool:
+        return self._attempts[self._attempt][1] is not None
+
+    def setup_glossary(self, entries: dict[str, str], fingerprint: str) -> str:
+        """Sözlüğü DeepL'de oluşturur (aynı içerik varsa yeniden kullanır). Durum mesajı döndürür."""
+        if not entries:
+            return "Sözlük boş"
+        name = GLOSSARY_PREFIX + fingerprint
+        try:
+            found = None
+            for info in self._translator.list_glossaries():
+                if info.name == name and info.ready:
+                    found = info
+                elif info.name.startswith(GLOSSARY_PREFIX):
+                    self._translator.delete_glossary(info)  # eski sürümler; DeepL hesabında yer kaplamasın
+            if found is None:
+                found = self._translator.create_glossary(name, self._source, self._target, entries)
+            self._glossary = found
+            return f"DeepL sözlüğü hazır: {len(entries)} terim"
+        except Exception as exc:
+            self._glossary = None
+            return f"DeepL sözlüğü kullanılamıyor ({exc}); sözlüksüz devam ediliyor"
+
+    def _rejected(self, exc: Exception) -> bool:
+        """İstek parametreleri reddedildi mi (ağ/kota/anahtar hatası değil)?"""
+        return type(exc) is self._deepl.DeepLException
 
     def translate(self, text: str, context: str | None) -> str:
         self._last_used = time.monotonic()
-        result = self._translator.translate_text(
-            text,
-            source_lang=self._source,
-            target_lang=self._target,
-            # Önceki satır bağlam olarak verilir; DeepL bağlamı ücretlendirmez.
-            context=context or None,
-            model_type=self._model_type,
-        )
+        while True:
+            attempt = self._attempt
+            model_type, instructions = self._attempts[attempt]
+            try:
+                result = self._translator.translate_text(
+                    text,
+                    source_lang=self._source,
+                    target_lang=self._target,
+                    # Önceki satır bağlam olarak verilir; DeepL bağlamı ücretlendirmez.
+                    context=context or None,
+                    model_type=model_type,
+                    glossary=self._glossary,
+                    custom_instructions=instructions,
+                )
+                break
+            except Exception as exc:
+                if not self._rejected(exc) or attempt + 1 >= len(self._attempts):
+                    raise
+                with self._attempt_lock:
+                    if self._attempt == attempt:
+                        self._attempt = attempt + 1
+                        nxt = self._attempts[self._attempt]
+                        self._log(f"DeepL bu ayarı reddetti ({exc}); şununla devam: model={nxt[0] or 'varsayılan'}, "
+                                  f"sansürsüz talimat={'açık' if nxt[1] else 'KAPALI'}")
         self._last_used = time.monotonic()
         return result.text
 
@@ -74,7 +136,10 @@ class DryRunBackend:
 
 
 class CachedTranslator:
-    def __init__(self, backend: Backend, cache_path: Path | None):
+    def __init__(self, backend: Backend, cache_path: Path | None, namespace: str = ""):
+        # namespace: çeviriyi etkileyen ayarlar (sözlük içeriği, sansürsüz talimat). Değişince eski
+        # önbellek satırları kullanılmaz.
+        self._namespace = namespace
         self._backend = backend
         self._cache_path = cache_path
         self._cache: dict[str, str] = {}
@@ -88,9 +153,9 @@ class CachedTranslator:
                     except (ValueError, KeyError, TypeError):
                         continue  # bozuk satırı atla, kalan önbellek kullanılabilir
 
-    @staticmethod
-    def _key(text: str) -> str:
-        return " ".join(text.split()).casefold()
+    def _key(self, text: str) -> str:
+        key = " ".join(text.split()).casefold()
+        return f"{self._namespace}\x1f{key}" if self._namespace else key
 
     def cached(self, text: str) -> str | None:
         with self._lock:

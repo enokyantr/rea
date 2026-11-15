@@ -12,12 +12,13 @@ from .contrast import BLACK, WHITE, Palette
 from .geometry import Rect
 
 KEY_COLOR = "#010203"  # şeffaf yapılan renk; başka hiçbir yerde kullanılmamalı
+REMOVE = object()  # bölge seçicide Delete: bölgeyi kaldır
 
 
 class Overlay:
-    def __init__(self, root: tk.Tk, cfg: Config):
+    def __init__(self, root: tk.Tk, cfg: Config, display_mode: str):
         self.cfg = cfg
-        self.adaptive = cfg.display_mode != "cover"
+        self.adaptive = display_mode != "cover"
         self.win = tk.Toplevel(root)
         self.win.title("GTA Altyazi Overlay")
         self.win.overrideredirect(True)
@@ -55,7 +56,7 @@ class Overlay:
 
     # --- pipeline/arayüz olayları -------------------------------------------------------
 
-    def set_region(self, region: Rect) -> None:
+    def set_region(self, region: Rect | None) -> None:
         if region != self.region:
             self.region = region
             self._redraw()
@@ -169,7 +170,7 @@ class Overlay:
 class RegionPicker:
     """Ekranın üstünde yarı saydam katman: fareyle sürükleyerek altyazı bölgesini seç."""
 
-    def __init__(self, root: tk.Tk, on_done: Callable[[Rect | None], None]):
+    def __init__(self, root: tk.Tk, on_done: Callable[[object], None], prompt: str, allow_remove: bool = False):
         self._on_done = on_done
         screen = win32.virtual_screen()
         self._origin = (screen.left, screen.top)
@@ -183,7 +184,7 @@ class RegionPicker:
         self.canvas.pack(fill="both", expand=True)
         self.canvas.create_text(
             screen.width // 2, 60, fill="white", font=("Segoe UI", 20, "bold"),
-            text="İngilizce altyazının çıktığı alanı fareyle sürükleyerek seçin  •  İptal: Esc",
+            text=prompt + "  •  İptal: Esc" + ("  •  Bölgeyi kaldır: Delete" if allow_remove else ""),
         )
         self._start: tuple[int, int] | None = None
         self._rect_id: int | None = None
@@ -191,6 +192,8 @@ class RegionPicker:
         self.canvas.bind("<B1-Motion>", self._drag)
         self.canvas.bind("<ButtonRelease-1>", self._release)
         self.win.bind("<Escape>", lambda _e: self._finish(None))
+        if allow_remove:
+            self.win.bind("<Delete>", lambda _e: self._finish(REMOVE))
         self.win.focus_force()
 
     def _press(self, e) -> None:
@@ -212,6 +215,69 @@ class RegionPicker:
             return
         self._finish(Rect(left + self._origin[0], top + self._origin[1], w, h))
 
-    def _finish(self, rect: Rect | None) -> None:
+    def _finish(self, result) -> None:
         self.win.destroy()
-        self._on_done(rect)
+        self._on_done(result)
+
+
+class HistoryPanel:
+    """Son Türkçe satırlar (Ctrl+Alt+H). Tıklanamaz ve ekran yakalamaya görünmez: oyunu ve OCR'ı etkilemez."""
+
+    WIDTH = 560
+
+    def __init__(self, root: tk.Tk, cfg: Config):
+        self.cfg = cfg
+        self.visible_wanted = False
+        self.win = tk.Toplevel(root)
+        self.win.title("GTA Altyazi Gecmis")
+        self.win.overrideredirect(True)
+        self.win.configure(bg="#111111")
+        self.win.wm_attributes("-topmost", True)
+        self.win.wm_attributes("-alpha", 0.88)
+        self.canvas = tk.Canvas(self.win, bg="#111111", highlightthickness=0, bd=0)
+        self.canvas.pack(fill="both", expand=True)
+        size = max(11, cfg.font_size // 2)
+        self.font = tkfont.Font(family=cfg.font_family, size=size, weight="bold")
+        self.small = tkfont.Font(family=cfg.font_family, size=max(9, size - 3))
+        self.win.withdraw()
+
+    def toggle(self, entries: list[dict], base: Rect) -> None:
+        if self.visible_wanted:
+            self.visible_wanted = False
+            self.win.withdraw()
+        else:
+            self.show(entries, base)
+
+    def show(self, entries: list[dict], base: Rect) -> None:
+        self.visible_wanted = True
+        self.win.deiconify()
+        self.win.update_idletasks()
+        hwnd = int(self.win.wm_frame(), 16)
+        win32.make_click_through(hwnd)
+        win32.exclude_from_capture(hwnd)
+        self.refresh(entries, base)
+
+    def hide(self) -> None:
+        self.win.withdraw()
+
+    def refresh(self, entries: list[dict], base: Rect) -> None:
+        if not self.visible_wanted:
+            return
+        c = self.canvas
+        c.delete("all")
+        pad, wrap = 12, self.WIDTH - 24
+        y = pad
+        item = c.create_text(pad, y, anchor="nw", text="Son satırlar  (Ctrl+Alt+H kapat)", fill="#FFD166",
+                             font=self.small)
+        y = c.bbox(item)[3] + 6
+        for entry in entries or [{"label": "", "en": "", "tr": "(henüz satır yok)"}]:
+            label = f"[{entry['label']}] " if entry["label"] else ""
+            if entry["en"]:
+                item = c.create_text(pad, y, anchor="nw", width=wrap, text=label + entry["en"],
+                                     fill="#9A9A9A", font=self.small)
+                y = c.bbox(item)[3] + 1
+            item = c.create_text(pad, y, anchor="nw", width=wrap, text=entry["tr"], fill="#FFFFFF", font=self.font)
+            y = c.bbox(item)[3] + 8
+        height = y + pad - 8
+        c.configure(width=self.WIDTH, height=height)
+        self.win.geometry(f"{self.WIDTH}x{height}+{base.left + 20}+{base.top + 20}")

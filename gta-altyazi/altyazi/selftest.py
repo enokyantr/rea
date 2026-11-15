@@ -76,7 +76,7 @@ def _check_overlay(cfg: Config, report: Report) -> None:
 
     import mss
 
-    from .overlay import Overlay
+    from .overlay import HistoryPanel, Overlay
 
     root = tk.Tk()
     root.withdraw()
@@ -89,7 +89,7 @@ def _check_overlay(cfg: Config, report: Report) -> None:
     backdrop.wm_attributes("-topmost", True)
 
     test_cfg = dataclasses.replace(cfg, display_mode="cover", cover_color="#000000")
-    overlay = Overlay(root, test_cfg)
+    overlay = Overlay(root, test_cfg, "cover")
     region = Rect(area.left + 50, area.top + 120, area.width - 100, 80)
     overlay.set_region(region)
     overlay.show("Arabaya bin, hemen!")
@@ -123,6 +123,22 @@ def _check_overlay(cfg: Config, report: Report) -> None:
     if mean > 200:
         ok = picker.palette.fill == contrast.BLACK
         report.item("Uyarlanabilir renk (beyaz sahne)", "TAMAM" if ok else "HATA", f"seçilen yazı rengi {picker.palette.fill}")
+
+    # Son satırlar paneli de yakalamada görünmemeli (aksi hâlde OCR onu okuyabilir).
+    overlay.clear()
+    panel = HistoryPanel(root, cfg)
+    panel.show([{"label": "", "en": "Get in the car!", "tr": "Arabaya bin!"}], Rect(area.left - 20, area.top - 20, 0, 0))
+    for _ in range(10):
+        root.update()
+        time.sleep(0.05)
+    with mss.mss() as sct:
+        shot = np.asarray(sct.grab({"left": area.left + 10, "top": area.top + 10, "width": 300, "height": 60}))
+    pmean = float(imageproc.to_gray(shot).mean())
+    if mean < 5:
+        pass  # masaüstü yakalanamıyor; yukarıda BELİRSİZ raporlandı
+    else:
+        report.item("Geçmiş paneli yakalamada gizli", "TAMAM" if pmean > 200 else "HATA",
+                    f"ort. parlaklık {pmean:.0f} (beyaz = panel görünmüyor)")
     root.destroy()
 
 
@@ -139,6 +155,15 @@ def _check_deepl(backend, report: Report) -> None:
         times.append(1000 * (time.perf_counter() - t0))
     report.item("DeepL", "TAMAM",
                 f"ilk {times[0]:.0f} ms, sonraki ort. {statistics.mean(times[1:]):.0f} ms — {out!r}")
+    line = "Shut the fuck up, asshole!"
+    try:
+        out = backend.translate(line, None)
+    except Exception as exc:
+        report.item("DeepL sansürsüz", "HATA", f"{type(exc).__name__}: {exc}")
+        return
+    active = getattr(backend, "instructions_active", False)
+    report.item("DeepL sansürsüz", "TAMAM" if active else "BİLGİ",
+                f"talimat {'kabul edildi' if active else 'DeepL tarafından desteklenmiyor'} — {line!r} → {out!r}")
 
 
 BENCH_LINES = [
@@ -146,6 +171,9 @@ BENCH_LINES = [
     "Relax, I've got a plan.", "Cops are right behind us!", "Take the next left, quick!",
     "We need to lose them first.", "Is that a helicopter?", "Just keep driving, Lucia.",
     "Hold on to something!", "That was way too close.", "You think this is a game, Jason? This is our life now.",
+    # Sansürsüz çeviri kontrolü: küfür/argo yumuşatılmamalı.
+    "What the fuck are you doing?", "Shut the fuck up, asshole!", "You stupid son of a bitch!",
+    "Holy shit, that was close.", "This motherfucker owes me money.", "Get your ass in the car, bro.",
 ]
 
 

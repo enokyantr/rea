@@ -73,26 +73,64 @@ def main() -> int:
         from . import selftest
 
         key = cfg.resolved_auth_key()
-        backend = DeepLBackend(key, cfg.source_lang, cfg.target_lang, cfg.deepl_model_type,
-                               cfg.deepl_timeout_s) if key and not args.dry_run else None
+        backend = _make_deepl(cfg, key) if key and not args.dry_run else None
+        if backend is not None:
+            try:
+                app.log(backend.setup_glossary(*_glossary(cfg, args)))
+            except Exception as exc:
+                app.log(f"Sözlük okunamadı: {exc}")
         return selftest.run(cfg, backend, local)
 
     final = None
     if mode in ("hybrid", "deepl"):
-        backend = _deepl_backend(cfg, args) if not args.dry_run else DryRunBackend()
-        if backend is None:
+        try:
+            entries, fp = _glossary(cfg, args)
+        except Exception as exc:  # hatalı sözlük satırı: kullanıcı düzeltsin
+            print(exc)
             return 2
+        if args.dry_run:
+            backend = DryRunBackend()
+        else:
+            backend = _deepl_backend(cfg, args)
+            if backend is None:
+                return 2
+            app.log(backend.setup_glossary(entries, fp))
+            app.log("Sansürsüz çeviri: " + ("açık (küfür/argo yumuşatılmaz)" if cfg.uncensored else "kapalı"))
         cache_path = args.config.parent / cfg.cache_file if cfg.cache_file else None
-        final = CachedTranslator(backend, cache_path)
+        # Sözlük veya sansür ayarı değişince eski önbellek kullanılmasın.
+        namespace = f"g{fp}-u{int(cfg.uncensored)}"
+        final = CachedTranslator(backend, cache_path, namespace)
         app.log(f"Önbellekte {len(final)} çeviri var")
-    translator = HybridTranslator(final, local)
-    app.log(f"Çeviri modu: {translator.mode}")
 
+    def make_translator() -> HybridTranslator:
+        # Her bölgenin kendi kuyruğu; çeviri motorları (yerel model, DeepL, önbellek) ortak.
+        return HybridTranslator(final, local)
+
+    app.log(f"Çeviri modu: {make_translator().mode}")
     if args.ocr_test:
-        app.run_ocr_test(cfg, args.ocr_test, translator, args.full)
+        app.run_ocr_test(cfg, args.ocr_test, make_translator(), args.full)
         return 0
-    app.run_gui(cfg, args.config, translator, args.debug)
+    app.run_gui(cfg, args.config, make_translator, args.debug)
     return 0
+
+
+def _glossary(cfg, args) -> tuple[dict[str, str], str]:
+    from . import glossary
+
+    if not cfg.glossary_file:
+        return {}, "0"
+    path = Path(cfg.glossary_file)
+    if not path.is_absolute():
+        path = args.config.parent / path
+    entries = glossary.load(path)
+    return entries, glossary.fingerprint(entries)
+
+
+def _make_deepl(cfg, key: str) -> DeepLBackend:
+    from . import app
+
+    return DeepLBackend(key, cfg.source_lang, cfg.target_lang, cfg.deepl_model_type, cfg.deepl_timeout_s,
+                        instructions=cfg.deepl_instructions if cfg.uncensored else None, log=app.log)
 
 
 def _deepl_backend(cfg, args):
@@ -108,7 +146,7 @@ def _deepl_backend(cfg, args):
         key = input("Anahtarı yapıştırıp Enter'a basın: ").strip()
         if not key:
             return None
-    backend = DeepLBackend(key, cfg.source_lang, cfg.target_lang, cfg.deepl_model_type, cfg.deepl_timeout_s)
+    backend = _make_deepl(cfg, key)
     try:
         # Anahtarı doğrular ve DeepL bağlantısını oyundan önce ısıtır.
         app.log(backend.usage_summary())
