@@ -22,7 +22,7 @@ GOOD_ENOUGH = 0.97
 class ReadResult:
     text: str
     variant: str = ""
-    # (seçenek, okunan metin, kalite) — --debug/--dump için
+    # (seçenek, okunan metin, puan) — --debug/--dump için
     candidates: list[tuple[str, str, float]] = field(default_factory=list)
     crop: np.ndarray | None = None
 
@@ -53,15 +53,16 @@ def read_text(gray: np.ndarray, recognize: Callable[[np.ndarray], list[str]], cf
         gray = gray[top:bottom, left:right]
 
     result = ReadResult("", crop=gray)
-    best_quality = -1.0
+    best_score = None
     for name, image in variants(gray, cfg):
         text = textproc.normalize(recognize(imageproc.upscale(image, cfg.upscale)))
-        quality = textproc.text_quality(text)
-        result.candidates.append((name, text, quality))
-        # Eşit kalitede uzun okuma kazanır (kısmi okumalar kısadır).
-        if quality > best_quality or (quality == best_quality and len(text) > len(result.text)):
-            best_quality, result.text, result.variant = quality, text, name
-        if quality >= GOOD_ENOUGH and len(text) >= cfg.min_text_chars:
+        score = textproc.reading_score(text)
+        result.candidates.append((name, text, score))
+        # Uzun ve temiz okuma kazanır; kısmi okuma ("Go to") tam okumayı yenemez.
+        if best_score is None or score > best_score:
+            best_score, result.text, result.variant = score, text, name
+        if (textproc.text_quality(text) >= GOOD_ENOUGH and text.isascii()
+                and len(text) >= cfg.min_text_chars):
             break
     if not textproc.is_plausible(result.text, cfg.min_text_chars):
         result.text = ""

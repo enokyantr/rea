@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 
@@ -11,9 +12,17 @@ _SPACE = re.compile(r"\s+")
 _EDGE_JUNK = re.compile(r"^[\W_]+(?=\w)|(?<=[\w.!?\"')])[^\w.!?\"')]+$")
 
 
+def _fold_accents(text: str) -> str:
+    """İngilizce altyazıda aksanlı harf olmaz; OCR'ın okuduğu å/é/ö... gürültüdür: a/e/o..."""
+    if text.isascii():
+        return text
+    decomposed = unicodedata.normalize("NFKD", text)
+    return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+
+
 def normalize(lines: list[str]) -> str:
     """Satırları tek cümleye birleştirir, boşlukları ve kenar çöplerini temizler."""
-    text = " ".join(line.strip() for line in lines if line.strip())
+    text = _fold_accents(" ".join(line.strip() for line in lines if line.strip()))
     text = _SPACE.sub(" ", text).strip()
     text = _EDGE_JUNK.sub("", text).strip()
     # Satır sonunda kelime bölünmesi: "some- thing" -> "something"
@@ -114,6 +123,30 @@ def similar(a: str, b: str, threshold: float) -> bool:
     return SequenceMatcher(None, a.lower(), b.lower()).ratio() >= threshold
 
 
+def reading_score(text: str) -> float:
+    """Bir OCR okumasının değeri: kelimeye benzeyen harf sayısı, çöp karakter ve İngilizcede
+    olmayan harfler (å, é...) cezalı. Uzun ve temiz okuma kazanır; kısmi okuma ("Go to") tam
+    okumayı ("Go to Franklin's house.") yenemez."""
+    tokens = _TOKEN.findall(text)
+    good = sum(len(t) for t in tokens if t.isascii() and _wordlike(t))
+    non_ascii = sum(1 for ch in text if ch.isalpha() and not ch.isascii())
+    return good - 3 * len(_JUNK.findall(text)) - 2 * non_ascii
+
+
+def _words(text: str) -> set[str]:
+    return {t.lower() for t in _TOKEN.findall(text) if len(t) >= 2}
+
+
+def same_line(a: str, b: str, threshold: float) -> bool:
+    """İki okuma aynı altyazı satırı mı? Benzer metin ya da biri diğerinin parçası (kısmi okuma:
+    "you got" ⊂ "Maybe if you got rid of that haircut you got")."""
+    if similar(a, b, threshold):
+        return True
+    wa, wb = _words(a), _words(b)
+    small, big = (wa, wb) if len(wa) <= len(wb) else (wb, wa)
+    return bool(small) and len(small & big) >= max(1, round(0.8 * len(small)))
+
+
 @dataclass(frozen=True)
 class Show:
     text: str
@@ -128,17 +161,26 @@ class Clear:
 class Stabilizer:
     """OCR okumalarını olaylara çevirir.
 
-    - Aynı (benzer) metin `stable_reads` kez art arda okunursa `Show` üretir.
-    - Gösterilen metne benzer okumalar yok sayılır (OCR titremesi).
+    - Aynı satırın okuması `stable_reads` kez art arda gelirse `Show` üretir; o okumalar içinden en
+      değerlisi (reading_score) gösterilir.
+    - Gösterilen satırın okumaları (titreşen ya da kısmi) yeni satır sayılmaz; ama belirgin şekilde
+      daha iyi bir okuma gelirse `Show` ile güncellenir (eksik okunan satır tamamlanır).
     - `clear_after` saniye boyunca metin yoksa `Clear` üretir.
     """
+
+    # Gösterilen satırı güncellemek için yeni okuma en az bu kadar (ve %25) daha değerli olmalı:
+    # her küçük farkta yeniden çevirmemek, ama eksik okunan satırı tamamlamak için.
+    UPGRADE_MARGIN = 4
+    UPGRADE_RATIO = 0.25
 
     def __init__(self, stable_reads: int, similarity: float, clear_after: float):
         self.stable_reads = max(1, stable_reads)
         self.similarity = similarity
         self.clear_after = clear_after
         self.shown: str | None = None
+        self._shown_score = 0.0
         self._candidate: str | None = None
+        self._candidate_score = 0.0
         self._candidate_count = 0
         self._candidate_since = 0.0
         self._last_text_at: float | None = None
@@ -167,20 +209,24 @@ class Stabilizer:
             return None
 
         self._last_text_at = now
-        if self.shown is not None and similar(text, self.shown, self.similarity):
+        score = reading_score(text)
+        if self.shown is not None and same_line(text, self.shown, self.similarity):
             self._candidate, self._candidate_count = None, 0
+            if score >= self._shown_score + max(self.UPGRADE_MARGIN, self.UPGRADE_RATIO * self._shown_score):
+                self.shown, self._shown_score = text, score  # aynı satırın daha iyi okuması
+                return Show(text, now)
             return None
 
-        if self._candidate is not None and similar(text, self._candidate, self.similarity):
+        if self._candidate is not None and same_line(text, self._candidate, self.similarity):
             self._candidate_count += 1
-            # En uzun okumayı tut: kısmi okumalar genelde kısa olur.
-            if len(text) >= len(self._candidate):
-                self._candidate = text
+            if score >= self._candidate_score:  # en değerli okumayı tut
+                self._candidate, self._candidate_score = text, score
         else:
-            self._candidate, self._candidate_count, self._candidate_since = text, 1, now
+            self._candidate, self._candidate_score = text, score
+            self._candidate_count, self._candidate_since = 1, now
 
         if self._candidate_count >= self.stable_reads:
-            self.shown = self._candidate
+            self.shown, self._shown_score = self._candidate, self._candidate_score
             self._candidate, self._candidate_count = None, 0
             return Show(self.shown, self._candidate_since)
         return None

@@ -103,7 +103,7 @@ class Pipeline(threading.Thread):
     def _read_text(self, ocr: WindowsOcr, gray: np.ndarray) -> str:
         result = reader.read_text(gray, ocr.recognize, self.cfg)
         if self.debug and len(result.candidates) > 1:
-            log(f"{self._tag}seçenekler: " + " | ".join(f"{n} {q:.2f} {t!r}" for n, t, q in result.candidates)
+            log(f"{self._tag}seçenekler: " + " | ".join(f"{n} {q:.0f} {t!r}" for n, t, q in result.candidates)
                 + f" → {result.variant}")
         if self.dump_dir is not None and result.crop is not None and self._dumped < 300:
             self._dump(result)
@@ -116,7 +116,7 @@ class Pipeline(threading.Thread):
         self._dumped += 1
         stem = self.dump_dir / f"{self.region_name}_{self._dumped:03d}"
         Image.fromarray(result.crop).save(stem.with_suffix(".png"))
-        lines = [f"{n}\t{q:.2f}\t{t}" for n, t, q in result.candidates] + [f"seçilen\t{result.variant}\t{result.text}"]
+        lines = [f"{n}\t{q:.0f}\t{t}" for n, t, q in result.candidates] + [f"seçilen\t{result.variant}\t{result.text}"]
         stem.with_suffix(".txt").write_text("\n".join(lines), encoding="utf-8")
 
     def run(self) -> None:
@@ -469,7 +469,7 @@ def run_ocr_test(cfg: Config, image_path: Path, translator: HybridTranslator, fu
         Image.fromarray(result.crop).save(debug_path)
         log(f"OCR'a verilen kırpılmış görüntü: {debug_path}")
     for name, cand, quality in result.candidates:
-        print(f"  {name:7} {quality:.2f}  {cand}")
+        print(f"  {name:7} {quality:4.0f}  {cand}")
     text = result.text
     print("İngilizce:", text or "(metin yok)", f"[{result.variant}]" if result.variant else "")
     for name, backend in (("Yerel", translator.draft), ("DeepL", translator.final)):

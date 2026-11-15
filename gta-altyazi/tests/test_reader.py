@@ -53,3 +53,10 @@ def test_forced_single_mode():
     ocr = FakeOcr("Lose the Cops.")
     result = reader.read_text(_gray_with_text(), ocr, Config(preprocess="none"))
     assert result.variant == "gri" and ocr.calls == 1
+
+
+def test_longer_clean_reading_beats_short_partial():
+    # Kullanıcının logu: "Go to" (kısa) seçiliyor, "Go to Franklin's house." eleniyordu.
+    ocr = FakeOcr("Go to Frånklin's house.", "Go to")
+    result = reader.read_text(_gray_with_text(), ocr, Config(preprocess="auto"))
+    assert result.text == "Go to Franklin's house."  # aksan OCR gürültüsüdür, katlanır

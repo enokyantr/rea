@@ -249,3 +249,36 @@ def test_config_saves_only_changes_and_migrates_frozen_old_defaults(tmp_path):
     assert cfg.font_size == 30 and cfg.deepl_auth_key == "k:fx"  # kullanıcının seçimleri korunur
     saved = json.loads(path.read_text(encoding="utf-8"))
     assert saved == {"config_version": 2, "deepl_auth_key": "k:fx", "font_size": 30}
+
+
+def _replay(readings, stable_reads=2):
+    """Kullanıcının gerçek oyun logundaki ardışık okumaları besler, gösterilen satırları döndürür."""
+    s = Stabilizer(stable_reads=stable_reads, similarity=0.88, clear_after=0.7)
+    shown = []
+    for i, text in enumerate(readings):
+        event = s.feed(text, i * 0.04)
+        if isinstance(event, Show):
+            shown.append(event.text)
+    return shown
+
+
+def test_real_log_partial_readings_do_not_become_new_lines():
+    # 01:33:59-01:34:00: aynı altyazı ("I'll see you at work.") karelerde parça parça okundu;
+    # eskiden her parça ayrı satır sayılıp çevriliyordu.
+    shown = _replay(["see", "see", "II see yåu", "see y'u", "sep yåu", "I'll see", "see you, at",
+                     "see you t work-I", "see you t work'", "0 I'll see you at work.", "I'll see you at work",
+                     "I'll see you at work.", "I'll se", "I'll see you at work", "I'll seek ou", "I'll see you at work"])
+    # Eskiden 9 ayrı satır çevriliyordu; şimdi aynı satırın kademeli olarak iyileşen okumaları
+    # (en fazla birkaç güncelleme) ve sonunda tam satır.
+    assert len(shown) <= 4, shown
+    assert shown[-1] in ("0 I'll see you at work.", "I'll see you at work.", "I'll see you at work")
+
+
+def test_real_log_better_reading_upgrades_shown_line():
+    shown = _replay(["Go to", "Go to", "Go to Franklin's house.", "Go to Franklin's house.", "Go to"])
+    assert shown[0] == "Go to" and shown[-1] == "Go to Franklin's house." and len(shown) == 2
+
+
+def test_new_line_is_still_detected():
+    shown = _replay(["Man, fuck you.", "Man, fuck you.", "I'll see you at work.", "I'll see you at work."])
+    assert shown == ["Man, fuck you.", "I'll see you at work."]
