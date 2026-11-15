@@ -344,3 +344,18 @@ def test_street_slang_goes_to_llm_even_without_profanity():
                  "I'll send one out to you right away.", "Begin the mission again.",
                  "That's a real man's car."):
         assert not needs_llm(line), line
+
+
+@pytest.mark.parametrize("worse,better", [
+    # Gerçek --ocr-compare kayıtlarından aynı satırın iki okuması
+    ("I'fJ see you aevybrk.", "I'll see you at works"),
+    ("Ilarj, fuck you.", "Man. fuck you."),
+    ("No, mad for the peniss That's exactly how I Tike my women",
+     "No, mad for the penis, That's exactly how I like my women"),
+    ("Ah, nigga. dontt hate me Icause I'm beautiful, nibPF!u", "Ah, nigga, don't hate me 'cause I'm beautiful"),
+    ("Go to", "Go to Franklin's house."),
+])
+def test_reading_score_prefers_real_english_words(worse, better):
+    from altyazi.textproc import reading_score
+
+    assert reading_score(better) > reading_score(worse)

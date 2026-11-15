@@ -73,7 +73,7 @@ jobs:
         run: |
           $cublas = python -c "import nvidia.cublas, os; print(os.path.join(list(nvidia.cublas.__path__)[0], 'bin'))"
           python -m PyInstaller --noconfirm --clean --onedir --console --name GTA-Altyazi `
-            --collect-all winrt --collect-all ctranslate2 --collect-binaries sentencepiece `
+            --collect-all winrt --collect-all ctranslate2 --collect-binaries sentencepiece --collect-data spellchecker `
             --add-binary "$cublas/cublas64_12.dll;nvidia/cublas/bin" `
             --add-binary "$cublas/cublasLt64_12.dll;nvidia/cublas/bin" `
             gta_altyazi.py

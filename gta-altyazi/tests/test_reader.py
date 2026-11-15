@@ -14,7 +14,7 @@ def _gray_with_text():
 
 
 class FakeOcr:
-    """Sırayla okuma döndürür ("auto": top-hat, gri ton, kontur maskesi)."""
+    """Sırayla okuma döndürür ("auto": kontur maskesi, parlak pikseller, gri ton)."""
 
     def __init__(self, *readings):
         self.readings = list(readings)
@@ -29,7 +29,7 @@ def test_picks_the_most_word_like_reading():
     ocr = FakeOcr("Dog, I ajntc sure chac joke 'Jyork3, clog.", "D0g, 1 4jn7 5ur3", "Dog, I ain't sure that joke works, dog.")
     result = reader.read_text(_gray_with_text(), ocr, Config(preprocess="auto"))
     assert result.text == "Dog, I ain't sure that joke works, dog."
-    assert result.variant == "kontur" and [c[0] for c in result.candidates] == ["tophat", "gri", "kontur"]
+    assert result.variant == "gri" and [c[0] for c in result.candidates] == ["kontur", "parlak", "gri"]
 
 
 def test_good_first_reading_skips_other_variants():
