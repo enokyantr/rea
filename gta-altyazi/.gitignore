@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+config.json
+config.json.tmp
+ceviri_onbellek.jsonl
+*_ocr_girdi.png
