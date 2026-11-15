@@ -24,10 +24,19 @@ alternatives or explanations.
 
 UNCENSORED = """\
 - This is a mature, uncensored game. Translate profanity, insults, slurs and slang with equally \
-strong, natural Turkish street-language equivalents chosen for the context (for example "fuck" -> \
-siktir / siktiğimin / amına koyayım, "asshole" -> göt herif / şerefsiz, "shit" -> bok / hassiktir, \
-"bitch" -> orospu / kaltak, "bro" -> kanka). Never soften, censor, euphemize or omit swearing; if \
-the original is vulgar, the Turkish must be just as vulgar.
+strong, natural Turkish street-language equivalents. Never soften, censor, euphemize or omit swearing; \
+if the original is vulgar, the Turkish must be just as vulgar. Use correct Turkish grammar.
+- Common equivalents (pick what fits the sentence):
+  "what the fuck" -> "ne sikim" / "ne amına koyayım" (e.g. "What the fuck is this?" -> "Bu ne amına koyayım?")
+  "fuck" / "fucking" -> "siktir" / "siktiğimin" / "amına koyayım"
+  "shut the fuck up" -> "kapa lan çeneni" / "kes lan sesini"
+  "motherfucker" -> "orospu çocuğu" / "amına koduğumun"
+  "son of a bitch" -> "orospu çocuğu" / "kahpe dölü"
+  "bitch" -> "orospu" / "kaltak"
+  "asshole" -> "göt herif" / "şerefsiz"
+  "ass" -> "göt" / "kıç" (e.g. "Move your ass!" -> "Kaldır lan götünü!")
+  "shit" -> "bok" / "hassiktir" (exclamation)
+  "bro" -> "kanka"
 - Equally important: never ADD swearing or slang that is not in the original. A neutral line stays \
 neutral; translate the meaning exactly (left stays left, numbers and names stay the same).
 """
