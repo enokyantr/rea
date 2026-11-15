@@ -38,7 +38,8 @@ Overlay ekran yakalamadan gizlendiği için ölçüm kendi yazımızdan değil, 
 ## Kurulum
 
 **Hazır exe (önerilen):** GitHub'da *Actions → GTA Altyazi Windows build* altındaki son başarılı
-çalıştırmadan `GTA-Altyazi-windows` dosyasını indirin, zip'i açın ve `GTA-Altyazi.exe`'yi çalıştırın.
+çalıştırmadan `GTA-Altyazi-windows` (NVIDIA GPU destekli, büyük) veya `GTA-Altyazi-windows-cpu`
+(GPU dosyaları yok, ~550 MB daha küçük; yerel çeviri işlemcide ~60–110 ms) dosyasını indirin, zip'i açın ve `GTA-Altyazi.exe`'yi çalıştırın.
 Python gerekmez. Aşağıdaki `baslat.bat` komutlarının hepsi `GTA-Altyazi.exe` ile de çalışır.
 İlk iş olarak öz testi çalıştırın:
 

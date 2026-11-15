@@ -6,7 +6,7 @@ from altyazi import config as config_mod
 from altyazi.config import Region
 from altyazi.geometry import Rect, region_to_screen, screen_to_region
 from altyazi.imageproc import bright_bbox, for_ocr, same_signature, signature, to_gray
-from altyazi.textproc import Clear, Show, Stabilizer, is_plausible, normalize
+from altyazi.textproc import split_sentences, Clear, Show, Stabilizer, is_plausible, normalize
 from altyazi.translate import CachedTranslator
 
 
@@ -155,3 +155,12 @@ def test_stabilizer_pending_while_unconfirmed():
     assert s.pending  # doğrulama okuması hemen yapılmalı
     s.feed("Get in the car!", 0.01)
     assert not s.pending
+
+
+def test_split_sentences_for_local_translation():
+    assert split_sentences("You think this is a game, Jason? This is our life now.") == [
+        "You think this is a game, Jason?", "This is our life now."]
+    assert split_sentences("Get in the car!") == ["Get in the car!"]
+    assert split_sentences('He said "Run!" Then he left.') == ['He said "Run!"', "Then he left."]
+    assert split_sentences("Wait... what?") == ["Wait... what?"]  # küçük harf: tek cümle
+    assert split_sentences("Mr. Smith is here. Go!") == ["Mr. Smith is here.", "Go!"]

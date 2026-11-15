@@ -8,6 +8,8 @@ import sys
 import threading
 from pathlib import Path
 
+from .textproc import split_sentences
+
 
 def _add_cuda_dll_dirs() -> list[str]:
     """pip'in nvidia-* paketlerindeki CUDA DLL'lerini (cublas vb.) Windows'un bulmasını sağlar.
@@ -61,11 +63,17 @@ class LocalBackend:
         self.translate("Warm up.", None)  # ilk çağrıdaki gecikmeyi (çekirdek yükleme) oyundan önce öde
 
     def translate(self, text: str, context: str | None) -> str:
-        tokens = self._src.encode(text, out_type=str) + ["</s>"]
+        # Opus-MT çok cümleli girdide sonraki cümleleri atabiliyor (CI'da görüldü):
+        # cümleler tek toplu çağrıda ayrı ayrı çevrilir.
+        sentences = split_sentences(text)
+        batch = [self._src.encode(s, out_type=str) + ["</s>"] for s in sentences]
         with self._lock:
-            result = self._tr.translate_batch([tokens], beam_size=self._beam, max_decoding_length=256)
-        hyp = [t for t in result[0].hypotheses[0] if t not in ("</s>", "<pad>")]
-        return self._tgt.decode(hyp)
+            results = self._tr.translate_batch(batch, beam_size=self._beam, max_decoding_length=256)
+        out = []
+        for result in results:
+            hyp = [t for t in result.hypotheses[0] if t not in ("</s>", "<pad>")]
+            out.append(self._tgt.decode(hyp))
+        return " ".join(o for o in out if o)
 
     def describe(self) -> str:
         return f"Yerel çeviri: {'NVIDIA GPU' if self.device == 'cuda' else 'işlemci'} ({self.device})"

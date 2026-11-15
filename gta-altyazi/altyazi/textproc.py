@@ -21,6 +21,21 @@ def normalize(lines: list[str]) -> str:
     return text
 
 
+# Cümle sonu (. ! ? …, ardından isteğe bağlı kapanış tırnağı), boşluk ve büyük harf/tırnakla
+# başlayan yeni cümle. Yaygın unvan kısaltmalarından (Mr. Dr. …) sonra bölünmez.
+_ABBREV = "".join(rf"(?<!\b{a}\.)" for a in ("Mr", "Mrs", "Ms", "Dr", "St", "Jr", "Sr", "vs"))
+_SENTENCE_END = re.compile(
+    rf"(?:(?<=[.!?…])|(?<=[.!?…][\"')\]])){_ABBREV}\s+(?=[\"'(\[]?[A-ZÇĞİÖŞÜ0-9])"
+)
+
+
+def split_sentences(text: str) -> list[str]:
+    """Altyazı satırını cümlelere böler. Yerel çeviri modeli (Opus-MT) çok cümleli girdide
+    sonraki cümleleri atabildiği için her cümle ayrı çevrilir."""
+    parts = [p.strip() for p in _SENTENCE_END.split(text)]
+    return [p for p in parts if p] or [text]
+
+
 def is_plausible(text: str, min_chars: int) -> bool:
     """Gerçek altyazıya benziyor mu? Harf oranı düşük gürültüyü eler."""
     if len(text) < min_chars:

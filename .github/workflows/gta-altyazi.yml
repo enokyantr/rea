@@ -80,12 +80,25 @@ jobs:
           Copy-Item -Recurse ../mt/main dist/GTA-Altyazi/model
           Copy-Item README.md dist/GTA-Altyazi/BENIOKU.md
           Compress-Archive -Path dist/GTA-Altyazi -DestinationPath dist/GTA-Altyazi-windows.zip
-          "{0:N0} MB" -f ((Get-Item dist/GTA-Altyazi-windows.zip).Length / 1MB)
+          # Hafif paket: NVIDIA cuBLAS yok; yerel çeviri işlemcide çalışır.
+          New-Item -ItemType Directory dist/lite | Out-Null
+          Copy-Item -Recurse dist/GTA-Altyazi dist/lite/GTA-Altyazi
+          Remove-Item -Recurse dist/lite/GTA-Altyazi/_internal/nvidia
+          Compress-Archive -Path dist/lite/GTA-Altyazi -DestinationPath dist/GTA-Altyazi-windows-cpu.zip
+          Get-ChildItem dist/*.zip | ForEach-Object { "{0}: {1:N0} MB" -f $_.Name, ($_.Length / 1MB) }
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: GTA-Altyazi-windows
           path: gta-altyazi/dist/GTA-Altyazi-windows.zip
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: GTA-Altyazi-windows-cpu
+          path: gta-altyazi/dist/GTA-Altyazi-windows-cpu.zip
           if-no-files-found: error
           retention-days: 30
           compression-level: 0
@@ -106,4 +119,7 @@ jobs:
         run: |
           ./dist/GTA-Altyazi/GTA-Altyazi.exe --list-windows
           ./dist/GTA-Altyazi/GTA-Altyazi.exe --self-test --dry-run
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Host "=== Hafif (CPU) paket ==="
+          ./dist/lite/GTA-Altyazi/GTA-Altyazi.exe --mt-bench
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
