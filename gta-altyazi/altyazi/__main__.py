@@ -97,9 +97,7 @@ def main() -> int:
             app.log(backend.setup_glossary(entries, fp))
             app.log("Sansürsüz çeviri: " + ("açık (küfür/argo yumuşatılmaz)" if cfg.uncensored else "kapalı"))
         cache_path = args.config.parent / cfg.cache_file if cfg.cache_file else None
-        # Sözlük veya sansür ayarı değişince eski önbellek kullanılmasın.
-        namespace = f"g{fp}-u{int(cfg.uncensored)}"
-        final = CachedTranslator(backend, cache_path, namespace)
+        final = CachedTranslator(backend, cache_path)
         app.log(f"Önbellekte {len(final)} çeviri var")
 
     def make_translator() -> HybridTranslator:

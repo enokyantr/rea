@@ -32,7 +32,8 @@ class FakeDeepL:
     def translate_text(self, text, **kw):
         self.calls.append((kw["model_type"], bool(kw["custom_instructions"]), kw["glossary"]))
         if kw["custom_instructions"] and (self.reject_all or kw["model_type"] in self.reject_on):
-            raise deepl.DeepLException("Bad request, message: custom_instructions not supported")
+            raise deepl.DeepLException("Bad request, message: custom_instructions not supported",
+                                       http_status_code=400)
         return SimpleNamespace(text=f"tr:{text}")
 
     def list_glossaries(self):
@@ -74,6 +75,31 @@ def test_instructions_dropped_when_never_supported():
     assert "KAPALI" in logs[-1]
 
 
+def test_server_errors_do_not_turn_off_uncensored_mode():
+    fake = FakeDeepL()
+    backend, _ = make(fake)
+
+    def unavailable(text, **kw):
+        raise deepl.DeepLException("Service unavailable", http_status_code=503)
+
+    fake.translate_text = unavailable
+    for _ in range(3):
+        with pytest.raises(deepl.DeepLException):
+            backend.translate("Hi", None)
+    assert backend._attempt == 0 and backend.instructions_active  # geçici hata: ayar korunur
+
+
+def test_cache_records_the_setting_actually_used(tmp_path):
+    fake = FakeDeepL(reject_all_instructions=True)
+    backend, _ = make(fake)
+    cache = CachedTranslator(backend, tmp_path / "c.jsonl")
+    assert backend.cache_namespace() == "g0-u1"
+    cache.translate("Damn.")  # bu çeviri sırasında talimat geri çekildi
+    saved = (tmp_path / "c.jsonl").read_text(encoding="utf-8")
+    assert '"g0-u0\\u001fdamn."' in saved or "g0-u0\x1fdamn." in saved
+    assert "g0-u1" not in saved  # sansürsüz olarak yanlış etiketlenmedi
+
+
 def test_network_errors_are_not_treated_as_rejection():
     fake = FakeDeepL()
     backend, _ = make(fake)
@@ -93,12 +119,14 @@ def test_glossary_created_reused_and_old_versions_removed():
     msg = backend.setup_glossary({"Vice City": "Vice City"}, "abc123")
     assert "1 terim" in msg
     assert fake.deleted == [GLOSSARY_PREFIX + "old"]
-    assert fake.created == [(GLOSSARY_PREFIX + "abc123", {"Vice City": "Vice City"})]
+    name = GLOSSARY_PREFIX + "abc123-en-tr"
+    assert fake.created == [(name, {"Vice City": "Vice City"})]
     backend.translate("Welcome to Vice City", None)
-    assert fake.calls[-1][2].name == GLOSSARY_PREFIX + "abc123"
+    assert fake.calls[-1][2].name == name
+    assert backend.cache_namespace() == "gabc123-u0"
 
     fake2 = FakeDeepL()
-    fake2.glossaries = [SimpleNamespace(name=GLOSSARY_PREFIX + "abc123", ready=True)]
+    fake2.glossaries = [SimpleNamespace(name=name, ready=True)]
     backend2, _ = make(fake2, instructions=None)
     backend2.setup_glossary({"Vice City": "Vice City"}, "abc123")
     assert fake2.created == [] and fake2.deleted == []  # aynı sürüm yeniden kullanıldı
@@ -108,15 +136,17 @@ def test_cache_namespace_separates_settings(tmp_path):
     path = tmp_path / "c.jsonl"
 
     class Echo:
-        def __init__(self, tag):
-            self.tag = tag
+        def __init__(self, tag, ns):
+            self.tag, self.ns = tag, ns
+
+        def cache_namespace(self):
+            return self.ns
 
         def translate(self, text, context):
             return f"{self.tag}:{text}"
 
-    a = CachedTranslator(Echo("eski"), path, "g1-u0")
-    a.translate("Hello")
-    b = CachedTranslator(Echo("yeni"), path, "g2-u1")
+    CachedTranslator(Echo("eski", "g1-u0"), path).translate("Hello")
+    b = CachedTranslator(Echo("yeni", "g2-u1"), path)
     assert b.cached("Hello") is None  # sözlük/sansür ayarı değişti: eski çeviri kullanılmaz
     assert b.translate("Hello") == "yeni:Hello"
-    assert CachedTranslator(Echo("x"), path, "g1-u0").cached("hello") == "eski:Hello"
+    assert CachedTranslator(Echo("x", "g1-u0"), path).cached("hello") == "eski:Hello"

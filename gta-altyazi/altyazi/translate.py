@@ -33,6 +33,7 @@ class DeepLBackend:
         self._target = target_lang
         self._log = log
         self._glossary = None
+        self._glossary_fp = "0"
         model_type = model_type or None
         # Talimatlar (sansürsüz çeviri) DeepL'in her dil/model için desteklediği bir özellik
         # olmayabilir: reddedilirse sırayla bir sonraki ayara geçilir.
@@ -53,11 +54,17 @@ class DeepLBackend:
     def instructions_active(self) -> bool:
         return self._attempts[self._attempt][1] is not None
 
+    def cache_namespace(self) -> str:
+        """Çeviriyi gerçekten etkileyen o anki durum: kullanılan sözlük ve sansürsüz talimatın
+        gerçekten gönderilip gönderilmediği. Geri çekilme olursa önbellek yanlış etiketlenmez."""
+        return f"g{self._glossary_fp if self._glossary is not None else 0}-u{int(self.instructions_active)}"
+
     def setup_glossary(self, entries: dict[str, str], fingerprint: str) -> str:
         """Sözlüğü DeepL'de oluşturur (aynı içerik varsa yeniden kullanır). Durum mesajı döndürür."""
         if not entries:
             return "Sözlük boş"
-        name = GLOSSARY_PREFIX + fingerprint
+        # Dil çifti de adda: dil değişirse eski (uyumsuz) sözlük yeniden kullanılmaz.
+        name = f"{GLOSSARY_PREFIX}{fingerprint}-{self._source}-{self._target}".lower()
         try:
             found = None
             for info in self._translator.list_glossaries():
@@ -68,14 +75,16 @@ class DeepLBackend:
             if found is None:
                 found = self._translator.create_glossary(name, self._source, self._target, entries)
             self._glossary = found
+            self._glossary_fp = fingerprint
             return f"DeepL sözlüğü hazır: {len(entries)} terim"
         except Exception as exc:
             self._glossary = None
             return f"DeepL sözlüğü kullanılamıyor ({exc}); sözlüksüz devam ediliyor"
 
     def _rejected(self, exc: Exception) -> bool:
-        """İstek parametreleri reddedildi mi (ağ/kota/anahtar hatası değil)?"""
-        return type(exc) is self._deepl.DeepLException
+        """İstek parametreleri reddedildi mi? Yalnızca HTTP 400 (Bad request). 5xx/ağ/kota/anahtar
+        hataları geçicidir; bunlar yüzünden sansürsüz talimat kapatılmamalı."""
+        return isinstance(exc, self._deepl.DeepLException) and getattr(exc, "http_status_code", None) == 400
 
     def translate(self, text: str, context: str | None) -> str:
         self._last_used = time.monotonic()
@@ -131,15 +140,15 @@ class DryRunBackend:
     def translate(self, text: str, context: str | None) -> str:
         return f"[TR] {text}"
 
+    def cache_namespace(self) -> str:
+        return "dry-run"  # deneme çıktıları gerçek çevirilere karışmasın
+
     def usage_summary(self) -> str:
         return "Deneme modu: DeepL kullanılmıyor"
 
 
 class CachedTranslator:
-    def __init__(self, backend: Backend, cache_path: Path | None, namespace: str = ""):
-        # namespace: çeviriyi etkileyen ayarlar (sözlük içeriği, sansürsüz talimat). Değişince eski
-        # önbellek satırları kullanılmaz.
-        self._namespace = namespace
+    def __init__(self, backend: Backend, cache_path: Path | None):
         self._backend = backend
         self._cache_path = cache_path
         self._cache: dict[str, str] = {}
@@ -153,9 +162,13 @@ class CachedTranslator:
                     except (ValueError, KeyError, TypeError):
                         continue  # bozuk satırı atla, kalan önbellek kullanılabilir
 
-    def _key(self, text: str) -> str:
+    def _key(self, text: str, namespace: str | None = None) -> str:
+        """Anahtar, arka ucun o anki ayarlarını (sözlük, sansürsüz talimat) içerir; ayar değişince
+        eski çeviriler kullanılmaz."""
+        if namespace is None:
+            namespace = getattr(self._backend, "cache_namespace", lambda: "")()
         key = " ".join(text.split()).casefold()
-        return f"{self._namespace}\x1f{key}" if self._namespace else key
+        return f"{namespace}\x1f{key}" if namespace else key
 
     def cached(self, text: str) -> str | None:
         with self._lock:
@@ -168,6 +181,9 @@ class CachedTranslator:
         if hit is not None:
             return hit
         translated = self._backend.translate(text, context)
+        # Çeviri sırasında ayar geri çekilmiş olabilir (ör. talimat reddedildi): çevirinin
+        # gerçekte hangi ayarla yapıldığını kaydet.
+        key = self._key(text)
         with self._lock:
             self._cache[key] = translated
             if self._cache_path is not None:

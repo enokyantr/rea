@@ -276,6 +276,8 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
         root.destroy()
 
     def toggle_pause() -> None:
+        if state["picking"]:  # seçici açıkken duraklatma, seçim bitince durumu bozardı
+            return
         state["paused"] = not state["paused"]
         for p in all_pipelines():
             p.reset.set()
@@ -375,6 +377,10 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
                     overlays[name].set_palette(palette)
                     if debug:
                         log(f"yazı rengi: {palette.fill} (kontur {palette.outline_px}px)")
+                elif kind in ("show", "error") and (state["paused"] or state["picking"]):
+                    # Duraklatma/seçim sırasında yolda olan çeviri: gizli pencereye yazılıp devamda
+                    # bayat satır olarak geri gelmesin (seq artışı iş parçacığında biraz sonra olur).
+                    continue
                 elif kind == "show":
                     _, name, seq, stage, translated, original, first_seen = msg
                     # Eski satırı ya da DeepL'den sonra gelen taslağı gösterme.

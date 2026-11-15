@@ -164,3 +164,12 @@ def test_split_sentences_for_local_translation():
     assert split_sentences('He said "Run!" Then he left.') == ['He said "Run!"', "Then he left."]
     assert split_sentences("Wait... what?") == ["Wait... what?"]  # küçük harf: tek cümle
     assert split_sentences("Mr. Smith is here. Go!") == ["Mr. Smith is here.", "Go!"]
+
+
+def test_repicking_extra_region_keeps_display_mode():
+    cfg = config_mod.Config()
+    cfg.extra_regions = [config_mod.ExtraRegion("gorev", Region(0, 0, 1, 1), "adaptive")]
+    cfg.set_extra("gorev", Region(0.1, 0.1, 0.5, 0.1))
+    assert cfg.extra("gorev").display_mode == "adaptive"
+    cfg.set_extra("gorev", None)
+    assert cfg.extra("gorev") is None

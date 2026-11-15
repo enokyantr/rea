@@ -112,9 +112,10 @@ class Config:
 
     def set_extra(self, name: str, region: Region | None) -> None:
         """Ek bölgeyi ekler/günceller; None verilirse kaldırır."""
+        old = self.extra(name)
         self.extra_regions = [r for r in self.extra_regions if r.name != name]
         if region is not None:
-            self.extra_regions.append(ExtraRegion(name, region))
+            self.extra_regions.append(ExtraRegion(name, region, old.display_mode if old else "cover"))
 
     def resolved_auth_key(self) -> str:
         return self.deepl_auth_key.strip() or os.environ.get("DEEPL_AUTH_KEY", "").strip()
@@ -134,6 +135,8 @@ def _from_dict(data: dict) -> Config:
         if key == "region":
             cfg.region = _region(value)
         elif key == "extra_regions":
+            if not isinstance(value, list):
+                continue
             cfg.extra_regions = [
                 ExtraRegion(str(item["name"]), _region(item["region"]), str(item.get("display_mode", "cover")))
                 for item in value
