@@ -448,6 +448,37 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
             p.stopped.set()
 
 
+def run_ocr_compare(cfg: Config, folder: Path) -> None:
+    """--dump ile kaydedilen gerçek kırpıntılarda her ön işleme seçeneğini Windows OCR ile dener.
+    Doğru metin bilinmediği için puan (reading_score) ve "anlamlı satır" sayısı karşılaştırılır."""
+    from PIL import Image
+
+    images = sorted(p for p in folder.glob("*.png") if not p.stem.endswith("_ocr_girdi"))
+    if not images:
+        log(f"{folder} içinde .png yok. Önce --debug --dump ile çalıştırın.")
+        return
+    ocr = WindowsOcr(cfg.ocr_language)
+    totals: dict[str, list[float]] = {}
+    for path in images:
+        gray = np.asarray(Image.open(path).convert("L"))
+        print(path.name)
+        for name, image in reader.variants(gray, cfg, "all"):
+            t0 = time.perf_counter()
+            text = textproc.normalize(ocr.recognize(imageproc.upscale(image, cfg.upscale)))
+            ms = 1000 * (time.perf_counter() - t0)
+            score = textproc.reading_score(text)
+            ok = textproc.is_plausible(text, cfg.min_text_chars)
+            t = totals.setdefault(name, [0.0, 0, 0.0])
+            t[0] += score
+            t[1] += ok
+            t[2] += ms
+            print(f"  {name:7} {score:4.0f} {'✓' if ok else ' '} {text}")
+    print(f"\n{len(images)} görüntü. Seçenek / toplam puan / anlamlı satır / ort. OCR ms:")
+    for name, (score, ok, ms) in sorted(totals.items(), key=lambda kv: -kv[1][0]):
+        print(f"  {name:7} {score:7.0f} {int(ok):5d} {ms / len(images):6.1f}")
+    print("Hangi seçeneğin hangi satırı doğru okuduğuna yukarıdaki listeden bakın.")
+
+
 def run_ocr_test(cfg: Config, image_path: Path, translator: HybridTranslator, full: bool) -> None:
     """Bir ekran görüntüsü üzerinde OCR + çeviriyi dener (ayar yapmak için)."""
     from PIL import Image

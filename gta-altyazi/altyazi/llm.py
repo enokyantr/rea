@@ -112,7 +112,8 @@ class OllamaBackend:
         self._system = SYSTEM.format(uncensored=UNCENSORED if uncensored else "", glossary=terms)
         self._examples = (EXAMPLES_UNCENSORED if uncensored else []) + EXAMPLES_PLAIN
         self.instructions_active = uncensored
-        blob = json.dumps([self._system, self._examples], ensure_ascii=False).encode("utf-8")
+        # "clean-2": clean_output değişti (eklenen "(Not: ...)" açıklamaları); eski kayıtlarda kalmış.
+        blob = json.dumps([self._system, self._examples, "clean-2"], ensure_ascii=False).encode("utf-8")
         self._fingerprint = hashlib.sha256(blob).hexdigest()[:10]
 
     def cache_namespace(self) -> str:

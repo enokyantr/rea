@@ -2,7 +2,7 @@
 
 Tek bir ön işleme her sahnede işe yaramıyor (gerçek video: gri ton koyu sahnede kusursuz, açık
 sahnede t→c/h→ij hatalı; sıkı kontur maskesi sıkıştırılmış videoda harfleri parçalıyor). Bu yüzden
-"auto" modunda birkaç seçenek OCR'lanır ve gerçek metne en çok benzeyen sonuç seçilir. OCR satır
+"auto" modunda birkaç seçenek (top-hat, gri, kontur) OCR'lanır ve gerçek metne en çok benzeyen sonuç seçilir. OCR satır
 başına ~5-20 ms olduğu için bu ucuzdur; ilk seçenek yeterince iyiyse diğerleri hiç denenmez."""
 
 from __future__ import annotations
@@ -27,17 +27,20 @@ class ReadResult:
     crop: np.ndarray | None = None
 
 
-def variants(gray: np.ndarray, cfg) -> list[tuple[str, np.ndarray]]:
-    """Denenecek OCR girdileri, sırayla. `cfg.preprocess`: auto | none | bright | outline."""
-    mode = cfg.preprocess
+def variants(gray: np.ndarray, cfg, mode: str | None = None) -> list[tuple[str, np.ndarray]]:
+    """Denenecek OCR girdileri, sırayla. `cfg.preprocess`: auto | tophat | none | bright | outline.
+    "all" (yalnızca --ocr-compare): hepsi."""
+    mode = mode or cfg.preprocess
     out: list[tuple[str, np.ndarray]] = []
-    if mode in ("auto", "none"):
+    if mode in ("auto", "tophat", "all"):
+        out.append(("tophat", imageproc.tophat(gray, cfg.tophat_radius)))
+    if mode in ("auto", "none", "all"):
         out.append(("gri", gray))
-    if mode in ("auto", "outline"):
+    if mode in ("auto", "outline", "all"):
         mask = imageproc.text_mask(gray, "outline", cfg.bright_threshold, cfg.dark_threshold,
                                    cfg.outline_radius, cfg.outline_white_threshold)
         out.append(("kontur", imageproc.for_ocr(gray, mask, "outline")))
-    if mode == "bright":
+    if mode in ("bright", "all"):
         out.append(("parlak", imageproc.for_ocr(gray, gray >= cfg.bright_threshold, "bright")))
     return out
 

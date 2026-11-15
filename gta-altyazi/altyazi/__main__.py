@@ -23,6 +23,8 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="DeepL kullanmadan dene ([TR] metin)")
     parser.add_argument("--debug", action="store_true", help="OCR ve çeviri sürelerini yazdır")
     parser.add_argument("--ocr-test", type=Path, metavar="RESIM", help="Ekran görüntüsünde OCR+çeviri dene")
+    parser.add_argument("--ocr-compare", type=Path, nargs="?", const=APP_DIR / "dump", metavar="KLASOR",
+                        help="dump/ kırpıntılarında tüm ön işleme seçeneklerini karşılaştır")
     parser.add_argument("--full", action="store_true", help="--ocr-test: bölgeyi değil tüm resmi oku")
     parser.add_argument("--list-windows", action="store_true", help="Açık pencere başlıklarını listele")
     parser.add_argument("--self-test", action="store_true", help="OCR, overlay ve DeepL'i bu bilgisayarda dene")
@@ -148,6 +150,9 @@ def main() -> int:
         return HybridTranslator(final, local, final_for=needs_uncensored if only_profane else None)
 
     app.log(f"Çeviri modu: {make_translator().mode}")
+    if args.ocr_compare:
+        app.run_ocr_compare(cfg, args.ocr_compare)
+        return
     if args.ocr_test:
         app.run_ocr_test(cfg, args.ocr_test, make_translator(), args.full)
         return 0

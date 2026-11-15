@@ -151,7 +151,8 @@ Canlı kullanımda süreleri görmek için `baslat.bat --debug`. Pencere başlı
 | `local_device` | `"auto"` | GPU sorun çıkarırsa `"cpu"` |
 | `display_mode` | `"adaptive"` | `"cover"`: İngilizceyi koyu kutuyla kapatıp sabit renkte yazar |
 | `deepl_model_type` | `"latency_optimized"` | Daha doğal ama daha yavaş çeviri için `"quality_optimized"` |
-| `preprocess` | `"outline"` | Beyaz yazı + siyah kontur (oyun altyazısı); kontursuz/renkli yazılar için `"none"` |
+| `preprocess` | `"auto"` | Top-hat, gri ton ve kontur okumalarından en anlamlısını seçer. Tek yöntem için `"tophat"`, `"none"` (gri) ya da `"outline"`. Hangisinin daha iyi okuduğunu `.\baslat.bat --ocr-compare` ile görebilirsiniz |
+| `tophat_radius` | `3` | Çok açık sahnelerde 2 deneyin |
 | `outline_white_threshold` | `232` | Yazı eksik okunuyorsa düşürün; açık sahnede harfler kalınlaşıyorsa yükseltin |
 | `bright_threshold` | `190` | Altyazı hiç okunmuyorsa düşürün (yazı bu parlaklığın altındaysa OCR atlanır) |
 | `skip_without_bright_text` | `true` | Altyazı beyaz/parlak değilse `false` |

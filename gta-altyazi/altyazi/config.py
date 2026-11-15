@@ -106,6 +106,9 @@ class Config:
     # "outline": yazı bu değerden parlak olmalı (altyazı ~240-255; açık gökyüzü genelde daha düşük).
     # Yazı eksik okunursa düşürün, açık sahnede harfler kalınlaşıyorsa yükseltin.
     outline_white_threshold: int = 205
+    # "tophat": yerel arka plandan bu yarıçapta (piksel) daha parlak olan ince vuruşlar yazı sayılır.
+    # Koyu sahnede 3, çok açık sahnede 2 biraz daha iyi.
+    tophat_radius: int = 3
     min_text_chars: int = 3
 
     # Kararlılık: aynı metin art arda kaç kez okunursa çevrilsin.
