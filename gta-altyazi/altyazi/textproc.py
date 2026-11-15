@@ -40,6 +40,7 @@ def similar(a: str, b: str, threshold: float) -> bool:
 @dataclass(frozen=True)
 class Show:
     text: str
+    first_seen: float  # satırın ilk okunduğu an (gecikme ölçümü için)
 
 
 @dataclass(frozen=True)
@@ -62,6 +63,7 @@ class Stabilizer:
         self.shown: str | None = None
         self._candidate: str | None = None
         self._candidate_count = 0
+        self._candidate_since = 0.0
         self._last_text_at: float | None = None
 
     def feed(self, text: str, now: float) -> Show | Clear | None:
@@ -84,10 +86,10 @@ class Stabilizer:
             if len(text) >= len(self._candidate):
                 self._candidate = text
         else:
-            self._candidate, self._candidate_count = text, 1
+            self._candidate, self._candidate_count, self._candidate_since = text, 1, now
 
         if self._candidate_count >= self.stable_reads:
             self.shown = self._candidate
             self._candidate, self._candidate_count = None, 0
-            return Show(self.shown)
+            return Show(self.shown, self._candidate_since)
         return None

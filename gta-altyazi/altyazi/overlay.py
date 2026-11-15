@@ -1,4 +1,4 @@
-"""Her zaman üstte, tıklanamaz, şeffaf Türkçe altyazı penceresi (tkinter) ve bölge seçici."""
+"""Her zaman üstte, tıklanamaz, ekran yakalamaya görünmez Türkçe altyazı penceresi ve bölge seçici."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from typing import Callable
 
 from . import win32
 from .config import Config
+from .contrast import BLACK, WHITE, Palette
 from .geometry import Rect
 
 KEY_COLOR = "#010203"  # şeffaf yapılan renk; başka hiçbir yerde kullanılmamalı
@@ -16,6 +17,7 @@ KEY_COLOR = "#010203"  # şeffaf yapılan renk; başka hiçbir yerde kullanılma
 class Overlay:
     def __init__(self, root: tk.Tk, cfg: Config):
         self.cfg = cfg
+        self.adaptive = cfg.display_mode != "cover"
         self.win = tk.Toplevel(root)
         self.win.title("GTA Altyazi Overlay")
         self.win.overrideredirect(True)
@@ -25,24 +27,49 @@ class Overlay:
         self.canvas = tk.Canvas(self.win, bg=KEY_COLOR, highlightthickness=0, bd=0)
         self.canvas.pack(fill="both", expand=True)
         self.font = tkfont.Font(family=cfg.font_family, size=cfg.font_size, weight="bold")
-        self.small_font = tkfont.Font(family=cfg.font_family, size=max(10, cfg.font_size * 6 // 10))
+        self.small_font = tkfont.Font(family=cfg.font_family, size=max(10, cfg.font_size * 6 // 10), weight="bold")
+        if self.adaptive:
+            self.palette = Palette(WHITE, BLACK, cfg.outline_px)
+        else:
+            self.palette = Palette(cfg.text_color, cfg.outline_color, cfg.outline_px)
         self.region: Rect | None = None
-        self._state: tuple[str, str, str] | None = None  # (tr, en, status)
-        self.win.geometry("1x1+0+0")
+        # Pipeline iş parçacığı okur: Türkçe yazının bulunduğu / bulunacağı ekran alanı.
+        self.sample_rect: Rect | None = None
+        self.capture_excluded = False
+        self._state: tuple[str, str, str] | None = None  # (tr, en, durum)
+        self.win.geometry("1x1+-10+-10")
         self.win.update_idletasks()
-        win32.make_click_through(win32.user32.GetParent(self.win.winfo_id()))
+        self._apply_window_styles()
         self._keep_on_top()
 
+    def _apply_window_styles(self) -> None:
+        hwnd = int(self.win.wm_frame(), 16)
+        win32.make_click_through(hwnd)
+        self.capture_excluded = win32.exclude_from_capture(hwnd)
+
     def _keep_on_top(self) -> None:
-        # Remote Play tam ekrana geçtiğinde overlay'i tekrar en üste al.
+        # Remote Play öne geldiğinde overlay'i tekrar en üste al.
         self.win.wm_attributes("-topmost", True)
         self.win.lift()
         self.win.after(2000, self._keep_on_top)
+
+    # --- pipeline/arayüz olayları -------------------------------------------------------
 
     def set_region(self, region: Rect) -> None:
         if region != self.region:
             self.region = region
             self._redraw()
+
+    def set_palette(self, palette: Palette) -> None:
+        if not self.adaptive or palette == self.palette:
+            return
+        thickness_changed = palette.outline_px != self.palette.outline_px
+        self.palette = palette
+        if thickness_changed:
+            self._redraw()
+        else:  # yalnızca renk: öğeleri yeniden çizmeden anında boya
+            self.canvas.itemconfigure("fill", fill=palette.fill)
+            self.canvas.itemconfigure("outline", fill=palette.outline)
 
     def show(self, translated: str, original: str = "") -> None:
         self._state = (translated, original, "")
@@ -62,63 +89,79 @@ class Overlay:
     def unhide(self) -> None:
         self.win.deiconify()
         self.win.update_idletasks()
-        win32.make_click_through(win32.user32.GetParent(self.win.winfo_id()))
+        self._apply_window_styles()
         self._redraw()
 
-    def _text(self, x: int, y: int, text: str, font, width: int, fill: str) -> int:
+    # --- çizim ------------------------------------------------------------------------------
+
+    def _text(self, x: int, y: int, text: str, font, width: int, fill: str | None = None) -> int:
         """Konturlu yazı çizer, yüksekliğini döndürür."""
-        o = self.cfg.outline_px
+        o = self.palette.outline_px
         for dx in range(-o, o + 1):
             for dy in range(-o, o + 1):
-                if dx or dy:
+                if (dx or dy) and dx * dx + dy * dy <= o * o + 1:  # yuvarlak kontur
                     self.canvas.create_text(
-                        x + dx, y + dy, text=text, font=font, width=width,
-                        fill=self.cfg.outline_color, anchor="n", justify="center",
+                        x + dx, y + dy, text=text, font=font, width=width, fill=self.palette.outline,
+                        anchor="n", justify="center", tags=("outline",),
                     )
         item = self.canvas.create_text(
-            x, y, text=text, font=font, width=width, fill=fill, anchor="n", justify="center"
+            x, y, text=text, font=font, width=width, fill=fill or self.palette.fill,
+            anchor="n", justify="center", tags=() if fill else ("fill",),
         )
         x0, y0, x1, y1 = self.canvas.bbox(item)
         return y1 - y0
 
+    def _empty_band(self, region: Rect) -> Rect:
+        """Henüz yazı yokken Türkçenin çıkacağı tahmini alan (renk önceden hazır olsun diye)."""
+        height = 2 * self.font.metrics("linespace") + 2 * self.cfg.outline_px
+        top = region.top - self.cfg.overlay_gap_px - height
+        return Rect(region.left, top, region.width, height)
+
     def _redraw(self) -> None:
         self.canvas.delete("all")
         region = self.region
-        if region is None or self._state is None:
-            self.win.geometry(f"1x1+{-10}+{-10}")
+        if region is None:
+            self.sample_rect = None
+            self.win.geometry("1x1+-10+-10")
             return
+        if self._state is None:
+            self.sample_rect = self._empty_band(region) if self.adaptive else None
+            self.win.geometry("1x1+-10+-10")
+            return
+
         translated, original, status = self._state
-        pad = self.cfg.cover_padding_px
+        pad = self.cfg.outline_px + 2 if self.adaptive else self.cfg.cover_padding_px
         width = region.width + 2 * pad
-        wrap = max(50, width - 2 * pad - 2 * self.cfg.outline_px)
+        wrap = max(50, width - 2 * pad - 2 * self.palette.outline_px)
         cx = width // 2
 
-        # Önce yüksekliği ölçmek için çiz, sonra pencereyi ona göre boyutlandır.
         y = pad
         if status:
-            y += self._text(cx, y, status, self.small_font, wrap, "#FFD166")
+            y += self._text(cx, y, status, self.small_font, wrap, None if self.adaptive else "#FFD166")
         if self.cfg.show_original and original:
-            y += self._text(cx, y, original, self.small_font, wrap, "#BBBBBB") + 2
+            y += self._text(cx, y, original, self.small_font, wrap, None if self.adaptive else "#BBBBBB") + 2
         if translated:
-            y += self._text(cx, y, translated, self.font, wrap, self.cfg.text_color)
-        height = max(y + pad, region.height + 2 * pad)
-
-        # Yazıyı kutunun dikey ortasına taşı.
+            y += self._text(cx, y, translated, self.font, wrap)
         content_h = y - pad
-        offset = (height - 2 * pad - content_h) // 2
-        if offset > 0:
-            self.canvas.move("all", 0, offset)
-        if self.cfg.cover_original:
-            rect = self.canvas.create_rectangle(
-                0, 0, width, height, fill=self.cfg.cover_color, outline=""
-            )
-            self.canvas.tag_lower(rect)
 
-        # Alt kenar altyazı bölgesinin alt kenarına hizalı; uzun çeviri yukarı doğru büyür.
         left = region.left - pad
-        top = region.bottom + pad - height
+        if self.adaptive:
+            # İngilizce altyazının hemen üstü; uzun çeviri yukarı doğru büyür.
+            height = content_h + 2 * pad
+            top = region.top - self.cfg.overlay_gap_px - height
+        else:
+            # Orijinal altyazının üstünü kapatan kutu; alt kenarlar hizalı.
+            height = max(content_h + 2 * pad, region.height + 2 * pad)
+            offset = (height - 2 * pad - content_h) // 2
+            if offset > 0:
+                self.canvas.move("all", 0, offset)
+            box = self.canvas.create_rectangle(0, 0, width, height, fill=self.cfg.cover_color, outline="")
+            self.canvas.tag_lower(box)
+            top = region.bottom + pad - height
+
         self.canvas.configure(width=width, height=height)
         self.win.geometry(f"{width}x{height}+{left}+{top}")
+        self.sample_rect = Rect(left, top, width, height) if self.adaptive else None
 
 
 class RegionPicker:

@@ -41,15 +41,24 @@ def main() -> int:
     else:
         key = cfg.resolved_auth_key()
         if not key:
-            print(f"DeepL anahtarı yok. {args.config} içinde \"deepl_auth_key\" alanına yazın\n"
-                  "(ücretsiz anahtar: https://www.deepl.com/pro-api) ya da --dry-run ile deneyin.")
-            return 2
-        backend = DeepLBackend(key, cfg.source_lang, cfg.target_lang)
+            if not sys.stdin or not sys.stdin.isatty():
+                print(f"DeepL anahtarı yok. {args.config} içinde \"deepl_auth_key\" alanına yazın.")
+                return 2
+            print("DeepL API anahtarı gerekli (ücretsiz: https://www.deepl.com/pro-api → Hesap → API Keys).")
+            key = input("Anahtarı yapıştırıp Enter'a basın: ").strip()
+            if not key:
+                return 2
+        backend = DeepLBackend(key, cfg.source_lang, cfg.target_lang, cfg.deepl_model_type, cfg.deepl_timeout_s)
         try:
+            # Anahtarı doğrular ve DeepL bağlantısını oyundan önce ısıtır.
             app.log(backend.usage_summary())
         except Exception as exc:
             print(app.describe_error(exc))
             return 2
+        if key != cfg.resolved_auth_key():
+            cfg.deepl_auth_key = key
+            config_mod.save(cfg, args.config)
+            app.log(f"Anahtar {args.config} dosyasına kaydedildi")
 
     cache_path = args.config.parent / cfg.cache_file if cfg.cache_file else None
     translator = CachedTranslator(backend, cache_path)

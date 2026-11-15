@@ -112,6 +112,23 @@ def make_click_through(hwnd: int) -> None:
     set_(hwnd, GWL_EXSTYLE, style)
 
 
+WDA_EXCLUDEFROMCAPTURE = 0x00000011
+
+
+def exclude_from_capture(hwnd: int) -> bool:
+    """Overlay ekranda görünür ama ekran yakalamada görünmez olur (Windows 10 2004+).
+
+    Böylece OCR kendi Türkçe yazımızı/kutumuzu okumaz ve renk seçimi gerçek oyun
+    görüntüsüne göre yapılır."""
+    try:
+        if not user32.SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE):
+            return False
+        value = wintypes.DWORD()
+        return bool(user32.GetWindowDisplayAffinity(hwnd, ctypes.byref(value))) and value.value == WDA_EXCLUDEFROMCAPTURE
+    except AttributeError:
+        return False
+
+
 MOD_ALT = 0x0001
 MOD_CONTROL = 0x0002
 MOD_NOREPEAT = 0x4000

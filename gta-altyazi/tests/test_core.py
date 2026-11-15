@@ -5,7 +5,7 @@ import numpy as np
 from altyazi import config as config_mod
 from altyazi.config import Region
 from altyazi.geometry import Rect, region_to_screen, screen_to_region
-from altyazi.imageproc import preprocess, same_signature, signature
+from altyazi.imageproc import bright_bbox, for_ocr, same_signature, signature, to_gray
 from altyazi.textproc import Clear, Show, Stabilizer, is_plausible, normalize
 from altyazi.translate import CachedTranslator
 
@@ -26,32 +26,32 @@ def test_plausible_rejects_noise():
 def test_stabilizer_requires_repeated_reads_and_ignores_jitter():
     s = Stabilizer(stable_reads=2, similarity=0.88, clear_after=0.5)
     assert s.feed("Get in the car", 0.0) is None
-    assert s.feed("Get in the car!", 0.1) == Show("Get in the car!")
+    assert s.feed("Get in the car!", 0.1) == Show("Get in the car!", 0.0)
     # OCR titremesi: neredeyse aynı metin tekrar gösterilmez
     assert s.feed("Get in the car.", 0.2) is None
     assert s.feed("Get in the car!", 0.3) is None
     # Yeni satır
     assert s.feed("Where are we going?", 0.4) is None
-    assert s.feed("Where are we going?", 0.5) == Show("Where are we going?")
+    assert s.feed("Where are we going?", 0.5) == Show("Where are we going?", 0.4)
 
 
 def test_stabilizer_clears_after_timeout_only():
     s = Stabilizer(stable_reads=1, similarity=0.88, clear_after=0.5)
-    assert s.feed("Hello there", 0.0) == Show("Hello there")
+    assert s.feed("Hello there", 0.0) == Show("Hello there", 0.0)
     assert s.feed("", 0.2) is None  # kısa boşluk (OCR kaçırdı) silmez
     assert s.feed("Hello there", 0.3) is None
     assert s.feed("", 0.5) is None
     assert s.feed("", 0.81) == Clear()
     assert s.feed("", 1.5) is None
     # Aynı satır tekrar gelirse yeniden gösterilir
-    assert s.feed("Hello there", 2.0) == Show("Hello there")
+    assert s.feed("Hello there", 2.0) == Show("Hello there", 2.0)
 
 
 def test_stabilizer_keeps_longest_candidate():
     s = Stabilizer(stable_reads=3, similarity=0.8, clear_after=1)
     s.feed("I told you we should", 0.0)
     s.feed("I told you we should go", 0.1)
-    assert s.feed("I told you we should go", 0.2) == Show("I told you we should go")
+    assert s.feed("I told you we should go", 0.2) == Show("I told you we should go", 0.0)
 
 
 def test_region_roundtrip_and_clipping():
@@ -75,18 +75,23 @@ def _frame_with_text(seed: int, text_on: bool) -> np.ndarray:
 
 
 def test_signature_ignores_moving_background_but_sees_text_change():
-    a = signature(_frame_with_text(1, True), 190)
-    b = signature(_frame_with_text(2, True), 190)
-    c = signature(_frame_with_text(3, False), 190)
+    a = signature(to_gray(_frame_with_text(1, True)), 190)
+    b = signature(to_gray(_frame_with_text(2, True)), 190)
+    c = signature(to_gray(_frame_with_text(3, False)), 190)
     assert same_signature(a, b)
     assert not same_signature(a, c)
     assert not same_signature(None, a)
 
 
-def test_preprocess_bright_makes_dark_text_on_white():
-    frame = _frame_with_text(1, True)
-    out = preprocess(frame, "bright", 190)
+def test_bright_mode_makes_dark_text_on_white():
+    out = for_ocr(to_gray(_frame_with_text(1, True)), "bright", 190)
     assert out[30, 50] == 0 and out[5, 5] == 255
+
+
+def test_bright_bbox_crops_to_text_with_margin():
+    gray = to_gray(_frame_with_text(1, True))
+    assert bright_bbox(gray, 190, margin=4) == (16, 44, 46, 349)
+    assert bright_bbox(to_gray(_frame_with_text(1, False)), 190) is None
 
 
 class CountingBackend:

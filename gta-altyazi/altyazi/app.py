@@ -1,4 +1,4 @@
-"""Uygulama: yakalama → OCR → kararlılık → DeepL → overlay."""
+"""Uygulama: yakalama → OCR → kararlılık → DeepL → overlay (+ anlık yazı rengi)."""
 
 from __future__ import annotations
 
@@ -7,18 +7,19 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 
 from . import config as config_mod
-from . import imageproc, textproc, win32
+from . import contrast, imageproc, textproc, win32
 from .config import Config
-from .geometry import Rect, region_to_screen, screen_to_region
+from .geometry import Rect, intersect, region_to_screen, screen_to_region, union
 from .ocr import OcrUnavailable, WindowsOcr
 from .translate import CachedTranslator
 
-
-# Görüntü aynı kalsa bile her bu kadar karede bir OCR tekrarlanır (~0,5 sn).
+# Görüntü aynı kalsa bile bu kadar karede bir OCR tekrarlanır; altyazı belirirken (fade-in)
+# yapılmış eksik bir okumada takılı kalmamak için.
 MAX_REUSE = 4
 
 
@@ -38,12 +39,14 @@ def describe_error(exc: Exception) -> str:
 
 
 class Pipeline(threading.Thread):
-    def __init__(self, cfg: Config, translator: CachedTranslator, ui: queue.Queue, debug: bool):
+    def __init__(self, cfg: Config, translator: CachedTranslator, ui: queue.Queue, debug: bool,
+                 sample_rect: Callable[[], Rect | None] = lambda: None):
         super().__init__(daemon=True, name="pipeline")
         self.cfg = cfg
         self.translator = translator
         self.ui = ui
         self.debug = debug
+        self.sample_rect = sample_rect
         self.paused = threading.Event()
         self.stopped = threading.Event()
         self.seq = 0
@@ -51,13 +54,9 @@ class Pipeline(threading.Thread):
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="deepl")
         self._previous_source: str | None = None
 
-    def _locate_base(self) -> Rect:
-        found = win32.find_window(self.cfg.window_titles)
-        if found is None:
-            return win32.primary_screen()
-        return found[1]
-
-    def _translate(self, seq: int, text: str, context: str | None) -> None:
+    def _translate(self, seq: int, text: str, context: str | None, first_seen: float) -> None:
+        if seq != self.seq:  # kuyrukta beklerken yeni satır geldi: boşuna çevirme
+            return
         started = time.perf_counter()
         try:
             translated = self.translator.translate(text, context)
@@ -69,7 +68,20 @@ class Pipeline(threading.Thread):
         if self.debug:
             log(f"çeviri {1000 * (time.perf_counter() - started):.0f} ms: {translated}")
         if seq == self.seq:  # bu arada yeni satır geldiyse eski çeviriyi gösterme
-            self.ui.put(("show", seq, translated, text))
+            self.ui.put(("show", seq, translated, text, first_seen))
+
+    def _read_text(self, ocr: WindowsOcr, gray: np.ndarray) -> str:
+        cfg = self.cfg
+        bbox = imageproc.bright_bbox(gray, cfg.bright_threshold)
+        if bbox is None:
+            if cfg.skip_without_bright_text:
+                return ""
+        else:
+            top, bottom, left, right = bbox
+            gray = gray[top:bottom, left:right]
+        img = imageproc.upscale(imageproc.for_ocr(gray, cfg.preprocess, cfg.bright_threshold), cfg.upscale)
+        text = textproc.normalize(ocr.recognize(img))
+        return text if textproc.is_plausible(text, cfg.min_text_chars) else ""
 
     def run(self) -> None:
         import mss
@@ -85,23 +97,26 @@ class Pipeline(threading.Thread):
 
         cfg = self.cfg
         stab = textproc.Stabilizer(cfg.stable_reads, cfg.similarity, cfg.clear_after_ms / 1000)
+        picker = contrast.ColorPicker(cfg.outline_px) if cfg.display_mode != "cover" else None
         last_sig: np.ndarray | None = None
         last_text = ""
         reused = 0
-        last_rect: Rect | None = None
+        last_region: Rect | None = None
         last_base_check = 0.0
         last_window_title: str | None = None
+        screen = win32.virtual_screen()
         interval = cfg.capture_interval_ms / 1000
 
         with mss.mss() as sct:
             while not self.stopped.is_set():
                 tick = time.monotonic()
                 if self.paused.is_set():
-                    time.sleep(0.1)
+                    time.sleep(0.05)
                     continue
 
                 if tick - last_base_check >= 1.0:
                     last_base_check = tick
+                    screen = win32.virtual_screen()
                     found = win32.find_window(cfg.window_titles)
                     title = found[0] if found else None
                     if title != last_window_title:
@@ -109,34 +124,56 @@ class Pipeline(threading.Thread):
                         last_window_title = title
                     self.base = found[1] if found else win32.primary_screen()
 
-                rect = region_to_screen(cfg.region, self.base)
-                if rect != last_rect:
-                    last_rect = rect
+                region = region_to_screen(cfg.region, self.base)
+                if region != last_region:
+                    last_region = region
                     last_sig = None
-                    self.ui.put(("region", rect))
+                    self.ui.put(("region", region))
 
+                # Altyazı bölgesi ile Türkçe yazının alanı tek seferde yakalanır.
+                sample = self.sample_rect() if picker else None
+                zone = intersect(union(region, sample) if sample else region, screen)
+                if zone is None:
+                    time.sleep(0.2)
+                    continue
                 try:
-                    shot = sct.grab({"left": rect.left, "top": rect.top, "width": rect.width, "height": rect.height})
+                    frame = np.asarray(sct.grab(
+                        {"left": zone.left, "top": zone.top, "width": zone.width, "height": zone.height}))
                 except Exception as exc:
                     log(f"Ekran yakalanamadı: {exc}")
                     time.sleep(0.5)
                     continue
-                bgra = np.asarray(shot)
 
-                sig = imageproc.signature(bgra, cfg.bright_threshold)
-                # Görüntü değişmediyse önceki okumayı kullan; ama belirme (fade-in) sırasında
-                # yapılmış hatalı bir okumada takılmamak için arada bir yine de oku.
+                def crop(r: Rect) -> np.ndarray | None:
+                    part = intersect(r, zone)
+                    if part is None:
+                        return None
+                    return frame[part.top - zone.top:part.bottom - zone.top,
+                                 part.left - zone.left:part.right - zone.left]
+
+                # 1) Yazı rengi: Türkçenin arkasındaki sahneye göre, her karede.
+                if picker and sample:
+                    bg = crop(sample)
+                    stats = contrast.background_stats(bg) if bg is not None else None
+                    if stats is not None:
+                        palette = picker.update(stats)
+                        if palette is not None:
+                            self.ui.put(("palette", palette))
+
+                # 2) Altyazı metni.
+                sub = crop(region)
+                if sub is None:
+                    time.sleep(interval)
+                    continue
+                gray = imageproc.to_gray(sub)
+                sig = imageproc.signature(gray, cfg.bright_threshold)
                 if imageproc.same_signature(last_sig, sig) and reused < MAX_REUSE:
                     text = last_text
                     reused += 1
                 else:
                     reused = 0
                     t0 = time.perf_counter()
-                    gray = imageproc.preprocess(bgra, cfg.preprocess, cfg.bright_threshold)
-                    gray = imageproc.upscale(gray, cfg.upscale)
-                    text = textproc.normalize(ocr.recognize(gray))
-                    if not textproc.is_plausible(text, cfg.min_text_chars):
-                        text = ""
+                    text = self._read_text(ocr, gray)
                     if self.debug and text != last_text:
                         log(f"OCR {1000 * (time.perf_counter() - t0):.0f} ms: {text!r}")
                     last_sig, last_text = sig, text
@@ -146,7 +183,7 @@ class Pipeline(threading.Thread):
                     self.seq += 1
                     context, self._previous_source = self._previous_source, event.text
                     log(f"EN: {event.text}")
-                    self._executor.submit(self._translate, self.seq, event.text, context)
+                    self._executor.submit(self._translate, self.seq, event.text, context, event.first_seen)
                 elif isinstance(event, textproc.Clear):
                     self.seq += 1
                     self.ui.put(("clear",))
@@ -167,8 +204,12 @@ def run_gui(cfg: Config, cfg_path: Path, translator: CachedTranslator, debug: bo
     root = tk.Tk()
     root.withdraw()
     overlay = Overlay(root, cfg)
+    if not overlay.capture_excluded:
+        log("UYARI: Overlay ekran yakalamadan gizlenemedi (Windows 10 2004 veya üstü gerekir). "
+            + ("'cover' modunda OCR kendi kutumuzu okuyabilir; 'adaptive' modunu kullanın."
+               if cfg.display_mode == "cover" else "Renk seçimi kendi yazımızdan etkilenebilir."))
     ui: queue.Queue = queue.Queue()
-    pipeline = Pipeline(cfg, translator, ui, debug)
+    pipeline = Pipeline(cfg, translator, ui, debug, sample_rect=lambda: overlay.sample_rect)
     state = {"welcome": True, "picking": False}
 
     def quit_app() -> None:
@@ -232,11 +273,17 @@ def run_gui(cfg: Config, cfg_path: Path, translator: CachedTranslator, debug: bo
                     if state["welcome"]:
                         overlay.status("Türkçe altyazı aktif  •  Ctrl+Alt+R bölge seç  •  Ctrl+Alt+S duraklat  •  Ctrl+Alt+Q çık")
                         root.after(5000, welcome_off)
+                elif kind == "palette":
+                    overlay.set_palette(msg[1])
+                    if debug:
+                        log(f"yazı rengi: {msg[1].fill} (kontur {msg[1].outline_px}px)")
                 elif kind == "show":
-                    _, seq, translated, original = msg
+                    _, seq, translated, original, first_seen = msg
                     if seq == pipeline.seq:
                         state["welcome"] = False
                         overlay.show(translated, original)
+                        if debug:
+                            log(f"ilk okumadan ekrana: {1000 * (time.monotonic() - first_seen):.0f} ms")
                 elif kind == "clear":
                     if not state["welcome"]:
                         overlay.clear()
@@ -253,11 +300,11 @@ def run_gui(cfg: Config, cfg_path: Path, translator: CachedTranslator, debug: bo
                         return
         except queue.Empty:
             pass
-        root.after(30, poll)
+        root.after(10, poll)
 
     hotkeys.start()
     pipeline.start()
-    root.after(30, poll)
+    root.after(10, poll)
     root.after(1500, lambda: hotkeys.failed and log(
         "Bu kısayollar başka bir program tarafından kullanılıyor: " + ", ".join(hotkeys.failed)))
     log("Çalışıyor. Ctrl+Alt+R: altyazı bölgesini seç, Ctrl+Alt+S: duraklat/devam, "
@@ -280,18 +327,27 @@ def run_ocr_test(cfg: Config, image_path: Path, translator: CachedTranslator, fu
         r = region_to_screen(cfg.region, Rect(0, 0, img.width, img.height))
         bgra = bgra[r.top:r.bottom, r.left:r.right]
         log(f"Bölge (piksel): x={r.left} y={r.top} {r.width}x{r.height}")
-    gray = imageproc.upscale(imageproc.preprocess(bgra, cfg.preprocess, cfg.bright_threshold), cfg.upscale)
+    gray = imageproc.to_gray(bgra)
+    bbox = imageproc.bright_bbox(gray, cfg.bright_threshold)
+    if bbox is not None:
+        top, bottom, left, right = bbox
+        gray = gray[top:bottom, left:right]
+    else:
+        log("Bölgede parlak yazı bulunamadı (bright_threshold çok yüksek olabilir)")
+    ocr_input = imageproc.upscale(imageproc.for_ocr(gray, cfg.preprocess, cfg.bright_threshold), cfg.upscale)
     debug_path = image_path.with_name(image_path.stem + "_ocr_girdi.png")
-    Image.fromarray(gray).save(debug_path)
+    Image.fromarray(ocr_input).save(debug_path)
     log(f"OCR'a verilen görüntü kaydedildi: {debug_path}")
 
     ocr = WindowsOcr(cfg.ocr_language)
     t0 = time.perf_counter()
-    lines = ocr.recognize(gray)
+    lines = ocr.recognize(ocr_input)
     log(f"OCR süresi: {1000 * (time.perf_counter() - t0):.0f} ms")
     for line in lines:
         print("  satır:", line)
     text = textproc.normalize(lines)
     print("İngilizce:", text or "(metin yok)")
     if text:
+        t0 = time.perf_counter()
         print("Türkçe:   ", translator.translate(text))
+        log(f"Çeviri süresi: {1000 * (time.perf_counter() - t0):.0f} ms")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from pathlib import Path
 from typing import Protocol
 
@@ -13,22 +14,47 @@ class Backend(Protocol):
 
 
 class DeepLBackend:
-    def __init__(self, auth_key: str, source_lang: str, target_lang: str):
+    # Bu kadar saniye istek yoksa bağlantıyı açık tutmak için ücretsiz kullanım sorgusu atılır;
+    # böylece uzun sessizlikten sonraki ilk çeviri yeni TLS bağlantısı kurmayı beklemez.
+    KEEPALIVE_IDLE_S = 20.0
+
+    def __init__(self, auth_key: str, source_lang: str, target_lang: str,
+                 model_type: str = "latency_optimized", timeout_s: float = 4.0):
         import deepl  # yalnızca gerçek kullanımda gerekir
 
-        self._translator = deepl.Translator(auth_key)
+        # Oyun sırasında uzun yeniden deneme beklemeleri yerine hızlı hata: bir sonraki satır zaten gelecek.
+        self._translator = deepl.Translator(auth_key, max_retries=1, timeout_s=timeout_s)
         self._source = source_lang
         self._target = target_lang
+        self._model_type = model_type or None
+        self._last_used = time.monotonic()
+        self._stop = threading.Event()
+        threading.Thread(target=self._keepalive, daemon=True, name="deepl-keepalive").start()
 
     def translate(self, text: str, context: str | None) -> str:
+        self._last_used = time.monotonic()
         result = self._translator.translate_text(
             text,
             source_lang=self._source,
             target_lang=self._target,
             # Önceki satır bağlam olarak verilir; DeepL bağlamı ücretlendirmez.
             context=context or None,
+            model_type=self._model_type,
         )
+        self._last_used = time.monotonic()
         return result.text
+
+    def _keepalive(self) -> None:
+        while not self._stop.wait(5.0):
+            if time.monotonic() - self._last_used >= self.KEEPALIVE_IDLE_S:
+                self._last_used = time.monotonic()
+                try:
+                    self._translator.get_usage()
+                except Exception:
+                    pass  # ağ hatası çeviri sırasında ayrıca raporlanır
+
+    def close(self) -> None:
+        self._stop.set()
 
     def usage_summary(self) -> str:
         usage = self._translator.get_usage()

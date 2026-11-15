@@ -1,14 +1,22 @@
 # GTA Altyazı — Remote Play için anlık Türkçe altyazı
 
 PS Remote Play penceresindeki **İngilizce altyazıyı** ekrandan okur (Windows OCR),
-**DeepL** ile Türkçeye çevirir ve orijinal altyazının üstünde gösterir.
+**DeepL API** ile Türkçeye çevirir ve İngilizce altyazının hemen üstünde gösterir.
 Oyuna, konsola veya Remote Play'e dokunmaz; yalnızca ekranı okur.
 
 ```
 Remote Play penceresi ─► altyazı bölgesini yakala ─► Windows OCR ─► kararlılık/tekrar süzgeci
-                                                                     │
-                     tıklanamaz şeffaf overlay ◄── DeepL (önbellekli) ◄┘
+          │                                                          │
+          └─► Türkçenin arkasındaki sahnenin parlaklığı              ▼
+                    │                                  DeepL (hızlı model, önbellek, sıcak bağlantı)
+                    ▼                                                │
+          yazı rengi: açık sahnede siyah, koyu sahnede beyaz ──► tıklanamaz şeffaf overlay
 ```
+
+**Anlık renk:** Türkçe yazının arkasındaki görüntü her karede (~50 ms) ölçülür. Kar, gökyüzü,
+beyaz duvar gibi açık bir sahneye gelince yazı siyah olur, beyaz kontur alır; karanlıkta beyaza döner.
+Yarısı açık yarısı koyu sahnede kontur kalınlaşır. Tek karelik patlama ve flaşlarda renk titremez.
+Overlay ekran yakalamadan gizlendiği için ölçüm kendi yazımızdan değil, gerçek oyun görüntüsünden yapılır.
 
 ## Gereksinimler
 
@@ -24,9 +32,10 @@ Remote Play penceresi ─► altyazı bölgesini yakala ─► Windows OCR ─�
 ## Kurulum
 
 1. `kurulum.bat` dosyasını çift tıklayın.
-2. `baslat.bat --dry-run` ile bir kez çalıştırın; `config.json` oluşur (Ctrl+Alt+Q ile kapatın).
-3. `config.json` içinde `"deepl_auth_key"` alanına anahtarınızı yazın
-   (veya `DEEPL_AUTH_KEY` ortam değişkenini ayarlayın).
+2. `baslat.bat` ile çalıştırın. İlk açılışta DeepL API anahtarı sorulur; yapıştırın.
+   Anahtar doğrulanır ve `config.json` dosyasına kaydedilir
+   (isterseniz `DEEPL_AUTH_KEY` ortam değişkenini de kullanabilirsiniz).
+   Anahtarsız denemek için: `baslat.bat --dry-run`.
 
 ## Kullanım
 
@@ -60,23 +69,45 @@ Canlı kullanımda süreleri görmek için `baslat.bat --debug`. Pencere başlı
 
 | Ayar | Varsayılan | Ne zaman değiştirilir |
 |---|---|---|
+| `display_mode` | `"adaptive"` | `"cover"`: İngilizceyi koyu kutuyla kapatıp sabit renkte yazar |
+| `deepl_model_type` | `"latency_optimized"` | Daha doğal ama daha yavaş çeviri için `"quality_optimized"` |
 | `preprocess` | `"none"` | Arka plan OCR'ı bozuyorsa `"bright"` (yalnızca beyaz yazıyı bırakır) |
-| `bright_threshold` | `190` | `"bright"` modunda yazı eksik okunuyorsa düşürün |
+| `bright_threshold` | `190` | Altyazı hiç okunmuyorsa düşürün (yazı bu parlaklığın altındaysa OCR atlanır) |
+| `skip_without_bright_text` | `true` | Altyazı beyaz/parlak değilse `false` |
 | `upscale` | `2.0` | Küçük yazıda 2.5–3; yavaşsa 1.5 |
-| `capture_interval_ms` | `120` | Daha hızlı tepki için düşürün (daha çok CPU) |
+| `capture_interval_ms` | `50` | CPU yükü fazlaysa 80–100 |
 | `stable_reads` | `2` | Yanlış/yarım satırlar çevriliyorsa 3 |
 | `clear_after_ms` | `700` | Türkçe altyazı çok erken/geç kayboluyorsa |
-| `cover_original` | `true` | `false`: orijinal altyazının üstü kapatılmaz |
-| `font_size`, `font_family` | `26`, `Segoe UI` | Görünüm |
+| `font_size`, `font_family`, `outline_px` | `26`, `Segoe UI`, `2` | Görünüm |
+
+## Gecikme
+
+Altyazının ekrana gelmesinden Türkçenin görünmesine kadar:
+
+| Adım | Süre |
+|---|---|
+| Yakalama + doğrulama (2 okuma × 50 ms) | ~50–100 ms |
+| Windows OCR (yalnızca yazının kırpılmış kısmı) | ~15–50 ms |
+| DeepL `latency_optimized` | ~100–300 ms (internete bağlı) |
+| Önbellekteki satır | ~0 ms |
+
+`baslat.bat --debug` her satır için gerçek süreyi yazar (`ilk okumadan ekrana: … ms`).
+Gecikmeyi düşürmek için yapılanlar:
+- Görüntü değişmediyse OCR atlanır; bölgede parlak yazı yoksa OCR hiç çalışmaz.
+- OCR'a bölgenin tamamı değil, yalnızca yazının bulunduğu kısım verilir.
+- DeepL bağlantısı açık tutulur (sessiz anlarda ücretsiz kullanım sorgusu); uzun sessizlikten sonraki
+  ilk satır yeniden bağlantı kurmayı beklemez. Hata olursa uzun yeniden denemeler yerine sonraki satıra geçilir.
+- Çeviri kuyruğundaki eski satırlar atlanır; geç gelen eski çeviri yeni satırın üstüne yazılmaz.
+- Tekrar eden satırlar `ceviri_onbellek.jsonl` önbelleğinden anında gelir ve kota harcamaz.
+- Önceki satır DeepL'e bağlam olarak gönderilir (ücretlendirilmez); çeviri daha tutarlı olur.
 
 ## Notlar
 
-- Gecikme yaklaşık: yakalama aralığı × `stable_reads` + OCR (~20–60 ms) + DeepL (~150–400 ms).
-  Tekrar eden satırlar `ceviri_onbellek.jsonl` önbelleğinden anında gelir ve kota harcamaz.
-- Önceki satır DeepL'e bağlam olarak gönderilir (ücretlendirilmez); çeviri daha tutarlı olur.
 - Altyazısı olmayan konuşmalar (ör. yoldan geçenler, radyo) çevrilmez.
 - Overlay, tam ekran özel (exclusive fullscreen) uygulamaların üstünde görünmeyebilir; Remote Play
   bu modu kullanmaz ama sorun olursa pencere moduna alın.
+- Overlay'in ekran yakalamadan gizlenmesi Windows 10 (2004) veya Windows 11 gerektirir. Gizlenemezse
+  başlangıçta uyarı yazılır. Aynı nedenle OBS/Discord yayınlarında Türkçe altyazı görünmez.
 
 ## Geliştirme
 
@@ -86,5 +117,5 @@ python -m pytest tests
 ```
 
 Testler Windows olmadan çalışan kısımları (metin temizleme, kararlılık, bölge hesabı,
-değişim tespiti, önbellek, ayarlar) kapsar. Ekran yakalama, Windows OCR ve overlay yalnızca
+değişim tespiti, renk seçimi, önbellek, ayarlar) kapsar. Ekran yakalama, Windows OCR ve overlay yalnızca
 Windows'ta denenebilir.

@@ -24,6 +24,9 @@ class Config:
     deepl_auth_key: str = ""
     source_lang: str = "EN"
     target_lang: str = "TR"
+    # "latency_optimized": en hızlı yanıt. "quality_optimized": daha doğal ama daha yavaş. "": DeepL varsayılanı.
+    deepl_model_type: str = "latency_optimized"
+    deepl_timeout_s: float = 4.0
 
     # Altyazının okunacağı pencere (başlığında bu ifadelerden biri geçen ilk görünür pencere).
     # Bulunamazsa ana ekranın tamamı esas alınır.
@@ -32,8 +35,10 @@ class Config:
 
     # OCR
     ocr_language: str = "en-US"
-    capture_interval_ms: int = 120
+    capture_interval_ms: int = 50
     upscale: float = 2.0
+    # Altyazılar parlak (beyaz) yazılır: bölgede hiç parlak piksel yoksa OCR hiç çalıştırılmaz.
+    skip_without_bright_text: bool = True
     # "none": gri ton, "bright": sadece parlak (beyaz) yazıyı bırak — beyaz altyazılarda iyi çalışır.
     preprocess: str = "none"
     bright_threshold: int = 190
@@ -46,13 +51,17 @@ class Config:
     clear_after_ms: int = 700
 
     # Overlay görünümü
+    # "adaptive": Türkçe, İngilizce altyazının hemen üstünde kutusuz yazılır; yazı rengi arkadaki
+    #             sahneye göre anlık seçilir (açık sahnede siyah, koyu sahnede beyaz).
+    # "cover":    Türkçe, İngilizcenin üstünü kapatan koyu bir kutuda sabit renkle yazılır.
+    display_mode: str = "adaptive"
     font_family: str = "Segoe UI"
     font_size: int = 26
+    outline_px: int = 2
+    overlay_gap_px: int = 4
+    # Yalnızca "cover" modunda kullanılır.
     text_color: str = "#FFFFFF"
     outline_color: str = "#000000"
-    outline_px: int = 2
-    # True: orijinal İngilizce altyazının üstünü kutuyla kapatır.
-    cover_original: bool = True
     cover_color: str = "#101010"
     cover_padding_px: int = 6
     show_original: bool = False

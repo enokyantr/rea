@@ -23,6 +23,19 @@ class Rect:
         return self.top + self.height
 
 
+def union(a: Rect, b: Rect) -> Rect:
+    left, top = min(a.left, b.left), min(a.top, b.top)
+    return Rect(left, top, max(a.right, b.right) - left, max(a.bottom, b.bottom) - top)
+
+
+def intersect(a: Rect, b: Rect) -> Rect | None:
+    left, top = max(a.left, b.left), max(a.top, b.top)
+    right, bottom = min(a.right, b.right), min(a.bottom, b.bottom)
+    if right <= left or bottom <= top:
+        return None
+    return Rect(left, top, right - left, bottom - top)
+
+
 def _clamp(v: float) -> float:
     return min(1.0, max(0.0, v))
 

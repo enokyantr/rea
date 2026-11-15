@@ -1,4 +1,6 @@
-"""Görüntü hazırlama ve değişim tespiti (platformdan bağımsız, numpy)."""
+"""Görüntü hazırlama ve değişim tespiti (platformdan bağımsız, numpy).
+
+Yakalanan BGRA kare bir kez gri tona çevrilir; diğer fonksiyonlar bu gri görüntüyü kullanır."""
 
 from __future__ import annotations
 
@@ -6,20 +8,37 @@ import numpy as np
 
 
 def to_gray(bgra: np.ndarray) -> np.ndarray:
-    b, g, r = bgra[..., 0], bgra[..., 1], bgra[..., 2]
-    return (0.114 * b + 0.587 * g + 0.299 * r).astype(np.uint8)
+    # Tamsayı aritmetiği: float ara dizilerden daha hızlı ve daha az bellek.
+    b = bgra[..., 0].astype(np.uint16)
+    g = bgra[..., 1].astype(np.uint16)
+    r = bgra[..., 2].astype(np.uint16)
+    return ((29 * b + 150 * g + 77 * r) >> 8).astype(np.uint8)
 
 
-def preprocess(bgra: np.ndarray, mode: str, bright_threshold: int) -> np.ndarray:
-    """OCR için gri ton görüntü döndürür.
-
-    "bright": sadece parlak pikseller (beyaz altyazı) siyah yazı / beyaz zemin olarak kalır;
-    arkadaki hareketli oyun görüntüsü büyük ölçüde temizlenir.
-    """
-    gray = to_gray(bgra)
+def for_ocr(gray: np.ndarray, mode: str, bright_threshold: int) -> np.ndarray:
+    """"bright": yalnızca parlak pikseller (beyaz altyazı) siyah yazı / beyaz zemin olarak kalır;
+    arkadaki hareketli oyun görüntüsü büyük ölçüde temizlenir."""
     if mode == "bright":
         return np.where(gray >= bright_threshold, 0, 255).astype(np.uint8)
     return gray
+
+
+def bright_bbox(gray: np.ndarray, bright_threshold: int, margin: int = 8, min_pixels: int = 12):
+    """Parlak (yazı) piksellerinin sınır kutusu (top, bottom, left, right) ya da None.
+
+    OCR'a yalnızca bu kısmı vermek görüntüyü küçültür: OCR hızlanır, kenardaki gürültü azalır."""
+    mask = gray >= bright_threshold
+    if int(np.count_nonzero(mask)) < min_pixels:
+        return None
+    rows = np.flatnonzero(mask.any(axis=1))
+    cols = np.flatnonzero(mask.any(axis=0))
+    h, w = mask.shape
+    return (
+        max(0, int(rows[0]) - margin),
+        min(h, int(rows[-1]) + 1 + margin),
+        max(0, int(cols[0]) - margin),
+        min(w, int(cols[-1]) + 1 + margin),
+    )
 
 
 def upscale(gray: np.ndarray, factor: float) -> np.ndarray:
@@ -33,18 +52,16 @@ def upscale(gray: np.ndarray, factor: float) -> np.ndarray:
     return np.asarray(img)
 
 
-def signature(bgra: np.ndarray, bright_threshold: int, cols: int = 96, rows: int = 24) -> np.ndarray:
+def signature(gray: np.ndarray, bright_threshold: int, cols: int = 96, rows: int = 24) -> np.ndarray:
     """Parlak yazı piksellerinin kaba haritası. Arka plan hareket etse de yazı aynıysa
     büyük ölçüde aynı kalır; böylece gereksiz OCR çağrıları atlanır."""
-    mask = to_gray(bgra) >= bright_threshold
+    mask = gray >= bright_threshold
     h, w = mask.shape
     if h == 0 or w == 0:
         return np.zeros((rows, cols), dtype=bool)
     ys = (np.arange(rows) * h) // rows
     xs = (np.arange(cols) * w) // cols
-    # Her hücrede herhangi bir parlak piksel var mı (ızgara örneklemesi + yatay genişletme).
-    sampled = np.logical_or.reduceat(np.logical_or.reduceat(mask, ys, axis=0), xs, axis=1)
-    return sampled
+    return np.logical_or.reduceat(np.logical_or.reduceat(mask, ys, axis=0), xs, axis=1)
 
 
 def same_signature(a: np.ndarray | None, b: np.ndarray, tolerance: float = 0.01) -> bool:
