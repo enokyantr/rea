@@ -1,11 +1,12 @@
 import json
+from dataclasses import asdict
 
 import numpy as np
 
 from altyazi import config as config_mod
 from altyazi.config import Region
 from altyazi.geometry import Rect, region_to_screen, screen_to_region
-from altyazi.imageproc import bright_bbox, for_ocr, same_signature, signature, to_gray
+from altyazi.imageproc import bright_bbox, for_ocr, same_signature, signature, text_mask, to_gray
 from altyazi.textproc import split_sentences, Clear, Show, Stabilizer, is_plausible, normalize
 from altyazi.translate import CachedTranslator
 
@@ -74,24 +75,58 @@ def _frame_with_text(seed: int, text_on: bool) -> np.ndarray:
     return frame
 
 
+def _mask(frame, mode="bright"):
+    return text_mask(to_gray(frame), mode, 190)
+
+
 def test_signature_ignores_moving_background_but_sees_text_change():
-    a = signature(to_gray(_frame_with_text(1, True)), 190)
-    b = signature(to_gray(_frame_with_text(2, True)), 190)
-    c = signature(to_gray(_frame_with_text(3, False)), 190)
+    a = signature(_mask(_frame_with_text(1, True)))
+    b = signature(_mask(_frame_with_text(2, True)))
+    c = signature(_mask(_frame_with_text(3, False)))
     assert same_signature(a, b)
     assert not same_signature(a, c)
     assert not same_signature(None, a)
 
 
-def test_bright_mode_makes_dark_text_on_white():
-    out = for_ocr(to_gray(_frame_with_text(1, True)), "bright", 190)
+def test_ocr_input_is_dark_text_on_white():
+    frame = _frame_with_text(1, True)
+    out = for_ocr(to_gray(frame), _mask(frame), "bright")
     assert out[30, 50] == 0 and out[5, 5] == 255
 
 
 def test_bright_bbox_crops_to_text_with_margin():
-    gray = to_gray(_frame_with_text(1, True))
-    assert bright_bbox(gray, 190, margin=4) == (16, 44, 46, 349)
-    assert bright_bbox(to_gray(_frame_with_text(1, False)), 190) is None
+    assert bright_bbox(_mask(_frame_with_text(1, True)), margin=4) == (16, 44, 46, 349)
+    assert bright_bbox(_mask(_frame_with_text(1, False))) is None
+
+
+def _outlined_subtitle(background):
+    """Oyun altyazısı gibi: beyaz yazı, siyah kontur."""
+    from PIL import Image, ImageDraw, ImageFont
+
+    img = Image.new("RGB", (700, 80), background)
+    font = ImageFont.load_default(32)
+    ImageDraw.Draw(img).text((20, 20), "That joke works, dog.", font=font, fill=(255, 255, 255),
+                             stroke_width=2, stroke_fill=(0, 0, 0))
+    rgb = np.asarray(img)
+    bgra = np.empty((*rgb.shape[:2], 4), dtype=np.uint8)
+    bgra[..., 0], bgra[..., 1], bgra[..., 2], bgra[..., 3] = rgb[..., 2], rgb[..., 1], rgb[..., 0], 255
+    return bgra
+
+
+def test_outline_mask_drops_bright_background_but_keeps_text():
+    """Açık sahne (gökyüzü): yalnızca parlaklıkla ayırmak arka planı yazı sanıyordu (t→c, d→cl)."""
+    sky = _outlined_subtitle((214, 226, 238))
+    bright_only = _mask(sky, "bright")
+    outline = _mask(sky, "outline")
+    assert bright_only.mean() > 0.5  # eski yöntem: neredeyse bütün kare "yazı"
+    assert 0.005 < outline.mean() < 0.15  # yeni: yalnızca harfler
+    assert not outline[:, :10].any() and not outline[:5, :].any()  # yazıdan uzak gökyüzü maskede yok
+    # Koyu sahnede de aynı harfleri bulur.
+    dark = _mask(_outlined_subtitle((40, 55, 70)), "outline")
+    assert abs(int(dark.sum()) - int(outline.sum())) < 0.25 * dark.sum()
+    # Yazı kırpması gökyüzünü değil, yazıyı çerçeveler.
+    top, bottom, left, right = bright_bbox(outline, margin=0)
+    assert top > 5 and left > 10 and right < 690
 
 
 class CountingBackend:
@@ -185,3 +220,32 @@ def test_needs_uncensored_detects_profanity_not_lookalikes():
                  "First class tickets.", "The grass is wet.", "Don't embarrass me.", "Take the next left, quick!",
                  "Ask her about the brass knuckles.", "Assassin's creed."]:
         assert not needs_uncensored(line), line
+
+
+def test_plausible_rejects_ocr_garbage_keeps_real_lines():
+    for line in ["Be cool, fool, we got the paperwork.", "Lose the Cops.", "Whatever, nigga, it ain't gonna make you go no faster.",
+                 "Oh shit, the one time!", "I might just be", "Hmm.", "Get in the car, now!"]:
+        assert is_plausible(normalize([line]), 3), line
+    # Not: yayın sohbetindeki kullanıcı adları ("Zilowzz") kelimeye benzediği için elenmez.
+    for line in ["ntpgmfl/ Wag", "3hjc.", "nfP42if1/ Wag"]:
+        assert not is_plausible(normalize([line]), 3), line
+
+
+def test_config_saves_only_changes_and_migrates_frozen_old_defaults(tmp_path):
+    path = tmp_path / "config.json"
+    cfg = config_mod.Config()
+    cfg.deepl_auth_key = "k:fx"
+    config_mod.save(cfg, path)
+    assert json.loads(path.read_text(encoding="utf-8")) == {"config_version": 2, "deepl_auth_key": "k:fx"}
+
+    # Sürüm 1 dosyası: tüm ayarlar yazılmış, aralarında artık eskimiş varsayılanlar var.
+    old = asdict(config_mod.Config())
+    old.update(preprocess="none", capture_interval_ms=50, deepl_auth_key="k:fx", font_size=30)
+    old.pop("config_version", None)
+    path.write_text(json.dumps(old), encoding="utf-8")
+    cfg = config_mod.load(path)
+    assert cfg.preprocess == "outline"  # donmuş eski varsayılan yerine yeni varsayılan
+    assert cfg.capture_interval_ms == config_mod.Config().capture_interval_ms
+    assert cfg.font_size == 30 and cfg.deepl_auth_key == "k:fx"  # kullanıcının seçimleri korunur
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved == {"config_version": 2, "deepl_auth_key": "k:fx", "font_size": 30}

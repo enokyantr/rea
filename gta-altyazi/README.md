@@ -141,7 +141,7 @@ Okunan satırlar ve Türkçesi yazdırılır, OCR'a giren görüntü `ekran_ocr_
 Canlı kullanımda süreleri görmek için `baslat.bat --debug`. Pencere başlığı farklıysa
 `baslat.bat --list-windows` ile bakıp `window_titles` listesine ekleyin.
 
-`config.json` içindeki önemli ayarlar:
+`config.json` yalnızca sizin değiştirdiğiniz ayarları içerir (diğerleri programın güncel varsayılanlarıdır). Bir ayarı değiştirmek için dosyaya `"ayar": değer` satırı ekleyin. Önemli ayarlar:
 
 | Ayar | Varsayılan | Ne zaman değiştirilir |
 |---|---|---|
@@ -151,7 +151,8 @@ Canlı kullanımda süreleri görmek için `baslat.bat --debug`. Pencere başlı
 | `local_device` | `"auto"` | GPU sorun çıkarırsa `"cpu"` |
 | `display_mode` | `"adaptive"` | `"cover"`: İngilizceyi koyu kutuyla kapatıp sabit renkte yazar |
 | `deepl_model_type` | `"latency_optimized"` | Daha doğal ama daha yavaş çeviri için `"quality_optimized"` |
-| `preprocess` | `"none"` | Arka plan OCR'ı bozuyorsa `"bright"` (yalnızca beyaz yazıyı bırakır) |
+| `preprocess` | `"outline"` | Beyaz yazı + siyah kontur (oyun altyazısı); kontursuz/renkli yazılar için `"none"` |
+| `outline_white_threshold` | `232` | Yazı eksik okunuyorsa düşürün; açık sahnede harfler kalınlaşıyorsa yükseltin |
 | `bright_threshold` | `190` | Altyazı hiç okunmuyorsa düşürün (yazı bu parlaklığın altındaysa OCR atlanır) |
 | `skip_without_bright_text` | `true` | Altyazı beyaz/parlak değilse `false` |
 | `upscale` | `2.0` | Küçük yazıda 2.5–3; yavaşsa 1.5 |

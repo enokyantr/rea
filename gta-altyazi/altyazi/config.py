@@ -93,9 +93,17 @@ class Config:
     upscale: float = 2.0
     # Altyazılar parlak (beyaz) yazılır: bölgede hiç parlak piksel yoksa OCR hiç çalıştırılmaz.
     skip_without_bright_text: bool = True
-    # "none": gri ton, "bright": sadece parlak (beyaz) yazıyı bırak — beyaz altyazılarda iyi çalışır.
-    preprocess: str = "none"
+    # "outline": beyaz yazı + koyu kontur (oyun altyazıları); açık renkli sahnelerde de doğru okur.
+    # "bright": yalnızca parlak pikseller. "none": gri ton (kontursuz/renkli yazılar için).
+    preprocess: str = "outline"
     bright_threshold: int = 190
+    # "outline": bu değerden koyu pikseller kontur sayılır; yazı pikselleri kontura en fazla
+    # outline_radius piksel uzaklıkta olmalı.
+    dark_threshold: int = 90
+    outline_radius: int = 3
+    # "outline": yazı bu değerden parlak olmalı (altyazı ~240-255; açık gökyüzü genelde daha düşük).
+    # Yazı eksik okunursa düşürün, açık sahnede harfler kalınlaşıyorsa yükseltin.
+    outline_white_threshold: int = 232
     min_text_chars: int = 3
 
     # Kararlılık: aynı metin art arda kaç kez okunursa çevrilsin.
@@ -142,7 +150,23 @@ def _region(value: dict) -> Region:
     return Region(**{k: float(v) for k, v in value.items() if k in known})
 
 
+# config.json yalnızca kullanıcının değiştirdiği ayarları saklar; varsayılanlar koddan gelir, böylece
+# yeni sürümlerdeki iyileştirilmiş varsayılanlar mevcut kurulumlara da uygulanır.
+CONFIG_VERSION = 2
+# Sürüm 1 dosyaları TÜM ayarları yazıyordu. Bu anahtarlar eski bir varsayılana eşitse kullanıcı
+# seçimi değil, donmuş eski varsayılandır: atılır ki yeni varsayılan geçerli olsun.
+_OLD_DEFAULTS = {
+    "preprocess": ["none"],
+    "capture_interval_ms": [120, 50],
+    "ollama_model": ["gemma3:12b"],
+    "ollama_use_context": [True],
+    "final_translator": ["claude", "deepl"],
+}
+
+
 def _from_dict(data: dict) -> Config:
+    if data.get("config_version", 1) < 2:
+        data = {k: v for k, v in data.items() if v not in _OLD_DEFAULTS.get(k, [])}
     cfg = Config()
     known = {f.name for f in fields(Config)}
     for key, value in data.items():
@@ -169,11 +193,17 @@ def load(path: Path) -> Config:
         save(cfg, path)
         return cfg
     with path.open(encoding="utf-8") as fh:
-        return _from_dict(json.load(fh))
+        data = json.load(fh)
+    cfg = _from_dict(data)
+    if data.get("config_version", 1) < CONFIG_VERSION:
+        save(cfg, path)  # eski biçimi bir kez yeni (yalnızca değişiklikler) biçimine çevir
+    return cfg
 
 
 def save(cfg: Config, path: Path) -> None:
+    defaults = asdict(Config())
+    changed = {k: v for k, v in asdict(cfg).items() if v != defaults[k]}
     tmp = path.with_suffix(path.suffix + ".tmp")
     with tmp.open("w", encoding="utf-8") as fh:
-        json.dump(asdict(cfg), fh, ensure_ascii=False, indent=2)
+        json.dump({"config_version": CONFIG_VERSION, **changed}, fh, ensure_ascii=False, indent=2)
     tmp.replace(path)

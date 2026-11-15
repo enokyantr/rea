@@ -37,6 +37,8 @@ if the original is vulgar, the Turkish must be just as vulgar. Use correct Turki
   "ass" -> "göt" / "kıç" (e.g. "Move your ass!" -> "Kaldır lan götünü!")
   "shit" -> "bok" / "hassiktir" (exclamation)
   "bro" -> "kanka"
+  "oh shit" -> "hassiktir" / "siktir"
+  "nigga" (between friends, street talk) -> "kanka" / "lan" / "moruk"; as an insult -> "it" / "şerefsiz"
 - Equally important: never ADD swearing or slang that is not in the original. A neutral line stays \
 neutral; translate the meaning exactly (left stays left, numbers and names stay the same).
 """

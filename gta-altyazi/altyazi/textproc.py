@@ -41,7 +41,7 @@ _PROFANITY = re.compile(
     r"\b(?:\w*fuck\w*|\w*shit\w*|bitch\w*|sons? of a bitch|ass|asses|\w+ass(?:es)?|ass(?:hole|hat|wipe)s?"
     r"|bastards?|dicks?|dickhead\w*|cocks?(?:sucker)?s?|puss(?:y|ies)|cunts?|piss\w*|damn\w*|goddamn\w*"
     r"|crap\w*|bullshit|hoes?|whores?|sluts?|twats?|pricks?|wankers?|bollocks|screw (?:you|this|that|off)"
-    r"|wtf|stfu|bro|bruh|homie|dawg)\b",
+    r"|wtf|stfu|bro|bruh|homie|dawg|nigga[sz]?|niggaz|ho)\b",
     re.IGNORECASE,
 )
 # "ass" ile biten ama küfür olmayan sık kelimeler (\w+ass yakalamasın).
@@ -56,12 +56,40 @@ def needs_uncensored(text: str) -> bool:
     return bool(_PROFANITY.search(cleaned))
 
 
+_TOKEN = re.compile(r"[^\W\d_]+(?:['’][^\W\d_]+)*")
+_VOWELS = set("aeiouyAEIOUY")
+# Tekrarlanan harfler teke indirilmiş hâlleri (hmmm -> hm, psst -> pst).
+_INTERJECTIONS = {"hm", "m", "sh", "pst", "pft", "br", "gr", "tsk", "hmph", "pf", "ps"}
+
+
+def _wordlike(token: str) -> bool:
+    """Gerçek kelimeye benziyor mu: sesli harf içerir, sessiz harf yığını değildir."""
+    if len(token) == 1:
+        return token in ("I", "a", "A", "O", "o")
+    if re.sub(r"(.)\1+", r"\1", token.lower()) in _INTERJECTIONS:
+        return True  # sesli harfsiz ünlemler: hmm, shhh, psst, pfft, brr...
+    if not any(ch in _VOWELS for ch in token):
+        return False
+    run = longest = 0
+    for ch in token.lower():
+        run = 0 if ch in "aeiouy'’" else run + 1
+        longest = max(longest, run)
+    return longest <= 4
+
+
 def is_plausible(text: str, min_chars: int) -> bool:
-    """Gerçek altyazıya benziyor mu? Harf oranı düşük gürültüyü eler."""
+    """Gerçek altyazıya benziyor mu? Harf oranı düşük gürültüyü ve OCR'ın bozuk okuduğu
+    anlamsız satırları (ör. 'ntpgmfl/ Wag', '3hjc.') eler."""
     if len(text) < min_chars:
         return False
     letters = sum(ch.isalpha() for ch in text)
-    return letters >= min_chars and letters / len(text) >= 0.55
+    if letters < min_chars or letters / len(text) < 0.55:
+        return False
+    tokens = _TOKEN.findall(text)
+    if not tokens:
+        return False
+    wordlike = sum(len(t) for t in tokens if _wordlike(t))
+    return wordlike / sum(len(t) for t in tokens) >= 0.7
 
 
 def similar(a: str, b: str, threshold: float) -> bool:

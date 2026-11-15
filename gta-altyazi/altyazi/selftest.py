@@ -28,7 +28,7 @@ class Report:
         print(f"[{status:^9}] {name}" + (f" — {detail}" if detail else ""), flush=True)
 
 
-def _render_subtitle(text: str) -> np.ndarray:
+def _render_subtitle(text: str, background=(40, 55, 70)) -> np.ndarray:
     """Oyun altyazısına benzer görüntü: koyu sahne, siyah konturlu beyaz yazı (BGRA)."""
     from PIL import Image, ImageDraw, ImageFont
 
@@ -36,7 +36,7 @@ def _render_subtitle(text: str) -> np.ndarray:
         font = ImageFont.truetype("arialbd.ttf", 30)
     except OSError:
         font = ImageFont.load_default(30)
-    img = Image.new("RGB", (1100, 90), (40, 55, 70))
+    img = Image.new("RGB", (1100, 90), background)
     ImageDraw.Draw(img).text((30, 25), text, font=font, fill=(255, 255, 255), stroke_width=2,
                              stroke_fill=(0, 0, 0))
     rgb = np.asarray(img)
@@ -56,20 +56,24 @@ def _check_ocr(cfg: Config, report: Report) -> None:
     except Exception as exc:
         report.item("Windows OCR", "HATA", f"{type(exc).__name__}: {exc}")
         return
-    gray = imageproc.to_gray(_render_subtitle(SAMPLE))
-    bbox = imageproc.bright_bbox(gray, cfg.bright_threshold)
-    if bbox is not None:
-        top, bottom, left, right = bbox
-        gray = gray[top:bottom, left:right]
-    img = imageproc.upscale(imageproc.for_ocr(gray, cfg.preprocess, cfg.bright_threshold), cfg.upscale)
-    times, text = [], ""
-    for _ in range(5):
-        t0 = time.perf_counter()
-        text = textproc.normalize(ocr.recognize(img))
-        times.append(1000 * (time.perf_counter() - t0))
-    ok = textproc.similar(text, SAMPLE, 0.9)
-    report.item("Windows OCR", "TAMAM" if ok else "HATA",
-                f"{statistics.median(times):.0f} ms, okunan: {text!r}")
+    # Koyu sahne ve açık (gökyüzü) sahne: beyaz yazı + siyah kontur her ikisinde de okunmalı.
+    for scene, background in (("koyu sahne", (40, 55, 70)), ("açık sahne", (214, 226, 238))):
+        gray = imageproc.to_gray(_render_subtitle(SAMPLE, background))
+        mask = imageproc.text_mask(gray, cfg.preprocess, cfg.bright_threshold, cfg.dark_threshold,
+                                   cfg.outline_radius, cfg.outline_white_threshold)
+        bbox = imageproc.bright_bbox(mask)
+        if bbox is not None:
+            top, bottom, left, right = bbox
+            gray, mask = gray[top:bottom, left:right], mask[top:bottom, left:right]
+        img = imageproc.upscale(imageproc.for_ocr(gray, mask, cfg.preprocess), cfg.upscale)
+        times, text = [], ""
+        for _ in range(5):
+            t0 = time.perf_counter()
+            text = textproc.normalize(ocr.recognize(img))
+            times.append(1000 * (time.perf_counter() - t0))
+        ok = textproc.similar(text, SAMPLE, 0.9)
+        report.item(f"Windows OCR ({scene})", "TAMAM" if ok else "HATA",
+                    f"{statistics.median(times):.0f} ms, okunan: {text!r}")
 
 
 def _check_overlay(cfg: Config, report: Report) -> None:

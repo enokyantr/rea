@@ -98,16 +98,16 @@ class Pipeline(threading.Thread):
 
         self.translator.submit(event.text, context, lambda: seq == self.seq, on_result, on_error)
 
-    def _read_text(self, ocr: WindowsOcr, gray: np.ndarray) -> str:
+    def _read_text(self, ocr: WindowsOcr, gray: np.ndarray, mask: np.ndarray) -> str:
         cfg = self.cfg
-        bbox = imageproc.bright_bbox(gray, cfg.bright_threshold)
+        bbox = imageproc.bright_bbox(mask)
         if bbox is None:
             if cfg.skip_without_bright_text:
                 return ""
         else:
             top, bottom, left, right = bbox
-            gray = gray[top:bottom, left:right]
-        img = imageproc.upscale(imageproc.for_ocr(gray, cfg.preprocess, cfg.bright_threshold), cfg.upscale)
+            gray, mask = gray[top:bottom, left:right], mask[top:bottom, left:right]
+        img = imageproc.upscale(imageproc.for_ocr(gray, mask, cfg.preprocess), cfg.upscale)
         text = textproc.normalize(ocr.recognize(img))
         return text if textproc.is_plausible(text, cfg.min_text_chars) else ""
 
@@ -213,14 +213,16 @@ class Pipeline(threading.Thread):
                     time.sleep(interval)
                     continue
                 gray = imageproc.to_gray(sub)
-                sig = imageproc.signature(gray, cfg.bright_threshold)
+                mask = imageproc.text_mask(gray, cfg.preprocess, cfg.bright_threshold, cfg.dark_threshold,
+                                           cfg.outline_radius, cfg.outline_white_threshold)
+                sig = imageproc.signature(mask)
                 if imageproc.same_signature(last_sig, sig) and reused < MAX_REUSE:
                     text = last_text
                     reused += 1
                 else:
                     reused = 0
                     t0 = time.perf_counter()
-                    text = self._read_text(ocr, gray)
+                    text = self._read_text(ocr, gray, mask)
                     if self.debug and text != last_text:
                         log(f"{self._tag}OCR {1000 * (time.perf_counter() - t0):.0f} ms: {text!r}")
                     last_sig, last_text = sig, text
@@ -447,13 +449,15 @@ def run_ocr_test(cfg: Config, image_path: Path, translator: HybridTranslator, fu
         bgra = bgra[r.top:r.bottom, r.left:r.right]
         log(f"Bölge (piksel): x={r.left} y={r.top} {r.width}x{r.height}")
     gray = imageproc.to_gray(bgra)
-    bbox = imageproc.bright_bbox(gray, cfg.bright_threshold)
+    mask = imageproc.text_mask(gray, cfg.preprocess, cfg.bright_threshold, cfg.dark_threshold, cfg.outline_radius,
+                                 cfg.outline_white_threshold)
+    bbox = imageproc.bright_bbox(mask)
     if bbox is not None:
         top, bottom, left, right = bbox
-        gray = gray[top:bottom, left:right]
+        gray, mask = gray[top:bottom, left:right], mask[top:bottom, left:right]
     else:
-        log("Bölgede parlak yazı bulunamadı (bright_threshold çok yüksek olabilir)")
-    ocr_input = imageproc.upscale(imageproc.for_ocr(gray, cfg.preprocess, cfg.bright_threshold), cfg.upscale)
+        log("Bölgede yazı bulunamadı (bright_threshold çok yüksek ya da dark_threshold çok düşük olabilir)")
+    ocr_input = imageproc.upscale(imageproc.for_ocr(gray, mask, cfg.preprocess), cfg.upscale)
     debug_path = image_path.with_name(image_path.stem + "_ocr_girdi.png")
     Image.fromarray(ocr_input).save(debug_path)
     log(f"OCR'a verilen görüntü kaydedildi: {debug_path}")
