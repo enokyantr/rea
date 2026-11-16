@@ -41,6 +41,12 @@ class HybridTranslator:
         # Ayrı işçiler: yavaş DeepL isteği hızlı yerel taslağı bekletmesin.
         self._draft_exec = ThreadPoolExecutor(max_workers=1, thread_name_prefix="local-mt") if draft is not None else None
         self._final_exec = ThreadPoolExecutor(max_workers=1, thread_name_prefix="deepl") if final is not None else None
+        # Yerel taslak çeviri işlemcide çalışırken OCR işlemciyi paylaşmasın diye (bkz. draft_running).
+        self._draft_active = threading.Event()
+
+    def draft_running(self) -> bool:
+        """Yerel taslak çeviri şu an çalışıyor mu (işlemci yoğun; OCR kısa süre beklemeli)."""
+        return self._draft_active.is_set()
 
     @property
     def mode(self) -> str:
@@ -67,11 +73,14 @@ class HybridTranslator:
             if not is_current():  # kuyrukta beklerken yeni satır geldi
                 return
             started = time.perf_counter()
+            self._draft_active.set()
             try:
                 translated = self.draft.translate(text, context)
             except Exception as exc:
                 on_error(exc, DRAFT, False)
                 return
+            finally:
+                self._draft_active.clear()
             took = time.perf_counter() - started
             with lock:
                 if state["final_done"] or not is_current():

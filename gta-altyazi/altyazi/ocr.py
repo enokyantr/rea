@@ -73,7 +73,7 @@ class RapidOcr:
     # Doğal görüntüyü (gri ton) olduğu gibi ister; ikili maske ve büyütme okumayı bozar.
     raw_input = True
 
-    def __init__(self, threads: int = 2):
+    def __init__(self, threads: int = 2, gpu: bool = True):
         try:
             from rapidocr_onnxruntime import RapidOCR
         except ImportError as exc:
@@ -85,11 +85,22 @@ class RapidOcr:
             # Metin bulma girdisi: varsayılan ("min" 736) dar bir altyazı şeridini kısa kenarı 736
             # olacak şekilde ~5000 piksele büyütüp kareyi 0,5 sn'ye çıkarıyordu. "max" modunda
             # büyütme yok (1.4.x boyutu 960/1500/2000 sınırlarından kendisi seçer).
-            self._engine = RapidOCR(det_limit_type="max",
-                                    det_intra_op_num_threads=threads, rec_intra_op_num_threads=threads)
+            options = dict(det_limit_type="max",
+                           det_intra_op_num_threads=threads, rec_intra_op_num_threads=threads)
+            # Ekran kartı (DirectML, onnxruntime-directml): OCR'ı işlemciden alır; işlemci yerel taslak
+            # çeviriye kalır. DirectML yoksa RapidOCR kendisi işlemciye döner.
+            engine = None
+            if gpu:
+                try:
+                    engine = RapidOCR(**options, det_use_dml=True, rec_use_dml=True)
+                except Exception:
+                    engine = None
+            self._engine = engine or RapidOCR(**options)
         except Exception as exc:  # eski sürüm (< 1.4) bu ayarları tanımıyor, onnxruntime DLL hatası vb.
             raise OcrUnavailable(f"RapidOCR başlatılamadı ({type(exc).__name__}: {exc}); "
                                  "guncelle.bat çalıştırın.") from exc
+        self.on_gpu = _first_provider(self._engine) == "DmlExecutionProvider"
+        self.name = "RapidOCR (ekran kartı, DirectML)" if self.on_gpu else "RapidOCR (işlemci)"
 
     def recognize(self, gray: np.ndarray) -> list[str]:
         """Gri ton (uint8, HxW) görüntüdeki satırları yukarıdan aşağı döndürür."""
@@ -103,6 +114,13 @@ class RapidOcr:
         xs = [p[0] for r in result for p in r[0]]
         self.last_span = (float(min(xs)), float(max(xs))) if xs else None
         return group_lines(result)
+
+
+def _first_provider(engine) -> str:
+    try:
+        return engine.text_det.infer.session.get_providers()[0]
+    except Exception:
+        return ""
 
 
 def group_lines(boxes) -> list[str]:
@@ -131,7 +149,7 @@ def create(cfg):
     """`cfg.ocr_engine`: "auto" (RapidOCR, yoksa Windows OCR) | "rapid" | "windows"."""
     if cfg.ocr_engine in ("auto", "rapid"):
         try:
-            return RapidOcr()
+            return RapidOcr(gpu=cfg.ocr_device != "cpu")
         except OcrUnavailable:
             if cfg.ocr_engine == "rapid":
                 raise

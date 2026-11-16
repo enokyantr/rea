@@ -159,6 +159,7 @@ Canlı kullanımda süreleri görmek için `baslat.bat --debug`. Pencere başlı
 | `display_mode` | `"adaptive"` | `"cover"`: İngilizceyi koyu kutuyla kapatıp sabit renkte yazar |
 | `deepl_model_type` | `"latency_optimized"` | Daha doğal ama daha yavaş çeviri için `"quality_optimized"` |
 | `ocr_engine` | `"auto"` | RapidOCR (yerel, işlemcide; kontursuz/bulanık altyazıda Windows OCR'dan çok daha iyi). Kurulu değilse Windows OCR. Yalnızca Windows OCR için `"windows"`. İkisini kendi kayıtlarınızda `.\baslat.bat --ocr-compare` ile karşılaştırabilirsiniz |
+| `ocr_device` | `"auto"` | RapidOCR ekran kartında (DirectML) çalışır, işlemci yerel taslak çeviriye kalır. Yerel dil modeli yavaşlarsa `"cpu"` |
 | `preprocess` | `"auto"` | Yalnızca Windows OCR'da: kontur, parlak ve gri ton okumalarından en anlamlısını seçer. Tek yöntem için `"outline"`, `"bright"`, `"none"` (gri) ya da `"tophat"` |
 | `tophat_radius` | `3` | Çok açık sahnelerde 2 deneyin |
 | `outline_white_threshold` | `232` | Yazı eksik okunuyorsa düşürün; açık sahnede harfler kalınlaşıyorsa yükseltin |

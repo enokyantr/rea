@@ -88,6 +88,9 @@ class Config:
     # OCR
     # "auto": RapidOCR (kurulu değilse Windows OCR). "windows": yalnızca Windows OCR.
     ocr_engine: str = "auto"
+    # RapidOCR nerede çalışsın: "auto" (ekran kartı/DirectML varsa) | "cpu". Yerel dil modeli
+    # yavaşlarsa "cpu" deneyin.
+    ocr_device: str = "auto"
     ocr_language: str = "en-US"
     capture_interval_ms: int = 33
     # Yeni satır görülünce doğrulama okuması bu kadar ms sonra yapılır (tam kare aralığı beklenmez).

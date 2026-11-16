@@ -145,3 +145,15 @@ def test_final_only_for_selected_lines_draft_is_final_otherwise():
     h.submit("Shut the fuck up", None, lambda: True, c2.on_result, c2.on_error)
     assert c2.done.wait(2)
     assert c2.results[-1] == (FINAL, "llm:Shut the fuck up") and deepl.calls == 1
+
+
+def test_draft_running_is_set_only_while_the_local_model_translates():
+    local = Gate("yerel")
+    h, _ = make(local, None)
+    c = Collector()
+    assert not h.draft_running()
+    h.submit("Hi", None, lambda: True, c.on_result, c.on_error)
+    assert wait_until(h.draft_running)  # OCR bu sırada işlemciyi bırakır
+    local.release.set()
+    assert c.done.wait(2)
+    assert wait_until(lambda: not h.draft_running())

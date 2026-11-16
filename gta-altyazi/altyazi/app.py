@@ -21,6 +21,8 @@ from .hybrid import DRAFT, FINAL, HybridTranslator
 # Görüntü aynı kalsa bile bu kadar karede bir OCR tekrarlanır; altyazı belirirken (fade-in)
 # yapılmış eksik bir okumada takılı kalmamak için.
 MAX_REUSE = 4
+# Taslak çeviri sürerken OCR en fazla bu kadar bekler (sonraki altyazı en az ~1 sn ekranda kalır).
+DRAFT_YIELD_S = 0.4
 
 
 def log(msg: str) -> None:
@@ -143,6 +145,8 @@ class Pipeline(threading.Thread):
 
         cfg = self.cfg
         self._center_x = None
+        ocr_on_gpu = bool(getattr(ocr, "on_gpu", False))
+        busy_since: float | None = None
         stab = textproc.Stabilizer(cfg.stable_reads, cfg.similarity, cfg.clear_after_ms / 1000,
                                    cfg.confirm_hold_ms / 1000)
         picker = contrast.ColorPicker(cfg.outline_px) if self.display_mode != "cover" else None
@@ -170,6 +174,16 @@ class Pipeline(threading.Thread):
                 if self.paused.is_set():
                     time.sleep(0.05)
                     continue
+                # Yerel taslak çeviri işlemcide çalışırken OCR da işlemcideyse onu yavaşlatıyordu
+                # (2 kelime 380 ms). Çeviri bitene kadar (en fazla DRAFT_YIELD_S) okuma yapma.
+                if not ocr_on_gpu and self.translator.draft_running():
+                    if busy_since is None:
+                        busy_since = tick
+                    if tick - busy_since < DRAFT_YIELD_S:
+                        time.sleep(0.005)
+                        continue
+                else:
+                    busy_since = None
 
                 spec = self.get_region()
                 if spec is None:  # bu ek bölge seçilmemiş/kaldırılmış
