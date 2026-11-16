@@ -106,8 +106,12 @@ class Pipeline(threading.Thread):
                 return
             message = describe_error(exc)
             log(self._tag + message + (" (yerel çeviri ekranda kaldı)" if draft_shown else ""))
-            if not draft_shown:
-                self.ui.put(("error", self.region_name, message))
+            if draft_shown:
+                # Taslak bu satırın kesin metni: aynı satır yeniden çevrilmez (yazı ve dublaj sonradan
+                # farklı bir çeviriyle değişmesin).
+                self.ui.put(("draft-final", self.region_name, seq))
+                return
+            self.ui.put(("error", self.region_name, message))
             if seq == self.seq:
                 self._retry_not_before = time.monotonic() + 2.0  # çevrimdışıyken istek yağdırma
                 self._retry.set()
@@ -317,6 +321,9 @@ class Pipeline(threading.Thread):
 
         self.translator.shutdown()
 
+
+# Dublaj açıkken taslak çeviri, son çeviri için en fazla bu kadar bekletilir (yazı = ses).
+DUB_DRAFT_HOLD_S = 1.5
 
 # "Hazır konum" düğmesi: GTA V düzenine göre tahmini bölgeler (hedef pencereye göre oran).
 PRESETS = {
@@ -850,6 +857,52 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
     if not cfg.show_menu_on_start:
         panel.hide()
 
+    held_draft: dict[str, tuple] = {}  # bölge -> dublaj için bekletilen taslak mesajı
+
+    def dub_waits(name: str) -> bool:
+        return name == MAIN and tts["speaker"] is not None and cfg.dub_wait_final
+
+    def display(name: str, seq: int, stage: str, translated: str, original: str, first_seen: float,
+                center_x) -> None:
+        if name == MAIN:
+            state["welcome"] = False
+        overlays[name].show(translated, original, center_x)
+        remember(name, seq, original, translated)
+        speaker = tts["speaker"]
+        if speaker is not None and name == MAIN and line_started.get(name) != seq:
+            line_started[name] = seq
+            speaker.interrupt()  # yeni satır: önceki okuma hemen sussun
+        took = 1000 * (time.monotonic() - first_seen)
+        if name == MAIN:
+            last_line.update(en=original, tr=translated,
+                             info=f"{'taslak' if stage == DRAFT else 'son çeviri'}, ilk okumadan ekrana {took:.0f} ms")
+        if stage == FINAL:
+            finalize(name, seq, translated, original, first_seen)
+        if debug:
+            log(f"ilk okumadan ekrana ({'taslak' if stage == DRAFT else 'son çeviri'}): {took:.0f} ms")
+
+    def finalize(name: str, seq: int, translated: str, original: str, first_seen) -> None:
+        """Satırın kesin Türkçesi: ekrandaki metnin aynısı okunur ve kaydedilir; sonra gelen hiçbir
+        çeviri bu satırın yazısını ya da sesini değiştirmez."""
+        final_seq[name] = seq
+        if session is not None:
+            session.write("" if name == MAIN else REGION_LABELS[name], original, translated)
+        speaker = tts["speaker"]
+        if speaker is not None and name == MAIN:
+            speaker.say(translated, onset=first_seen)
+
+    def release_draft(name: str, seq: int) -> bool:
+        """Bekletilen taslağı kesin metin olarak göster (son çeviri gelmedi). Bekleyen yoksa False."""
+        msg = held_draft.get(name)
+        if msg is None or msg[2] != seq:
+            return False
+        del held_draft[name]
+        if seq != pipelines[name].seq or final_seq[name] == seq or state["paused"] or state["picking"]:
+            return True
+        _, _, _, _, translated, original, first_seen, center_x = msg
+        display(name, seq, FINAL, translated, original, first_seen, center_x)
+        return True
+
     def welcome_off() -> None:
         if state["welcome"]:
             state["welcome"] = False
@@ -880,31 +933,27 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
                     continue
                 elif kind == "show":
                     _, name, seq, stage, translated, original, first_seen, center_x = msg
-                    # Eski satırı ya da son çeviriden sonra gelen taslağı gösterme.
-                    if seq == pipelines[name].seq and not (stage == DRAFT and final_seq[name] == seq):
-                        if stage == FINAL:
-                            final_seq[name] = seq
-                        if name == MAIN:
-                            state["welcome"] = False
-                        overlays[name].show(translated, original, center_x)
-                        remember(name, seq, original, translated)
-                        speaker = tts["speaker"]
-                        if speaker is not None and name == MAIN and line_started.get(name) != seq:
-                            line_started[name] = seq
-                            speaker.interrupt()  # yeni satır: önceki okuma hemen sussun
-                        took = 1000 * (time.monotonic() - first_seen)
-                        if name == MAIN:
-                            last_line.update(en=original, tr=translated,
-                                             info=f"{'taslak' if stage == DRAFT else 'son çeviri'}, "
-                                                  f"ilk okumadan ekrana {took:.0f} ms")
-                        if stage == FINAL:
-                            if session is not None:
-                                session.write("" if name == MAIN else REGION_LABELS[name], original, translated)
-                            if speaker is not None and name == MAIN:
-                                speaker.say(translated, onset=first_seen)
-                        if debug:
-                            what = "taslak" if stage == DRAFT else "son çeviri"
-                            log(f"ilk okumadan ekrana ({what}): {took:.0f} ms")
+                    # Eski satırı ya da kesinleşmiş satıra sonradan gelen çeviriyi (taslak ya da geç
+                    # kalan son çeviri) gösterme: yazı ve dublaj o satır için değişmez.
+                    if seq != pipelines[name].seq or final_seq[name] == seq:
+                        continue
+                    if stage == DRAFT and dub_waits(name):
+                        # Dublaj açık: yazı ve ses aynı çeviriyi göstersin. Taslak, son çeviri gelene
+                        # kadar (en fazla DUB_DRAFT_HOLD_S) bekletilir; gelmezse taslak kesinleşir.
+                        held_draft[name] = msg
+                        root.after(int(DUB_DRAFT_HOLD_S * 1000), lambda n=name, q=seq: release_draft(n, q))
+                        continue
+                    if stage == FINAL:
+                        held_draft.pop(name, None)
+                    display(name, seq, stage, translated, original, first_seen, center_x)
+                elif kind == "draft-final":
+                    # Son çeviri başarısız oldu, taslak bu satırın kesin metni: bekletiliyorsa hemen
+                    # göster; ekrandaysa dublaj ve kayıt için kesinleştir.
+                    _, name, seq = msg
+                    if not release_draft(name, seq) and seq == pipelines[name].seq and final_seq[name] != seq:
+                        shown = next((e for e in entries if e["key"] == (name, seq)), None)
+                        if shown is not None:
+                            finalize(name, seq, shown["tr"], shown["en"], None)
                 elif kind == "clear":
                     name = msg[1]
                     if not (name == MAIN and state["welcome"]):

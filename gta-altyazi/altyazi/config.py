@@ -179,6 +179,9 @@ class Config:
     dub_detect_speaker: bool = True
     # Konuşanı tanımak için altyazı belirdikten sonra en az bu kadar ms ses dinlenir.
     dub_analysis_ms: int = 600
+    # Dublaj açıkken argo/küfür satırlarında taslak çeviri gösterilmez: son çeviri gelince yazı ve ses
+    # aynı anda, aynı kelimelerle çıkar (bu satırlarda yazı ~0,3-0,5 sn geç). En fazla 1,5 sn beklenir.
+    dub_wait_final: bool = True
     characters_file: str = "karakter_sesleri.json"
     tts_voice: str = ""          # Windows sesi (boş: ilk Türkçe ses)
     tts_rate: float = 1.1        # 0.6 - 2.0

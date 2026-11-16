@@ -262,6 +262,8 @@ class ControlPanel:
                         hint="edge: doğal kadın/erkek ses (internet) · windows: çevrimdışı")
         r = self._check(card, r, "Konuşanı sesinden tanı (kadın/erkek, aynı karaktere aynı ses)",
                         "dub_detect_speaker", dub=True, switch=True)
+        r = self._check(card, r, "Yazı ve ses aynı çeviriyi göstersin (argo satırlarında yazı ~0,4 sn geç)",
+                        "dub_wait_final", switch=True)
         r = self._scale(card, r, "Konuşma hızı", "tts_rate", 0.6, 2.0)
         r = self._scale(card, r, "Ses düzeyi", "tts_volume", 0.0, 1.0)
         voices = self.ctl.tts_voices()
