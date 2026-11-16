@@ -579,6 +579,8 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
         if state["picking"]:  # seçici açıkken duraklatma, seçim bitince durumu bozardı
             return
         state["paused"] = not state["paused"]
+        if state["paused"] and tts["speaker"] is not None:
+            tts["speaker"].interrupt()  # duraklatınca dublaj da sussun
         for p in all_pipelines():
             p.reset.set()
             (p.paused.set if state["paused"] else p.paused.clear)()
@@ -716,6 +718,7 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
         if enabled and speaker is None:
             recorder = ensure_recorder() if cfg.dub_detect_speaker else None
             speaker = Speaker(cfg, book, recorder, log)
+            speaker.debug = debug  # --debug: her satırın dublaj gecikmesi loga
             speaker.start()
             speaker.ready.wait(5)
             if speaker.error:
@@ -984,7 +987,7 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
         speaker = tts["speaker"]
         if speaker is not None and name == MAIN and line_started.get(name) != seq:
             line_started[name] = seq
-            speaker.interrupt()  # yeni satır: önceki okuma hemen sussun
+            speaker.prepare((name, seq), first_seen)  # konuşan tanıma çeviriyle paralel başlasın
         took = 1000 * (time.monotonic() - first_seen)
         if name == MAIN:
             last_line.update(en=original, tr=translated,
@@ -1002,7 +1005,7 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
             session.write("" if name == MAIN else REGION_LABELS[name], original, translated)
         speaker = tts["speaker"]
         if speaker is not None and (name == MAIN or (name == STREET and cfg.street_dub)):
-            speaker.say(translated, onset=first_seen, original=original)
+            speaker.say(translated, onset=first_seen, original=original, key=(name, seq))
 
     def release_draft(name: str, seq: int) -> bool:
         """Bekletilen taslağı kesin metin olarak göster (son çeviri gelmedi). Bekleyen yoksa False."""

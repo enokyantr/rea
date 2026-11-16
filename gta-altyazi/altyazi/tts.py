@@ -16,6 +16,7 @@ from concurrent.futures import TimeoutError as FutureTimeout
 import os
 import queue
 import tempfile
+from collections import deque
 import threading
 import time
 from pathlib import Path
@@ -125,6 +126,11 @@ class Speaker(threading.Thread):
         self._http = requests.Session()
         self.last_engine = ""
         self.fallbacks = 0
+        self._prepared: dict = {}                 # satır anahtarı -> konuşan tanıma (Future)
+        self._gemini_times: deque = deque(maxlen=8)  # son Gemini cevap süreleri (sn)
+        self._gemini_skips = 0
+        self.debug = False
+        self.lag_s = 0.0                          # son satırın altyazıdan ne kadar geç başladığı
         # Okunan sesin tahmini bitişi (time.monotonic): sokak dinleyicisi kendi dublajımızı duymasın.
         self.busy_until = 0.0
         self._tmp = Path(tempfile.gettempdir())
@@ -136,18 +142,30 @@ class Speaker(threading.Thread):
 
     # --- arayüz (iş parçacığı güvenli) -----------------------------------------------------
 
-    def say(self, text: str, onset: float | None = None, original: str = "") -> None:
-        """`original`: İngilizce satır (duygu ipuçları için)."""
-        try:  # yalnızca en yeni satır okunur
+    def prepare(self, key, onset: float) -> None:
+        """Altyazı belirdi: konuşan tanımayı HEMEN başlat (çeviriyle paralel). `say` aynı `key` ile
+        gelince sonuç büyük olasılıkla hazırdır."""
+        if self.book is None or key in self._prepared:
+            return
+        self._prepared[key] = self._pool.submit(self._detect, onset)
+        while len(self._prepared) > 8:
+            self._prepared.pop(next(iter(self._prepared)))
+
+    def say(self, text: str, onset: float | None = None, original: str = "", key=None) -> None:
+        """Satırı sıraya ekle. Satırlar yarıda kesilmez; sıra birikirse sonrakiler biraz hızlı okunur,
+        çok geride kalan (dub_max_lag_ms) satır, arkasında yenisi varsa atlanır."""
+        onset = onset if onset is not None else time.monotonic()
+        self._jobs.put((text, onset, self._generation, None, original, key, time.monotonic()))
+
+    def interrupt(self) -> None:
+        """Her şeyi sustur ve sırayı boşalt (duraklatma, kapatma)."""
+        self._generation += 1
+        self.busy_until = time.monotonic()
+        try:
             while True:
                 self._jobs.get_nowait()
         except queue.Empty:
             pass
-        self._jobs.put((text, onset if onset is not None else time.monotonic(), self._generation, None, original))
-
-    def interrupt(self) -> None:
-        self._generation += 1
-        self.busy_until = time.monotonic()
         player = self._player
         if player is not None:
             try:
@@ -162,7 +180,7 @@ class Speaker(threading.Thread):
     def sample(self, gender: str, pitch_pct: int = 0, rate_pct: int = 0, voice: int = 0) -> None:
         """Menüden "Dinle": bu karakterin sesiyle örnek cümle."""
         self._jobs.put(("Merhaba, bu benim sesim.", None, self._generation,
-                        Delivery(gender, voice, pitch_pct, rate_pct), ""))
+                        Delivery(gender, voice, pitch_pct, rate_pct), "", None, time.monotonic()))
 
     # --- iş parçacığı ----------------------------------------------------------------------
 
@@ -201,24 +219,65 @@ class Speaker(threading.Thread):
             except Exception as exc:  # bir satırın hatası dublajı durdurmasın
                 self._log(f"Dublaj hatası: {exc}")
 
-    def _speak_line(self, text: str, onset: float | None, generation: int, forced: Delivery | None,
-                original: str) -> None:
-        delivery = forced or self._delivery_for_line(onset, generation, original)
-        if delivery is None or (forced is None and generation != self._generation):
-            return  # beklerken yeni satır geldi
-        rate = self.cfg.tts_rate * (1 + delivery.rate_pct / 100)
+    def _speak_line(self, text: str, onset: float, generation: int, forced: Delivery | None, original: str,
+                    key, queued_at: float) -> None:
+        if generation != self._generation:
+            return  # duraklatıldı / kapatıldı
+        pending = self._jobs.qsize()
+        max_lag = self.cfg.dub_max_lag_ms / 1000
+        if forced is None and pending and time.monotonic() - onset > max_lag:
+            self._prepared.pop(key, None)
+            if self.debug:
+                self._log(f"dublaj: geride kalan satır atlandı ({1000 * (time.monotonic() - onset):.0f} ms): {text}")
+            return
+        t0 = time.monotonic()
+        delivery = forced or self._delivery(key, onset, original)
+        t_detect = time.monotonic()
+        # Sıra birikmişse yetişmek için biraz hızlı oku (en fazla +%30).
+        catch_up = 1 + 0.12 * min(pending, 2) + (0.06 if time.monotonic() - onset > 2.0 else 0.0)
+        rate = self.cfg.tts_rate * (1 + delivery.rate_pct / 100) * catch_up
+        audio, ext, source = self._synthesize(text, delivery, rate)
+        t_audio = time.monotonic()
+        # Önceki satır bitene kadar bekle (ses hazırlığı onunla paralel yapıldı): satırlar kesilmez.
+        while time.monotonic() < self.busy_until and generation == self._generation:
+            time.sleep(0.01)
+        if generation != self._generation:
+            return
+        if audio:
+            self.last_engine = source
+            self.busy_until = time.monotonic() + _duration(audio, ext) / max(0.5, catch_up if ext == ".wav" else 1) + 0.15
+            self._play_file(self._write_temp(audio, ext))
+        else:
+            self.last_engine = "Windows"
+            self.busy_until = time.monotonic() + 0.075 * len(text) / max(0.5, rate) + 0.15
+            self._play_windows(text, delivery, rate)
+        self.lag_s = time.monotonic() - onset
+        if self.debug and forced is None:
+            self._log(f"dublaj: altyazıdan {1000 * self.lag_s:.0f} ms sonra başladı · tanıma "
+                      f"{1000 * (t_detect - t0):.0f} ms · ses {1000 * (t_audio - t_detect):.0f} ms ({self.last_engine})"
+                      f" · sıradaki {pending} · hız x{catch_up:.2f}")
+
+    def _synthesize(self, text: str, delivery: Delivery, rate: float) -> tuple[bytes | None, str, str]:
         now = time.monotonic()
         engine = self.cfg.dub_engine
         use_gemini = engine == "gemini" and bool(self.cfg.gemini_api_key) and now >= self._gemini_off_until
         use_edge = engine in ("edge", "gemini") and now >= self._edge_off_until
-        # Karma: Gemini (duygulu) ile Edge AYNI ANDA istenir; Gemini dub_gemini_wait_ms içinde gelmezse
-        # ya da hata verirse beklemeden hazır Edge sesi çalınır, o da yoksa Windows sesi.
+        wait = self.cfg.dub_gemini_wait_ms / 1000
+        if use_gemini and len(self._gemini_times) >= 4:
+            typical = sorted(self._gemini_times)[len(self._gemini_times) // 2]
+            if typical > wait * 1.1:
+                # Gemini genelde geç kalıyor: beklemeden Edge; arada bir yine dene (süresi ölçülsün).
+                self._gemini_skips += 1
+                if self._gemini_skips % 5:
+                    use_gemini = False
+        # Karma: Gemini (duygulu) ile Edge AYNI ANDA istenir; Gemini zamanında gelmezse ya da hata
+        # verirse beklemeden hazır Edge sesi çalınır, o da yoksa Windows sesi.
         edge_job = self._pool.submit(self._edge_bytes, text, delivery, rate) if use_edge else None
         audio, ext, source = None, "", ""
         if use_gemini:
-            gem_job = self._pool.submit(self._gemini_bytes, text, delivery)
+            gem_job = self._pool.submit(self._timed_gemini, text, delivery)
             try:
-                audio = gem_job.result(timeout=self.cfg.dub_gemini_wait_ms / 1000)
+                audio = gem_job.result(timeout=wait)
             except FutureTimeout:
                 self.fallbacks += 1
                 source = "Edge (Gemini geç kaldı)"
@@ -234,31 +293,43 @@ class Speaker(threading.Thread):
                 audio = None
             if audio:
                 ext, source = ".mp3", source or "Edge"
-        if forced is None and generation != self._generation:
-            return
-        if audio:
-            self.last_engine = source
-            self.busy_until = time.monotonic() + _duration(audio, ext) + 0.3
-            self._play_file(self._write_temp(audio, ext))
-        else:
-            self.last_engine = "Windows"
-            self.busy_until = time.monotonic() + 0.075 * len(text) / max(0.5, rate) + 0.3
-            self._play_windows(text, delivery, rate)
+        return audio, ext, source
 
-    def _delivery_for_line(self, onset: float, generation: int, original: str) -> Delivery | None:
-        """Konuşanı ve duygusunu bul. Tanınan karakter ilk EARLY_S saniyede hemen; değilse
-        dub_analysis_ms kadar dinlenir. Ses yoksa yalnızca metinden duygu, varsayılan erkek ses."""
-        detect = (self.cfg.dub_detect_speaker and self.recorder is not None and self.book is not None
-                  and self.recorder.error is None)
-        if not detect:
+    def _timed_gemini(self, text: str, d: Delivery) -> bytes | None:
+        t0 = time.monotonic()
+        try:
+            return self._gemini_bytes(text, d)
+        finally:
+            self._gemini_times.append(time.monotonic() - t0)
+
+    def _delivery(self, key, onset: float, original: str) -> Delivery:
+        """Karakter (önceden başlatılmış tanımadan) + bu satırın son metnine göre duygu."""
+        job = self._prepared.pop(key, None)
+        try:
+            ch, level, f0 = job.result(timeout=1.5) if job is not None else self._detect(onset)
+        except Exception:
+            ch, level, f0 = None, None, 0.0
+        if ch is None:
             mood = emo.classify(original, None)
             rate, pitch, volume = mood.prosody()
-            return Delivery("erkek", 0, pitch, rate, volume, f"duygu: {mood.describe()}", mood.label, mood.intensity)
+            self.last_character = f"tanınamadı (konuşma sesi yok/kısa) · {mood.describe()}"
+            return Delivery("erkek", 0, pitch, rate, volume, "", mood.label, mood.intensity)
+        mood = emo.classify(original, level)
+        rate, pitch, volume = mood.prosody(ch.expressive)
+        self.last_character = (f"{ch.label} ({'kadın' if ch.gender == 'kadin' else 'erkek'}, {f0:.0f} Hz) · "
+                               f"{mood.describe()}")
+        return Delivery(ch.gender, ch.voice, ch.pitch_pct + pitch, ch.rate_pct + rate, volume, "",
+                        mood.label, min(1.0, mood.intensity * ch.expressive))
+
+    def _detect(self, onset: float):
+        """Konuşanı oyun sesinden bul: (karakter, uyarılmışlık, perde) ya da (None, None, 0).
+        Hafızadaki karakter genelde ilk EARLY_S saniyede; emin olunamazsa dub_analysis_ms dinlenir."""
+        if not (self.cfg.dub_detect_speaker and self.recorder is not None and self.book is not None
+                and self.recorder.error is None):
+            return None, None, 0.0
         early, full = onset + EARLY_S, onset + self.cfg.dub_analysis_ms / 1000
         feats = None
         while True:
-            if generation != self._generation or not self._jobs.empty():
-                return None
             now = time.monotonic()
             if now >= early:
                 feats = features(self.recorder.window(onset - 0.15, now))
@@ -270,22 +341,11 @@ class Speaker(threading.Thread):
                 break
             time.sleep(0.03)
         if feats is None:
-            mood = emo.classify(original, None)
-            rate, pitch, volume = mood.prosody()
-            self.last_character = f"tanınamadı (konuşma sesi yok/kısa) · {mood.describe()}"
-            return Delivery("erkek", 0, pitch, rate, volume, "", mood.label, mood.intensity)
+            return None, None, 0.0
         known, dist = self.book.best(feats)
-        # Duygu: bu satırdaki ses, karakterin KENDİ normaline göre (yeni karakterde yalnızca metin).
         level = (emo.arousal(feats.loud_db, feats.f0, known.loud_db, known.f0)
                  if known is not None and dist <= self.book.MATCH else None)
-        ch = self.book.identify(feats)
-        mood = emo.classify(original, level)
-        rate, pitch, volume = mood.prosody(ch.expressive)
-        took = int(1000 * (time.monotonic() - onset))
-        self.last_character = (f"{ch.label} ({'kadın' if ch.gender == 'kadin' else 'erkek'}, {feats.f0:.0f} Hz) · "
-                               f"{mood.describe()} · {took} ms'de tanındı")
-        return Delivery(ch.gender, ch.voice, ch.pitch_pct + pitch, ch.rate_pct + rate, volume, "",
-                        mood.label, min(1.0, mood.intensity * ch.expressive))
+        return self.book.identify(feats), level, feats.f0
 
     # --- Edge (çevrimiçi) ----------------------------------------------------------------------
 

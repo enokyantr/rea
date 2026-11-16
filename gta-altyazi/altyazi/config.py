@@ -191,7 +191,9 @@ class Config:
     # "gemini" (karma): Google Gemini TTS ile talimatla duygulu ses (ücretsiz anahtar: Google AI Studio);
     # Edge sesi aynı anda hazırlanır, Gemini bu kadar ms'de gelmezse/hata verirse Edge çalar.
     gemini_api_key: str = ""
-    dub_gemini_wait_ms: int = 1200
+    dub_gemini_wait_ms: int = 800
+    # Dublaj altyazının bu kadar ms gerisinde kalırsa (ve sırada yeni satır varsa) eski satır atlanır.
+    dub_max_lag_ms: int = 4000
     # Edge ses havuzu: "turkce" (Emel/Ahmet) | "genis" (+ Microsoft'un çok dilli sesleri: her karaktere
     # farklı ses, ama Türkçe telaffuzları aksanlı olabilir).
     dub_voice_pool: str = "turkce"
