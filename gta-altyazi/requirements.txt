@@ -24,3 +24,5 @@ edge-tts>=7.0
 soundcard>=0.4.3
 # Sokak konuşmaları: oyun sesinden konuşma tanıma (yerel, işlemcide)
 faster-whisper>=1.0
+# Yük izleme (yayın sırasında kendini kısma)
+psutil>=5.9

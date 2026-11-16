@@ -120,9 +120,13 @@ class StreetListener(threading.Thread):
         self.skipped = 0     # altyazı/dublaj yüzünden atlanan
         self._model = None
         self._model_name = ""
+        from .perf import STATIC
+
+        self.load = STATIC  # app yük izleyiciyi bağlar
 
     def _load_model(self):
-        name = self.cfg.street_model
+        # Yayın modunda hafif model: Discord/OBS kodlaması ve oyun işlemciye kalsın.
+        name = "base.en" if self.cfg.performance_mode == "yayin" else self.cfg.street_model
         if self._model is not None and self._model_name == name:
             return self._model
         try:
@@ -170,8 +174,8 @@ class StreetListener(threading.Thread):
             segment = seg.feed(stamp, block)
             if segment is None:
                 continue
-            if self.blocked(segment.start, segment.end):
-                self.skipped += 1
+            if self.blocked(segment.start, segment.end) or self.load.level >= 2:
+                self.skipped += 1  # altyazı/dublaj sırasında ya da bilgisayar çok yüklüyken
                 continue
             self._transcribe(segment)
         if sub is not None and rec is not None:

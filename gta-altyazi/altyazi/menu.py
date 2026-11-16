@@ -292,6 +292,9 @@ class ControlPanel:
         r = self._scale(card, r, "Hızlı kabul güveni (yüksek = az hata, biraz geç)", "fast_accept_confidence",
                         0.80, 1.00)
         r = self._check(card, r, "Yalnızca yazı değişince yeniden oku (önerilen)", "change_detection")
+        r = self._combo(card, r, "Performans", "performance_mode", ["auto", "yayin", "normal"],
+                        hint="auto: zorlanınca kendini kısar · yayin: Discord/OBS yayınında hep hafif "
+                             "(çekirdek sayısı yeniden başlatınca) · normal: kısmaz")
         r = self._spin(card, r, "Altyazı gidince Türkçe kaç ms sonra silinsin", "clear_after_ms", 200, 3000, 100,
                        restart=True)
 

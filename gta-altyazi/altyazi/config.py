@@ -134,6 +134,9 @@ class Config:
     # RapidOCR okumadan bu kadar eminse (0..1) doğrulama okuması beklenmeden gösterilir.
     # 1.0 = her zaman doğrula (eski davranış, ~100-350 ms daha geç).
     fast_accept_confidence: float = 0.93
+    # Performans: "auto" (bilgisayar zorlanınca kendini kısar), "yayin" (Discord/OBS yayını: hep hafif;
+    # taslak çeviri 2 çekirdek, sokak dinlemede hafif model), "normal" (hiç kısmaz).
+    performance_mode: str = "auto"
     # Altyazı ekrandayken yalnızca yazının alanı değişince yeniden oku (ekran kartı/işlemci dil
     # modeline ve çeviriye kalır). Yine de en geç bu kadar ms'de bir yeniden okunur.
     change_detection: bool = True

@@ -35,7 +35,7 @@ def _add_cuda_dll_dirs() -> list[str]:
 class LocalBackend:
     """Taslak çevirmen. `translate` iş parçacığı güvenlidir (CTranslate2 kendi kuyruğunu tutar)."""
 
-    def __init__(self, model_dir: Path, device: str = "auto", beam_size: int = 1):
+    def __init__(self, model_dir: Path, device: str = "auto", beam_size: int = 1, threads: int = 4):
         _add_cuda_dll_dirs()
         import ctranslate2
         import sentencepiece as spm
@@ -47,14 +47,14 @@ class LocalBackend:
         compute_type = "int8_float16" if device == "cuda" else "int8"
         try:
             self._tr = ctranslate2.Translator(str(model_dir), device=device, compute_type=compute_type,
-                                              inter_threads=1, intra_threads=0 if device == "cuda" else 4)
+                                              inter_threads=1, intra_threads=0 if device == "cuda" else threads)
         except Exception:
             if device != "cuda":
                 raise
             # CUDA kütüphanesi eksik/uyumsuz: işlemciyle devam et.
             device, compute_type = "cpu", "int8"
             self._tr = ctranslate2.Translator(str(model_dir), device="cpu", compute_type="int8",
-                                              inter_threads=1, intra_threads=4)
+                                              inter_threads=1, intra_threads=threads)
         self.device = device
         self._src = spm.SentencePieceProcessor(model_file=str(model_dir / "source.spm"))
         self._tgt = spm.SentencePieceProcessor(model_file=str(model_dir / "target.spm"))

@@ -83,6 +83,9 @@ class Pipeline(threading.Thread):
         self.dump_dir: Path | None = None
         self._dumped = 0
         self._center_x: int | None = None
+        from .perf import STATIC
+
+        self.load = STATIC  # yük izleyici (app bağlar): ekran yakalama aralığı, OCR arası en az süre
         # Menü için: son kare okuma zamanı ve OCR motorunun adı.
         self.last_read_at = 0.0
         self.engine_name = ""
@@ -282,6 +285,9 @@ class Pipeline(threading.Thread):
                 else:
                     sig = imageproc.signature(gray >= cfg.bright_threshold)
                     unchanged = imageproc.same_signature(last_sig, sig) and reused < MAX_REUSE
+                # Bilgisayar yüklüyken (yayın vb.) iki OCR arasında en az bu kadar beklenir.
+                if not unchanged and last_sig is not None and tick - last_ocr_at < self.load.min_ocr_gap_s:
+                    unchanged = True
                 if unchanged:
                     text = last_text
                     if text:
@@ -319,6 +325,7 @@ class Pipeline(threading.Thread):
                     self.ui.put(("clear", self.region_name))
 
                 # Doğrulanmayı bekleyen satır varsa hemen tekrar oku; yoksa normal kare aralığı.
+                interval = self.load.capture_interval_s
                 wait = confirm_delay if stab.pending else interval
                 elapsed = time.monotonic() - tick
                 if elapsed < wait:
@@ -396,6 +403,11 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
     overlays[STREET] = Overlay(root, cfg, "adaptive")
     pipelines[STREET] = StreetListener(cfg, STREET, lambda: tts["recorder"], make_translator(), ui,
                                        lambda a, b: street_blocked(a, b), log)
+    from .perf import LoadMonitor
+
+    load = LoadMonitor(cfg, log)
+    for p in pipelines.values():
+        p.load = load
     history = HistoryPanel(root, cfg)
     entries: list[dict] = []  # son satırlar: {"key": (bölge, seq), "label", "en", "tr"}
     state = {"welcome": True, "picking": False, "paused": False, "restart": False, "save_pending": False}
@@ -523,6 +535,7 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
             tts["speaker"].stop()
         if tts["recorder"] is not None:
             tts["recorder"].stop()
+        load.stop()
         if state["save_pending"]:
             config_mod.save(cfg, cfg_path)
         if session is not None:
@@ -850,7 +863,8 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
             return rows
 
         def engine_rows(self) -> list[tuple[str, str]]:
-            rows = [("OCR", pipelines[MAIN].engine_name or "henüz başlatılmadı")]
+            rows = [("Yük", load.describe()),
+                    ("OCR", pipelines[MAIN].engine_name or "henüz başlatılmadı")]
             rows += list(engine_info or [])
             speaker = tts["speaker"]
             rows.append(("Dublaj", f"açık ({speaker.voice_in_use})" if speaker else "kapalı"))
@@ -1047,6 +1061,7 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
         root.after(10, poll)
 
     apply_hotkeys()
+    load.start()
     if dump_dir is not None:
         dump_dir.mkdir(parents=True, exist_ok=True)
         log(f"OCR görüntüleri kaydediliyor: {dump_dir} (bölge başına en fazla 300)")

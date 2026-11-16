@@ -85,7 +85,9 @@ def main() -> int:
                 # RTX 4060 Ti 8 GB ölçümü: taslak model GPU'dayken Ollama satırları 1,9-6,6 sn sürdü
                 # (GPU paylaşımı); taslak işlemcideyken 0,28-0,43 sn. Taslak işlemcide ~0,1 sn.
                 device = "cpu"
-            local = LocalBackend(model_dir, device, cfg.local_beam_size)
+            # Yayın modu: taslak çeviri 2 çekirdekle (Discord/OBS kodlaması ve oyun işlemciye kalsın).
+            local = LocalBackend(model_dir, device, cfg.local_beam_size,
+                                 threads=2 if cfg.performance_mode == "yayin" else 4)
             app.log(local.describe())
         except Exception as exc:
             if args.mt_bench or (mode == "local" and not args.self_test):

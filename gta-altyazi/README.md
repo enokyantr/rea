@@ -166,6 +166,19 @@ saniye gösterilir. İsterseniz seslendirilir (menü > Çeviri > Sokak konuşmal
 - "Konuşma yok" olasılığı yüksek, düşük güvenli ya da müzik işaretli sonuçlar atılır; yine de araç
   radyosunu kısmak daha temiz sonuç verir.
 
+### Discord / OBS yayını
+
+- Program bilgisayarın yükünü sürekli ölçer (menü > Durum > Motorlar > "Yük"). İşlemci 3 sn %80'i geçerse
+  kendini kısar (ekranı daha seyrek yakalar, OCR'lar arasında kısa ara verir); %92'yi geçerse sokak
+  dinlemesini de duraklatır. Rahatlayınca tam hıza döner. Altyazıya etkisi en fazla ~0,1-0,15 sn.
+- Yayın gecesi menü > OCR ve hız > Performans: **yayin** seçip "Kaydet ve yeniden başlat": hep hafif
+  çalışır; taslak çeviri 2 çekirdek, sokak dinleme hafif model (base.en) kullanır.
+- Discord'da **Ayarlar > Gelişmiş > Donanım Hızlandırma** ve **Ses ve Görüntü > H.264 Donanım Hızlandırma**
+  açık olsun: yayın görüntüsü ekran kartının ayrı kodlayıcısıyla (NVENC) sıkıştırılır, işlemci yorulmaz.
+- Türkçe altyazının yayında görünmesi için **pencereyi değil ekranın tamamını** paylaşın (Türkçe yazı
+  ayrı bir pencerede). Menüyü yayından önce Ctrl+Alt+M ile gizleyin ya da ikinci ekrana taşıyın.
+- Sesli paylaşımda dublaj da arkadaşlarınıza gider.
+
 ### Oturum kaydı
 
 Görülen her satır İngilizce + Türkçe olarak `kayitlar/` klasörüne (oturum başına bir dosya) yazılır:
