@@ -26,3 +26,5 @@ soundcard>=0.4.3
 faster-whisper>=1.0
 # Yük izleme (yayın sırasında kendini kısma)
 psutil>=5.9
+# Dublaj: Edge sesini inerken çalmak (düşük gecikme; yoksa eski MediaPlayer yolu)
+miniaudio>=1.61

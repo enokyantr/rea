@@ -65,7 +65,7 @@ def _speaker(**cfg_overrides):
 def test_gemini_in_time_is_played():
     sp, played = _speaker()
     sp._gemini_bytes = lambda text, d: b"RIFFgemini"
-    sp._edge_bytes = lambda *a: b"edge"
+    sp._edge_open = lambda *a: b"edge"
     sp._speak_line("Kapa çeneni!", time.monotonic(), sp._generation, None, "Shut up!", None, time.monotonic())
     assert played == [".wav"] and sp.last_engine == "Gemini"
 
@@ -77,7 +77,7 @@ def test_slow_gemini_falls_back_to_ready_edge_without_waiting_longer():
         time.sleep(2)
         return b"RIFFlate"
     sp._gemini_bytes = slow
-    sp._edge_bytes = lambda *a: b"edge"
+    sp._edge_open = lambda *a: b"edge"
     t0 = time.monotonic()
     sp._speak_line("Kapa çeneni!", time.monotonic(), sp._generation, None, "Shut up!", None, time.monotonic())
     assert played == [".mp3"] and "geç kaldı" in sp.last_engine
@@ -90,7 +90,7 @@ def test_gemini_error_and_edge_down_uses_windows():
     def broken(text, d):
         raise gt.GeminiQuota("429")
     sp._gemini_bytes = broken
-    sp._edge_bytes = lambda *a: None
+    sp._edge_open = lambda *a: None
     sp._speak_line("Kapa çeneni!", time.monotonic(), sp._generation, None, "Shut up!", None, time.monotonic())
     assert played == ["windows"]
 
@@ -113,7 +113,7 @@ def test_missing_model_name_tries_the_next_one():
 
 def _queue_speaker():
     sp, played = _speaker(dub_engine="edge")
-    sp._edge_bytes = lambda text, d, rate: text.encode() * 8000  # ~1,3 sn "mp3" (48 kbit/sn tahmini)
+    sp._edge_open = lambda text, d, rate: text.encode() * 8000  # ~1,3 sn "mp3" (48 kbit/sn tahmini)
     sp._play_file = lambda path: played.append(path.read_bytes()[:1].decode())
     return sp, played
 
@@ -157,7 +157,7 @@ def test_consistently_late_gemini_is_not_waited_for():
     sp._gemini_times.extend([2.0, 2.2, 1.9, 2.1])  # hep bekleme süresinden geç
     called = []
     sp._gemini_bytes = lambda text, d: called.append(1) or b"RIFF"
-    sp._edge_bytes = lambda *a: b"edge"
+    sp._edge_open = lambda *a: b"edge"
     t0 = time.monotonic()
     sp._speak_line("Selam", time.monotonic(), sp._generation, None, "", None, time.monotonic())
     assert played == [".mp3"] and time.monotonic() - t0 < 0.3 and called == []

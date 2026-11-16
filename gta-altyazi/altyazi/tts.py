@@ -99,6 +99,55 @@ def _hz(value: float) -> str:
     return f"{'+' if value >= 0 else ''}{int(round(value))}Hz"
 
 
+class _EdgeStream:
+    """Edge sesinin inen MP3 parçaları (üretici: arka plan iş parçacığı, tüketici: çalıcı).
+    Yineleyici olarak dolaşılır; `None` sonu belirtir. `close()` hem üreticiyi hem tüketiciyi bırakır."""
+
+    def __init__(self):
+        self._q: queue.Queue = queue.Queue()
+        self.first = threading.Event()   # ilk ses parçası geldi ya da akış bitti
+        self.closed = False
+        self.nbytes = 0
+        self.error: Exception | None = None
+
+    def put(self, data: bytes) -> None:
+        if not self.closed and data:
+            self.nbytes += len(data)
+            self._q.put(data)
+            self.first.set()
+
+    def end(self, error: Exception | None = None) -> None:
+        self.error = error
+        self._q.put(None)
+        self.first.set()
+
+    def close(self) -> None:
+        self.closed = True
+        self._q.put(None)
+
+    def __iter__(self):
+        while True:
+            data = self._q.get()
+            if data is None:
+                return
+            yield data
+
+    def read_all(self) -> bytes:
+        return b"".join(self)
+
+
+def _discard(job) -> None:
+    """Kullanılmayacak Edge akışını (geldiğinde) kapat: indirme boşuna sürmesin."""
+    def close(done):
+        try:
+            result = done.result()
+        except Exception:
+            return
+        if isinstance(result, _EdgeStream):
+            result.close()
+    job.add_done_callback(close)
+
+
 class Speaker(threading.Thread):
     """`say(metin, başlangıç)`: satırı okur. `interrupt()`: o an okunanı keser (yeni satır geldi).
     Ayarlar (motor, hız, ses düzeyi, konuşan tanıma) her satırda `cfg`'den canlı okunur."""
@@ -114,6 +163,9 @@ class Speaker(threading.Thread):
         self._jobs: queue.Queue = queue.Queue()
         self._generation = 0
         self._player = None
+        self._stream = None          # StreamPlayer (miniaudio): inerken çalar; yoksa MediaPlayer
+        self._handle = None          # çalan akış konuşması (PlayHandle)
+        self._feeding: _EdgeStream | None = None
         self._windows_voice = None
         self._edge_fail = 0
         self._edge_off_until = 0.0
@@ -131,8 +183,8 @@ class Speaker(threading.Thread):
         self._gemini_skips = 0
         self.debug = False
         self.lag_s = 0.0                          # son satırın altyazıdan ne kadar geç başladığı
-        # Okunan sesin tahmini bitişi (time.monotonic): sokak dinleyicisi kendi dublajımızı duymasın.
-        self.busy_until = 0.0
+        # MediaPlayer yolunda okunan sesin tahmini bitişi (time.monotonic).
+        self._file_until = 0.0
         self._tmp = Path(tempfile.gettempdir())
         self._file_index = 0
         self.voice_in_use = ""
@@ -166,12 +218,36 @@ class Speaker(threading.Thread):
                 self._jobs.get_nowait()
         except queue.Empty:
             pass
+        feeding, self._feeding = self._feeding, None
+        if feeding is not None:
+            feeding.close()
+        if self._stream is not None:
+            self._stream.stop()
         player = self._player
         if player is not None:
             try:
                 player.pause()
             except Exception:
                 pass
+
+    @property
+    def busy_until(self) -> float:
+        """Kendi dublajımızın bittiği/biteceği an: sokak dinleyicisi kendi sesimizi duymasın."""
+        handle = self._handle
+        if handle is None:
+            return self._file_until
+        if not handle.done:
+            return max(self._file_until, time.monotonic() + 0.5)
+        return max(self._file_until, (handle.finished_at or 0.0) + 0.15)
+
+    @busy_until.setter
+    def busy_until(self, value: float) -> None:
+        self._file_until = value
+
+    def playing(self) -> bool:
+        """Akış çalıcıda hâlâ ses çalıyor mu (sokak dinleyicisi kendi dublajımızı duymasın)."""
+        handle = self._handle
+        return handle is not None and not handle.done
 
     def stop(self) -> None:
         self.interrupt()
@@ -203,6 +279,15 @@ class Speaker(threading.Thread):
             self.ready.set()
             return
         self._player = MediaPlayer()
+        try:
+            from .stream_player import StreamPlayer, StreamPlayerError
+
+            try:
+                self._stream = StreamPlayer(log=self._log)
+            except StreamPlayerError as exc:
+                self._log(f"Hızlı ses çalıcı açılamadı ({exc}); dublaj eski yolla (biraz daha gecikmeli) çalınacak.")
+        except Exception as exc:
+            self._log(f"Hızlı ses çalıcı yüklenemedi ({exc}); guncelle.bat çalıştırın.")
         if self.cfg.dub_engine == "gemini" and self.cfg.gemini_api_key:
             self.voice_in_use = "Karma: Gemini (duygulu), sorun olursa anında Edge"
         elif self.cfg.dub_engine in ("edge", "gemini"):
@@ -218,6 +303,8 @@ class Speaker(threading.Thread):
                 self._speak_line(*job)
             except Exception as exc:  # bir satırın hatası dublajı durdurmasın
                 self._log(f"Dublaj hatası: {exc}")
+        if self._stream is not None:
+            self._stream.close()
 
     def _speak_line(self, text: str, onset: float, generation: int, forced: Delivery | None, original: str,
                     key, queued_at: float) -> None:
@@ -239,18 +326,21 @@ class Speaker(threading.Thread):
         audio, ext, source = self._synthesize(text, delivery, rate)
         t_audio = time.monotonic()
         # Önceki satır bitene kadar bekle (ses hazırlığı onunla paralel yapıldı): satırlar kesilmez.
-        while time.monotonic() < self.busy_until and generation == self._generation:
+        while generation == self._generation and (time.monotonic() < self._file_until or self.playing()):
             time.sleep(0.01)
         if generation != self._generation:
+            if isinstance(audio, _EdgeStream):
+                audio.close()
             return
         if audio:
             self.last_engine = source
-            self.busy_until = time.monotonic() + _duration(audio, ext) / max(0.5, catch_up if ext == ".wav" else 1) + 0.15
-            self._play_file(self._write_temp(audio, ext))
+            self._play_audio(audio, ext)
         else:
             self.last_engine = "Windows"
             self.busy_until = time.monotonic() + 0.075 * len(text) / max(0.5, rate) + 0.15
             self._play_windows(text, delivery, rate)
+        if self.debug and self._handle is not None and audio:
+            self._handle.wait_started(1.0)  # gecikme ilk sesin aygıta verildiği andan ölçülsün
         self.lag_s = time.monotonic() - onset
         if self.debug and forced is None:
             self._log(f"dublaj: altyazıdan {1000 * self.lag_s:.0f} ms sonra başladı · tanıma "
@@ -272,7 +362,7 @@ class Speaker(threading.Thread):
                     use_gemini = False
         # Karma: Gemini (duygulu) ile Edge AYNI ANDA istenir; Gemini zamanında gelmezse ya da hata
         # verirse beklemeden hazır Edge sesi çalınır, o da yoksa Windows sesi.
-        edge_job = self._pool.submit(self._edge_bytes, text, delivery, rate) if use_edge else None
+        edge_job = self._pool.submit(self._edge_open, text, delivery, rate) if use_edge else None
         audio, ext, source = None, "", ""
         if use_gemini:
             gem_job = self._pool.submit(self._timed_gemini, text, delivery)
@@ -286,10 +376,14 @@ class Speaker(threading.Thread):
                 source = "Edge (Gemini hata)"
             if audio:
                 ext, source = ".wav", "Gemini"
-        if audio is None and edge_job is not None:
+                if edge_job is not None:
+                    _discard(edge_job)
+                return audio, ext, source
+        if edge_job is not None:
             try:
                 audio = edge_job.result(timeout=5.0)
             except Exception:
+                _discard(edge_job)
                 audio = None
             if audio:
                 ext, source = ".mp3", source or "Edge"
@@ -349,8 +443,9 @@ class Speaker(threading.Thread):
 
     # --- Edge (çevrimiçi) ----------------------------------------------------------------------
 
-    def _edge_bytes(self, text: str, d: Delivery, rate: float) -> bytes | None:
-        """Edge sesi (iş parçacığı havuzunda; kendi olay döngüsüyle)."""
+    def _edge_open(self, text: str, d: Delivery, rate: float) -> _EdgeStream | None:
+        """Edge sesini akış olarak başlatır; ilk ses parçası gelince döner (gerisi inerken çalınır).
+        İlk parça gelmezse çok dilli sesten yerli Türkçe sese geçer; o da olmazsa None."""
         try:
             import edge_tts
         except ImportError:
@@ -361,37 +456,46 @@ class Speaker(threading.Thread):
         pool = (EDGE_VOICES_WIDE if self.cfg.dub_voice_pool == "genis" else EDGE_VOICES_TR)[d.gender]
         voice = pool[d.voice % len(pool)]
         volume = max(-90.0, min(50.0, (self.cfg.tts_volume - 1) * 100 + d.volume_pct))
+        options = {"rate": _pct((rate - 1) * 100), "pitch": _hz(pitch_hz), "volume": _pct(volume)}
+        error: Exception | None = None
+        for name in dict.fromkeys([voice, pool[0]]):
+            stream = _EdgeStream()
+            threading.Thread(target=self._edge_produce, args=(edge_tts, stream, text, name, options),
+                             name="dublaj-edge", daemon=True).start()
+            if not stream.first.wait(4.0):
+                stream.close()
+                error = TimeoutError("Edge 4 sn içinde ses göndermedi")
+                continue
+            if stream.nbytes == 0:
+                error = stream.error or RuntimeError("Edge boş ses döndürdü")
+                continue
+            self._edge_fail = 0
+            return stream
+        self._edge_fail += 1
+        if self._edge_fail >= 3:
+            self._edge_off_until = time.monotonic() + self.EDGE_RETRY_S
+            self._log(f"Edge seslerine ulaşılamıyor ({error}); {self.EDGE_RETRY_S} sn Windows sesi kullanılacak.")
+        return None
 
-        async def fetch(name: str) -> bytes:
-            comm = edge_tts.Communicate(text, name, rate=_pct((rate - 1) * 100),
-                                        pitch=_hz(pitch_hz), volume=_pct(volume))
-            data = bytearray()
+    @staticmethod
+    def _edge_produce(edge_tts, stream: _EdgeStream, text: str, voice: str, options: dict) -> None:
+        """Arka planda: Edge parçalarını indikçe akışa yazar (kendi olay döngüsüyle)."""
+        async def fetch() -> None:
+            comm = edge_tts.Communicate(text, voice, **options)
             async for chunk in comm.stream():
+                if stream.closed:
+                    return
                 if chunk.get("type") == "audio":
-                    data.extend(chunk["data"])
-            return bytes(data)
+                    stream.put(chunk["data"])
 
         loop = asyncio.new_event_loop()
         try:
-            try:
-                data = loop.run_until_complete(asyncio.wait_for(fetch(voice), timeout=4.0))
-            except Exception:
-                if voice == pool[0]:
-                    raise
-                # Çok dilli ses okuyamadı: aynı satır yerli Türkçe sesle.
-                data = loop.run_until_complete(asyncio.wait_for(fetch(pool[0]), timeout=4.0))
+            loop.run_until_complete(asyncio.wait_for(fetch(), timeout=6.0 + 0.15 * len(text)))
+            stream.end()
         except Exception as exc:
-            self._edge_fail += 1
-            if self._edge_fail >= 3:
-                self._edge_off_until = time.monotonic() + self.EDGE_RETRY_S
-                self._log(f"Edge seslerine ulaşılamıyor ({exc}); {self.EDGE_RETRY_S} sn Windows sesi kullanılacak.")
-            return None
+            stream.end(exc)
         finally:
             loop.close()
-        if not data:
-            return None
-        self._edge_fail = 0
-        return data
 
     def _write_temp(self, data: bytes, ext: str) -> Path:
         # İki dosya dönüşümlü: çalınmakta olan dosyanın üstüne yazılmaz.
@@ -433,6 +537,27 @@ class Speaker(threading.Thread):
         self._gemini_off_until = time.monotonic() + 86400
         self._log("Gemini ses modeli bulunamadı; Edge sesiyle devam.")
         return None
+
+    def _play_audio(self, audio, ext: str) -> None:
+        """Hazır sesi çal: akış çalıcı varsa Edge inerken çalınır; yoksa dosya + MediaPlayer."""
+        if self._stream is not None:
+            from .stream_player import StreamPlayerError
+
+            try:
+                if isinstance(audio, _EdgeStream):
+                    self._feeding = audio
+                    self._handle = self._stream.play_chunks(audio)
+                else:
+                    self._handle = self._stream.play_wav(audio) if ext == ".wav" else \
+                        self._stream.play_chunks([audio])
+                return
+            except StreamPlayerError as exc:
+                self._log(f"Hızlı ses çalıcı kullanılamadı ({exc}); eski yola dönülüyor.")
+                self._stream = None
+        if isinstance(audio, _EdgeStream):
+            audio = audio.read_all()
+        self.busy_until = time.monotonic() + _duration(audio, ext) + 0.15
+        self._play_file(self._write_temp(audio, ext))
 
     def _play_file(self, path: Path) -> None:
         from winrt.windows.foundation import Uri
