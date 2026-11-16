@@ -114,6 +114,21 @@ class OllamaUnavailable(RuntimeError):
     pass
 
 
+def _find_ollama() -> str | None:
+    import os
+    import shutil
+
+    found = shutil.which("ollama")
+    if found:
+        return found
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        candidate = os.path.join(local, "Programs", "Ollama", "ollama.exe")
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
 class OllamaBackend:
     """Ollama'daki bir modelle çeviri. `translate` iş parçacığı güvenlidir (HTTP isteği)."""
 
@@ -147,6 +162,37 @@ class OllamaBackend:
         return f"ollama-{self.model}-{self._fingerprint}-c{int(self._use_context)}"
 
     # --- Ollama yönetimi -------------------------------------------------------------------
+
+    def ensure_running(self, log=print, wait_s: float = 20.0) -> bool:
+        """Ollama sunucusu kapalıysa (tepsi uygulaması açılmamış) arka planda başlatır.
+        Başlatabildiyse ya da zaten çalışıyorsa True."""
+        if self._alive():
+            return True
+        exe = _find_ollama()
+        if exe is None:
+            return False
+        import subprocess
+        import time
+
+        log("Ollama kapalı, arka planda başlatılıyor...")
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
+        try:
+            subprocess.Popen([exe, "serve"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, creationflags=flags, close_fds=True)
+        except OSError:
+            return False
+        end = time.monotonic() + wait_s
+        while time.monotonic() < end:
+            if self._alive():
+                return True
+            time.sleep(0.3)
+        return False
+
+    def _alive(self) -> bool:
+        try:
+            return self._http.get(f"{self._url}/api/version", timeout=1).ok
+        except requests.RequestException:
+            return False
 
     def installed_models(self) -> list[str]:
         try:

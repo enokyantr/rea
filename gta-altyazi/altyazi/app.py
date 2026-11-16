@@ -131,6 +131,12 @@ class Pipeline(threading.Thread):
     def run(self) -> None:
         import mss
 
+        # Seçilmemiş ek bölge (görev/telefon) için OCR motoru kurulmaz: açılış hızlanır, ekran
+        # kartı belleği boşa gitmez. Bölge seçilince kurulur.
+        while self.get_region() is None and not self.stopped.is_set():
+            time.sleep(0.2)
+        if self.stopped.is_set():
+            return
         try:
             ocr = ocr_mod.create(self.cfg)
         except OcrUnavailable as exc:

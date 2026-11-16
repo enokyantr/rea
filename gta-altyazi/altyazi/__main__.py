@@ -43,6 +43,7 @@ def main() -> int:
     from . import app, win32
 
     win32.enable_dpi_awareness()
+    win32.raise_priority()
 
     if args.list_windows:
         for _hwnd, title, rect in win32.visible_windows():
@@ -197,6 +198,7 @@ def _final_backend(cfg, args, entries: dict[str, str], fp: str, interactive: boo
     backend = OllamaBackend(cfg.ollama_model, cfg.ollama_url, cfg.ollama_timeout_s, cfg.uncensored, entries,
                             num_ctx=cfg.ollama_num_ctx, use_context=cfg.ollama_use_context)
     try:
+        backend.ensure_running(app.log)
         if not backend.has_model():
             if not interactive:
                 raise OllamaUnavailable(f"Ollama'da '{cfg.ollama_model}' modeli yok (ollama pull {cfg.ollama_model})")

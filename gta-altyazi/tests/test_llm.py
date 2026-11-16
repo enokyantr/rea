@@ -156,3 +156,26 @@ def test_meta_replies_are_detected(reply, meta):
     from altyazi.llm import is_meta_reply
 
     assert is_meta_reply(reply) is meta
+
+
+def test_ensure_running_starts_ollama_when_it_is_down(monkeypatch):
+    import altyazi.llm as llm
+
+    backend = OllamaBackend("aya-expanse:8b", "http://127.0.0.1:9", use_context=False)
+    alive = iter([False, False, True])
+    monkeypatch.setattr(backend, "_alive", lambda: next(alive))
+    monkeypatch.setattr(llm, "_find_ollama", lambda: "ollama.exe")
+    started = []
+    import subprocess
+    monkeypatch.setattr(subprocess, "Popen", lambda args, **kw: started.append(args))
+    logs = []
+    assert backend.ensure_running(logs.append, wait_s=2)
+    assert started == [["ollama.exe", "serve"]] and logs
+
+
+def test_ensure_running_does_nothing_when_ollama_is_up(monkeypatch):
+    backend = OllamaBackend("aya-expanse:8b", "http://127.0.0.1:9", use_context=False)
+    monkeypatch.setattr(backend, "_alive", lambda: True)
+    import subprocess
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: (_ for _ in ()).throw(AssertionError("başlatılmamalı")))
+    assert backend.ensure_running(lambda m: None)

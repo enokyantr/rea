@@ -138,6 +138,19 @@ def exclude_from_capture(hwnd: int) -> bool:
         return False
 
 
+ABOVE_NORMAL_PRIORITY_CLASS = 0x00008000
+
+
+def raise_priority() -> bool:
+    """Oyun, Remote Play ve OBS açıkken işlemci önce altyazıya ayrılsın (gecikme). "Yüksek" değil:
+    oyunu/yayını aç bırakmaz."""
+    try:
+        kernel32 = ctypes.windll.kernel32
+        return bool(kernel32.SetPriorityClass(kernel32.GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS))
+    except (AttributeError, OSError):
+        return False
+
+
 WDA_NONE = 0x00000000
 
 

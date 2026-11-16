@@ -76,6 +76,7 @@ class RapidOcr:
     def __init__(self, threads: int = 2, gpu: bool = True):
         try:
             from rapidocr_onnxruntime import RapidOCR
+            _quiet_rapidocr_logs()
         except ImportError as exc:
             raise OcrUnavailable(f"RapidOCR kurulu değil ({exc}); guncelle.bat çalıştırın.") from exc
         self.last_confidence = 0.0
@@ -114,6 +115,19 @@ class RapidOcr:
         xs = [p[0] for r in result for p in r[0]]
         self.last_span = (float(min(xs)), float(max(xs))) if xs else None
         return group_lines(result)
+
+
+def _quiet_rapidocr_logs() -> None:
+    """RapidOCR her motor için "try to use DirectML" bilgi satırı basıyor; yalnızca uyarılar kalsın.
+    Kayıtçılarını önceden oluşturup düzeyini düşürür (get_logger önbellekli, düzeyi bir kez ayarlar)."""
+    import logging
+
+    try:
+        from rapidocr_onnxruntime.utils.logger import get_logger
+    except ImportError:
+        return
+    for name in ("OrtInferSession", "RapidOCR"):
+        get_logger(name).setLevel(logging.WARNING)
 
 
 def _first_provider(engine) -> str:
