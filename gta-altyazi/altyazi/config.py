@@ -175,6 +175,9 @@ class Config:
     # "edge": Microsoft Edge'in çevrimiçi doğal sesleri (Emel kadın, Ahmet erkek; ücretsiz, internet gerekir;
     # ulaşılamazsa Windows sesine düşer). "windows": yerleşik çevrimdışı ses.
     dub_engine: str = "edge"
+    # Edge ses havuzu: "turkce" (Emel/Ahmet) | "genis" (+ Microsoft'un çok dilli sesleri: her karaktere
+    # farklı ses, ama Türkçe telaffuzları aksanlı olabilir).
+    dub_voice_pool: str = "turkce"
     # Konuşanı oyun sesinden tanı: kadın/erkek ve karakter hafızası (aynı karaktere hep aynı ses).
     dub_detect_speaker: bool = True
     # Konuşanı tanımak için altyazı belirdikten sonra en az bu kadar ms ses dinlenir.

@@ -672,7 +672,7 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
             return "Örnek için önce dublajı açın."
         ch = next((c for c in book.snapshot() if c.id == char_id), None)
         if ch is not None:
-            speaker.sample(ch.gender, ch.pitch_pct, ch.rate_pct)
+            speaker.sample(ch.gender, ch.pitch_pct, ch.rate_pct, ch.voice)
         return None
 
     def dub_status() -> list[tuple[str, str]]:
@@ -889,7 +889,7 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
             session.write("" if name == MAIN else REGION_LABELS[name], original, translated)
         speaker = tts["speaker"]
         if speaker is not None and name == MAIN:
-            speaker.say(translated, onset=first_seen)
+            speaker.say(translated, onset=first_seen, original=original)
 
     def release_draft(name: str, seq: int) -> bool:
         """Bekletilen taslağı kesin metin olarak göster (son çeviri gelmedi). Bekleyen yoksa False."""

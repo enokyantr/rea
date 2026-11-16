@@ -28,6 +28,7 @@ class VoiceFeatures:
     f0_spread: float     # perde dağılımı (oktav, çeyrekler arası)
     timbre: list[float]  # ses rengi (normalize kepstrum)
     voiced_frames: int
+    loud_db: float = -30.0   # konuşma ses düzeyi (dBFS, yüksek enerjili karelerin medyanı)
 
     @property
     def gender(self) -> str:
@@ -132,7 +133,8 @@ def features(samples: np.ndarray, sr: int = SAMPLE_RATE) -> VoiceFeatures | None
     ceps = (logmel @ dct).mean(axis=0)  # c1..c12 (c0 = ses düzeyi, atılır)
     norm = float(np.linalg.norm(ceps))
     timbre = (ceps / norm).tolist() if norm > 0 else ceps.tolist()
-    return VoiceFeatures(f0, spread, timbre, len(f0s))
+    loud_db = float(20 * np.log10(np.median(energy[voiced]) + 1e-9))
+    return VoiceFeatures(f0, spread, timbre, len(f0s), loud_db)
 
 
 def distance(a: VoiceFeatures | "Character", b: VoiceFeatures | "Character") -> float:
@@ -143,8 +145,10 @@ def distance(a: VoiceFeatures | "Character", b: VoiceFeatures | "Character") -> 
     return 2.0 * pitch + timbre
 
 
-# Aynı cinsiyetteki karakterleri birbirinden ayırmak için sırayla verilen ses ayarları.
-_VARIANTS = [(0, 0), (-8, -4), (8, 4), (-14, 6), (14, -6), (-4, 10), (4, -10)]  # (perde %, hız %)
+# Aynı cinsiyetteki karakterleri birbirinden ayırmak için sırayla verilen ses ayarları:
+# (perde %, hız %, duygu gücü). Duygu gücü: o karakterin tepkileri ne kadar abartılı okunur.
+_VARIANTS = [(0, 0, 1.0), (-8, -4, 0.8), (8, 4, 1.25), (-14, 6, 1.1), (14, -6, 0.9), (-4, 10, 1.35),
+             (4, -10, 0.7), (-10, -8, 1.0), (10, 8, 1.15)]
 
 
 @dataclass
@@ -158,6 +162,10 @@ class Character:
     rate_pct: int = 0         # ve hız (%)
     name: str = ""
     gender_locked: bool = False  # kullanıcı cinsiyeti elle seçti: otomatik değişmez
+    voice: int = 0               # aynı cinsiyetteki ses havuzundan hangi ses (Edge)
+    expressive: float = 1.0      # duygu gücü çarpanı
+    loud_db: float = -30.0       # bu karakterin normal konuşma düzeyi (duygu için referans)
+    f0_spread: float = 0.15      # normal tonlama genişliği (oktav)
 
     @property
     def label(self) -> str:
@@ -183,31 +191,43 @@ class CharacterBook:
         if path is not None and path.exists():
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
-                self.characters = [Character(**c) for c in data.get("characters", [])]
+                known = set(Character.__dataclass_fields__)
+                self.characters = [Character(**{k: v for k, v in c.items() if k in known})
+                                   for c in data.get("characters", [])]
             except (ValueError, TypeError, OSError):
                 self.characters = []
 
-    def identify(self, feats: VoiceFeatures) -> Character:
+    def best(self, feats: VoiceFeatures) -> tuple[Character | None, float]:
+        """En yakın karakter ve uzaklığı (hafızayı değiştirmez)."""
         with self._lock:
             best, best_d = None, math.inf
             for ch in self.characters:
                 d = distance(feats, ch)
                 if d < best_d:
                     best, best_d = ch, d
+            return best, best_d
+
+    def identify(self, feats: VoiceFeatures) -> Character:
+        best, best_d = self.best(feats)
+        with self._lock:
             if best is not None and best_d <= self.MATCH:
                 best.lines += 1
                 w = self.LEARN
                 best.f0 = float(2 ** ((1 - w) * math.log2(best.f0) + w * math.log2(feats.f0)))
                 best.timbre = [(1 - w) * a + w * b for a, b in zip(best.timbre, feats.timbre)]
+                # Normal düzey yavaş öğrenilir: tek bir bağırma "normal" sayılmasın.
+                best.loud_db = (1 - w / 2) * best.loud_db + (w / 2) * feats.loud_db
+                best.f0_spread = (1 - w / 2) * best.f0_spread + (w / 2) * feats.f0_spread
                 if not best.gender_locked:
                     best.gender = "kadin" if best.f0 >= FEMALE_F0 else "erkek"
                 self._save()
                 return best
             gender = feats.gender
             same = sum(1 for c in self.characters if c.gender == gender)
-            pitch, rate = _VARIANTS[same % len(_VARIANTS)]
+            pitch, rate, expressive = _VARIANTS[same % len(_VARIANTS)]
             ch = Character(id=max((c.id for c in self.characters), default=0) + 1, gender=gender, f0=feats.f0,
-                           timbre=list(feats.timbre), pitch_pct=pitch, rate_pct=rate)
+                           timbre=list(feats.timbre), pitch_pct=pitch, rate_pct=rate, voice=same,
+                           expressive=expressive, loud_db=feats.loud_db, f0_spread=feats.f0_spread)
             self.characters.append(ch)
             if len(self.characters) > self.MAX_CHARACTERS:  # en az konuşanı unut
                 self.characters.remove(min(self.characters, key=lambda c: c.lines))

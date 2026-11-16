@@ -260,6 +260,8 @@ class ControlPanel:
         r = 0
         r = self._combo(card, r, "Ses", "dub_engine", ["edge", "windows"], dub=True,
                         hint="edge: doğal kadın/erkek ses (internet) · windows: çevrimdışı")
+        r = self._combo(card, r, "Ses havuzu (edge)", "dub_voice_pool", ["turkce", "genis"], dub=True,
+                        hint="turkce: Emel/Ahmet · genis: her karaktere farklı ses (aksanlı olabilir)")
         r = self._check(card, r, "Konuşanı sesinden tanı (kadın/erkek, aynı karaktere aynı ses)",
                         "dub_detect_speaker", dub=True, switch=True)
         r = self._check(card, r, "Yazı ve ses aynı çeviriyi göstersin (argo satırlarında yazı ~0,4 sn geç)",

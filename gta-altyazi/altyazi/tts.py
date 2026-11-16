@@ -20,9 +20,37 @@ from pathlib import Path
 from typing import Callable
 from xml.sax.saxutils import escape
 
+from dataclasses import dataclass
+
+from . import emotion as emo
 from .voiceid import CharacterBook, features
 
-EDGE_VOICES = {"kadin": "tr-TR-EmelNeural", "erkek": "tr-TR-AhmetNeural"}
+# Cinsiyete göre Edge ses havuzu; karakterler sırayla farklı ses alır (Character.voice).
+# "turkce": yalnızca Türkçe sesler (Emel, Ahmet; karakterler perde/hızla ayrılır).
+# "genis": Microsoft'un çok dilli sesleri de (metnin dilini kendileri algılar; Türkçe telaffuzları
+# yerli seslerden farklı/aksanlı olabilir). İlk karakter her zaman yerli Türkçe sesi alır.
+EDGE_VOICES_TR = {"kadin": ["tr-TR-EmelNeural"], "erkek": ["tr-TR-AhmetNeural"]}
+EDGE_VOICES_WIDE = {
+    "kadin": ["tr-TR-EmelNeural", "en-US-AvaMultilingualNeural", "de-DE-SeraphinaMultilingualNeural",
+              "en-US-EmmaMultilingualNeural", "fr-FR-VivienneMultilingualNeural"],
+    "erkek": ["tr-TR-AhmetNeural", "en-US-AndrewMultilingualNeural", "de-DE-FlorianMultilingualNeural",
+              "en-US-BrianMultilingualNeural", "fr-FR-RemyMultilingualNeural", "it-IT-GiuseppeMultilingualNeural",
+              "en-AU-WilliamMultilingualNeural"],
+}
+# Hafızadaki bir karaktere bu kadar yakın ses, ilk EARLY_S saniyede kesin tanınır (beklemeden).
+EARLY_S = 0.3
+EARLY_MATCH = 0.6  # CharacterBook.MATCH'in oranı
+
+
+@dataclass
+class Delivery:
+    """Bir satırın nasıl okunacağı: ses, karaktere özgü ayar + duygu."""
+    gender: str = "erkek"
+    voice: int = 0
+    pitch_pct: float = 0.0
+    rate_pct: float = 0.0
+    volume_pct: float = 0.0
+    note: str = ""
 # Windows sesi tek (genelde erkek, "Tolga"): kadın için perde yükseltilir (Hz).
 _WINDOWS_FEMALE_PITCH_HZ = 70
 _BASE_F0 = {"kadin": 200, "erkek": 120}
@@ -79,13 +107,14 @@ class Speaker(threading.Thread):
 
     # --- arayüz (iş parçacığı güvenli) -----------------------------------------------------
 
-    def say(self, text: str, onset: float | None = None) -> None:
+    def say(self, text: str, onset: float | None = None, original: str = "") -> None:
+        """`original`: İngilizce satır (duygu ipuçları için)."""
         try:  # yalnızca en yeni satır okunur
             while True:
                 self._jobs.get_nowait()
         except queue.Empty:
             pass
-        self._jobs.put((text, onset if onset is not None else time.monotonic(), self._generation))
+        self._jobs.put((text, onset if onset is not None else time.monotonic(), self._generation, None, original))
 
     def interrupt(self) -> None:
         self._generation += 1
@@ -100,9 +129,10 @@ class Speaker(threading.Thread):
         self.interrupt()
         self._jobs.put(None)
 
-    def sample(self, gender: str, pitch_pct: int = 0, rate_pct: int = 0) -> None:
-        """Menüden "Dinle": bu ayarlarla örnek cümle."""
-        self._jobs.put(("Merhaba, bu benim sesim.", None, self._generation, (gender, pitch_pct, rate_pct)))
+    def sample(self, gender: str, pitch_pct: int = 0, rate_pct: int = 0, voice: int = 0) -> None:
+        """Menüden "Dinle": bu karakterin sesiyle örnek cümle."""
+        self._jobs.put(("Merhaba, bu benim sesim.", None, self._generation,
+                        Delivery(gender, voice, pitch_pct, rate_pct), ""))
 
     # --- iş parçacığı ----------------------------------------------------------------------
 
@@ -137,60 +167,80 @@ class Speaker(threading.Thread):
             except Exception as exc:  # bir satırın hatası dublajı durdurmasın
                 self._log(f"Dublaj hatası: {exc}")
 
-    def _handle(self, text: str, onset: float | None, generation: int, forced=None) -> None:
-        if forced is not None:
-            gender, pitch_pct, rate_pct = forced
-        else:
-            gender, pitch_pct, rate_pct = self._voice_for_line(onset, generation)
-            if gender is None:
-                return  # beklerken yeni satır geldi
-        if generation != self._generation and forced is None:
-            return
-        rate = self.cfg.tts_rate * (1 + rate_pct / 100)
+    def _handle(self, text: str, onset: float | None, generation: int, forced: Delivery | None,
+                original: str) -> None:
+        delivery = forced or self._delivery_for_line(onset, generation, original)
+        if delivery is None or (forced is None and generation != self._generation):
+            return  # beklerken yeni satır geldi
+        rate = self.cfg.tts_rate * (1 + delivery.rate_pct / 100)
         path = None
         if self.cfg.dub_engine == "edge" and time.monotonic() >= self._edge_off_until:
-            path = self._edge(text, gender, pitch_pct, rate)
-        if generation != self._generation and forced is None:
+            path = self._edge(text, delivery, rate)
+        if forced is None and generation != self._generation:
             return
         if path is not None:
             self._play_file(path)
         else:
-            self._play_windows(text, gender, pitch_pct, rate)
+            self._play_windows(text, delivery, rate)
 
-    def _voice_for_line(self, onset: float, generation: int) -> tuple[str | None, int, int]:
-        """Konuşanı bul. Ses yoksa/tanınamazsa erkek, varsayılan ayar."""
-        if not (self.cfg.dub_detect_speaker and self.recorder is not None and self.book is not None
-                and self.recorder.error is None):
-            return "erkek", 0, 0
-        # Konuşmanın başından en az dub_analysis_ms kadarını bekle (perde ve renk için).
-        until = onset + self.cfg.dub_analysis_ms / 1000
-        while time.monotonic() < until:
+    def _delivery_for_line(self, onset: float, generation: int, original: str) -> Delivery | None:
+        """Konuşanı ve duygusunu bul. Tanınan karakter ilk EARLY_S saniyede hemen; değilse
+        dub_analysis_ms kadar dinlenir. Ses yoksa yalnızca metinden duygu, varsayılan erkek ses."""
+        detect = (self.cfg.dub_detect_speaker and self.recorder is not None and self.book is not None
+                  and self.recorder.error is None)
+        if not detect:
+            mood = emo.classify(original, None)
+            rate, pitch, volume = mood.prosody()
+            return Delivery("erkek", 0, pitch, rate, volume, f"duygu: {mood.describe()}")
+        early, full = onset + EARLY_S, onset + self.cfg.dub_analysis_ms / 1000
+        feats = None
+        while True:
             if generation != self._generation or not self._jobs.empty():
-                return None, 0, 0
-            time.sleep(0.02)
-        samples = self.recorder.window(onset - 0.15, time.monotonic())
-        feats = features(samples)
+                return None
+            now = time.monotonic()
+            if now >= early:
+                feats = features(self.recorder.window(onset - 0.15, now))
+                if feats is not None:
+                    best, dist = self.book.best(feats)
+                    if (best is not None and dist <= self.book.MATCH * EARLY_MATCH) or now >= full:
+                        break
+            if now >= full:
+                break
+            time.sleep(0.03)
         if feats is None:
-            self.last_character = "tanınamadı (konuşma sesi yok/çok kısa)"
-            return "erkek", 0, 0
+            mood = emo.classify(original, None)
+            rate, pitch, volume = mood.prosody()
+            self.last_character = f"tanınamadı (konuşma sesi yok/kısa) · {mood.describe()}"
+            return Delivery("erkek", 0, pitch, rate, volume)
+        known, dist = self.book.best(feats)
+        # Duygu: bu satırdaki ses, karakterin KENDİ normaline göre (yeni karakterde yalnızca metin).
+        level = (emo.arousal(feats.loud_db, feats.f0, known.loud_db, known.f0)
+                 if known is not None and dist <= self.book.MATCH else None)
         ch = self.book.identify(feats)
-        self.last_character = f"{ch.label} ({'kadın' if ch.gender == 'kadin' else 'erkek'}, {feats.f0:.0f} Hz)"
-        return ch.gender, ch.pitch_pct, ch.rate_pct
+        mood = emo.classify(original, level)
+        rate, pitch, volume = mood.prosody(ch.expressive)
+        took = int(1000 * (time.monotonic() - onset))
+        self.last_character = (f"{ch.label} ({'kadın' if ch.gender == 'kadin' else 'erkek'}, {feats.f0:.0f} Hz) · "
+                               f"{mood.describe()} · {took} ms'de tanındı")
+        return Delivery(ch.gender, ch.voice, ch.pitch_pct + pitch, ch.rate_pct + rate, volume)
 
     # --- Edge (çevrimiçi) ----------------------------------------------------------------------
 
-    def _edge(self, text: str, gender: str, pitch_pct: int, rate: float) -> Path | None:
+    def _edge(self, text: str, d: Delivery, rate: float) -> Path | None:
         try:
             import edge_tts
         except ImportError:
             self._edge_off_until = time.monotonic() + 3600
             self._log("edge-tts kurulu değil; Windows sesi kullanılıyor (guncelle.bat).")
             return None
-        pitch_hz = _BASE_F0[gender] * pitch_pct / 100
+        pitch_hz = _BASE_F0[d.gender] * d.pitch_pct / 100
+        pool = (EDGE_VOICES_WIDE if self.cfg.dub_voice_pool == "genis" else EDGE_VOICES_TR)[d.gender]
+        voice = pool[d.voice % len(pool)]
+        volume = max(-90.0, min(50.0, (self.cfg.tts_volume - 1) * 100 + d.volume_pct))
 
-        async def fetch() -> bytes:
-            comm = edge_tts.Communicate(text, EDGE_VOICES[gender], rate=_pct((rate - 1) * 100),
-                                        pitch=_hz(pitch_hz), volume=_pct((self.cfg.tts_volume - 1) * 100))
+        async def fetch(name: str) -> bytes:
+            comm = edge_tts.Communicate(text, name, rate=_pct((rate - 1) * 100),
+                                        pitch=_hz(pitch_hz), volume=_pct(volume))
             data = bytearray()
             async for chunk in comm.stream():
                 if chunk.get("type") == "audio":
@@ -198,7 +248,13 @@ class Speaker(threading.Thread):
             return bytes(data)
 
         try:
-            data = self._loop.run_until_complete(asyncio.wait_for(fetch(), timeout=4.0))
+            try:
+                data = self._loop.run_until_complete(asyncio.wait_for(fetch(voice), timeout=4.0))
+            except Exception:
+                if voice == pool[0]:
+                    raise
+                # Çok dilli ses okuyamadı: aynı satır yerli Türkçe sesle.
+                data = self._loop.run_until_complete(asyncio.wait_for(fetch(pool[0]), timeout=4.0))
         except Exception as exc:
             self._edge_fail += 1
             if self._edge_fail >= 3:
@@ -226,12 +282,12 @@ class Speaker(threading.Thread):
 
     # --- Windows (çevrimdışı) ------------------------------------------------------------------
 
-    def _play_windows(self, text: str, gender: str, pitch_pct: int, rate: float) -> None:
+    def _play_windows(self, text: str, d: Delivery, rate: float) -> None:
         from winrt.windows.media.core import MediaSource
 
         if self._windows_voice is None:
             return
-        pitch_hz = (_WINDOWS_FEMALE_PITCH_HZ if gender == "kadin" else 0) + _BASE_F0[gender] * pitch_pct / 100
+        pitch_hz = (_WINDOWS_FEMALE_PITCH_HZ if d.gender == "kadin" else 0) + _BASE_F0[d.gender] * d.pitch_pct / 100
         ssml = (f"<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='tr-TR'>"
                 f"<voice name='{escape(self._windows_voice.display_name)}'>"
                 f"<prosody pitch='{_hz(pitch_hz)}' rate='{max(0.5, min(3.0, rate)):.2f}'>{escape(text)}</prosody>"
@@ -240,7 +296,7 @@ class Speaker(threading.Thread):
         stream = self._loop.run_until_complete(self._ssml(ssml))
         player = self._player
         player.pause()
-        player.volume = max(0.0, min(1.0, float(self.cfg.tts_volume)))
+        player.volume = max(0.0, min(1.0, float(self.cfg.tts_volume) * (1 + d.volume_pct / 100)))
         player.source = MediaSource.create_from_stream(stream, stream.content_type)
         player.play()
 

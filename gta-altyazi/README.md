@@ -128,6 +128,19 @@ Türkçe satır, konuşan karakterin sesine uygun bir sesle okunur:
    Ulaşılamazsa satır **windows** (çevrimdışı) sesiyle okunur; Windows'ta Türkçe ses genelde tektir,
    kadın sesi perdesi yükseltilerek yapılır.
 4. Yeni satır gelince önceki okuma hemen kesilir.
+5. **Duygu:** konuşanın bu satırdaki ses gücü ve perdesi **kendi normaline göre** (bağırıyor mu,
+   alçak sesle mi konuşuyor) ve metindeki ipuçları (ünlem, BÜYÜK HARF, küfür, korku/üzüntü/heyecan
+   kelimeleri) birleştirilir: sakin, heyecanlı, sinirli, üzgün ya da korkmuş. Türkçe ses buna göre
+   hızlanır/yavaşlar, incelir/kalınlaşır, yükselir/kısılır. Her karakterin bir "duygu gücü" vardır.
+6. **Hızlı tanıma:** hafızadaki bir karakter genelde ilk ~0,3 sn'de tanınır; yalnızca emin olunamazsa
+   0,6 sn dinlenir. Menü > Dublaj'da son konuşanın kim olduğu, duygusu ve kaç ms'de tanındığı görünür.
+
+Ses havuzu (menü > Dublaj): **turkce** yalnızca Emel/Ahmet kullanır (karakterler perde/hızla ayrılır);
+**genis** Microsoft'un çok dilli seslerini de kullanır: her karakter gerçekten farklı bir sesle konuşur
+ama bu seslerin Türkçesi aksanlı olabilir. "Sesini dinle" ile deneyip karar verin.
+
+**Windows (çevrimdışı) sesi:** Windows'ta Türkçe için yalnızca erkek ses (Tolga) vardır. Kurmak için:
+Ayarlar > Saat ve dil > Konuşma > Sesleri yönet > Ses ekle > Türkçe, sonra bilgisayarı yeniden başlatın.
 
 Konuşan tanıma oyun müziği ve efektler karıştığında yanılabilir: menü > Dublaj > Karakter hafızası'ndan
 karakterin cinsiyetini düzeltebilir (kalıcıdır), sesini dinleyebilir, silebilir ya da hafızayı
