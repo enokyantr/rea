@@ -293,7 +293,7 @@ import pytest  # noqa: E402
     ("Irm not doing this", "I'm not doing this"),
     ("[ike my women", "like my women"),
     ("(ike my women", "like my women"),
-    ("that's exect[y it", "that's exectly it"),
+    ("that's exect[y it", "that's exactly it"),
     ("Itrs fine, yourre late, we can't", "It's fine, you're late, we can't"),
     ("I wonrt go, I cAnrt", "I won't go, I cAn't"),
     ("me 'cause lfm beautiful", "me 'cause I'm beautiful"),
@@ -359,3 +359,20 @@ def test_reading_score_prefers_real_english_words(worse, better):
     from altyazi.textproc import reading_score
 
     assert reading_score(better) > reading_score(worse)
+
+
+@pytest.mark.parametrize("raw,expected", [
+    # Gerçek RapidOCR okumaları (kullanıcının kayıtları)
+    ("you'd get some bitches on your dlick.", "you'd get some bitches on your dick."),
+    ("maybe Tanisha'll caill your dlog-ass", "maybe Tanisha'll call your dog-ass"),
+    ("if she ever stop fucking with that brain surgeor", "if she ever stop fucking with that brain surgeon"),
+    ("or lawyer she fuckinig with.", "or lawyer she fucking with."),
+    ("Niggal....", "Nigga...."),
+    ("Ah, nigga, don't hate me 'cause T'm beautiful, nigga.", "Ah, nigga, don't hate me 'cause I'm beautiful, nigga."),
+    # Doğru kelimeler, isimler ve kesme işaretli biçimler değişmez
+    ("Wassup, can a loc come up in your crib?", "Wassup, can a loc come up in your crib?"),
+    ("I wouldn't go to Lamar and Tanisha's house.", "I wouldn't go to Lamar and Tanisha's house."),
+    ("Meet Lester at the Vanilla Unicorn, Franklin.", "Meet Lester at the Vanilla Unicorn, Franklin."),
+])
+def test_normalize_spell_fixes_rapidocr_slips(raw, expected):
+    assert normalize([raw]) == expected

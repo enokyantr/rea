@@ -24,7 +24,7 @@ def _fold_accents(text: str) -> str:
 def normalize(lines: list[str]) -> str:
     """Satırları tek cümleye birleştirir, boşlukları ve kenar çöplerini temizler."""
     text = _fold_accents(" ".join(line.strip() for line in lines if line.strip()))
-    text = _fix_ocr_confusions(_SPACE.sub(" ", text).strip())
+    text = _spell_fix(_fix_ocr_confusions(_SPACE.sub(" ", text).strip()))
     text = _EDGE_JUNK.sub("", text).strip()
     # Satır sonunda kelime bölünmesi: "some- thing" -> "something"
     text = re.sub(r"(\w)- (\w)", r"\1\2", text)
@@ -43,7 +43,7 @@ _L_LOOKALIKE = re.compile(r"(?<=[A-Za-z])[\[{(](?=[a-z])|(?<![\w])[\[{(](?=[a-z]
 
 
 # Logda tekrar tekrar görülen, İngilizcede olmayan okumalar (büyük/küçük harf duyarlı).
-_WORD_FIXES = {"lfm": "I'm", "Ifm": "I'm", "lrm": "I'm", "Ilke": "like", "Ilike": "I like"}
+_WORD_FIXES = {"lfm": "I'm", "Ifm": "I'm", "lrm": "I'm", "T'm": "I'm", "Ilke": "like", "Ilike": "I like"}
 _WORD_FIX = re.compile(r"(?<![\w'])(" + "|".join(_WORD_FIXES) + r")(?![\w'])")
 
 
@@ -179,7 +179,8 @@ _SLANG_WORDS = {"nigga", "niggas", "niggaz", "yee", "loc", "locs", "wassup", "y'
 
 
 @lru_cache(maxsize=1)
-def _english_words() -> frozenset[str]:
+def _word_freq() -> dict[str, int]:
+    """Kelime -> sıklık. pyspellchecker kurulu değilse boş (yalnızca kelime benzerliği kullanılır)."""
     try:
         import gzip
         import json
@@ -187,9 +188,57 @@ def _english_words() -> frozenset[str]:
 
         with gzip.open(files("spellchecker") / "resources" / "en.json.gz", "rt", encoding="utf-8") as f:
             freq = json.load(f)
-    except Exception:  # pyspellchecker kurulu değil: yalnızca kelime benzerliğiyle puanlanır
-        return frozenset()
-    return frozenset(w for w, n in freq.items() if n >= _MIN_FREQ) | _SLANG_WORDS
+    except Exception:
+        return {}
+    words = {w: n for w, n in freq.items() if n >= _MIN_FREQ}
+    words.update(dict.fromkeys(_SLANG_WORDS, 1_000_000))
+    return words
+
+
+# Yazım düzeltmesi: OCR'ın sistematik hataları. RapidOCR çoğunlukla fazladan bir iz ekler
+# ("dlick", "caill", "Niggal", "fuckinig", "cdog") ya da bir harfi karıştırır ("surgeor").
+# Yalnızca sözlükte OLMAYAN, en az 4 harfli, kesme işaretine bitişik olmayan kelimeler düzeltilir;
+# önce harf silme, sonra harf değiştirme denenir ve aday yeterince yaygın olmalıdır.
+_SPELL_TOKEN = re.compile(r"(?<![\w'’])[A-Za-z]{4,}(?![\w'’])")
+_SPELL_MIN_FREQ = 1000
+_LETTERS = "abcdefghijklmnopqrstuvwxyz"
+
+
+def _spell_candidate(word: str, freq: dict[str, int]) -> str | None:
+    deletions = {word[:i] + word[i + 1:] for i in range(len(word))}
+    substitutions = {word[:i] + c + word[i + 1:] for i in range(len(word)) for c in _LETTERS}
+    for candidates in (deletions, substitutions):
+        best = max(candidates, key=lambda c: freq.get(c, 0))
+        if freq.get(best, 0) >= _SPELL_MIN_FREQ:
+            return best
+    return None
+
+
+def _spell_fix(text: str) -> str:
+    freq = _word_freq()
+    if not freq:
+        return text
+
+    def fix(m: re.Match) -> str:
+        token = m.group(0)
+        low = token.lower()
+        if low in freq:
+            return token
+        # Özel isimlere dokunma: yalnızca küçük harfli kelime ya da satır başındaki büyük harfli kelime.
+        first = not text[:m.start()].strip(" \"'(-")
+        if not (token.islower() or (first and token[0].isupper() and token[1:].islower())):
+            return token
+        best = _spell_candidate(low, freq)
+        if best is None:
+            return token
+        return best.capitalize() if token[0].isupper() else best
+
+    return _SPELL_TOKEN.sub(fix, text)
+
+
+def _known_words(tokens: list[str]) -> int:
+    freq = _word_freq()
+    return sum(len(t) for t in tokens if t.lower().replace("’", "'") in freq)
 
 
 def reading_score(text: str) -> float:
@@ -201,8 +250,7 @@ def reading_score(text: str) -> float:
     0.199'dan 0.118'e düşürdü (karakter hata oranı). Uzun ve temiz okuma kazanır; kısmi okuma
     ("Go to") tam okumayı ("Go to Franklin's house.") yenemez."""
     tokens = _TOKEN.findall(text)
-    words = _english_words()
-    known = sum(len(t) for t in tokens if t.lower().replace("’", "'") in words)
+    known = _known_words(tokens)
     good = sum(len(t) for t in tokens if t.isascii() and _wordlike(t))
     non_ascii = sum(1 for ch in text if ch.isalpha() and not ch.isascii())
     junk = len(_JUNK.findall(text))
