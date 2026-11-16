@@ -35,6 +35,7 @@ class Controller(Protocol):
     def tts_voices(self) -> list[str]: ...
     def set_tts(self, enabled: bool) -> str | None: ...
     def open_folder(self, which: str) -> None: ...
+    def desktop_shortcut(self) -> str: ...
 
 
 class ControlPanel:
@@ -131,6 +132,11 @@ class ControlPanel:
         self.last_lbl.grid(row=base + 5, column=0, columnspan=6, sticky="w")
         ttk.Label(f, text="Hazır konumlar GTA V düzenine göre tahminidir; GTA 6'da \"Bölge seç\" ile fareyle seçin.",
                   foreground=GRAY).grid(row=base + 6, column=0, columnspan=6, sticky="w", pady=(10, 0))
+        shortcut_lbl = ttk.Label(f, text="", foreground=GRAY)
+        ttk.Button(f, text="Masaüstüne kısayol ekle",
+                   command=lambda: shortcut_lbl.configure(text=self.ctl.desktop_shortcut())).grid(
+            row=base + 7, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        shortcut_lbl.grid(row=base + 7, column=2, columnspan=4, sticky="w", pady=(10, 0))
 
     # Görünüm ----------------------------------------------------------------------------------
 

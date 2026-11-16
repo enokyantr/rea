@@ -637,6 +637,25 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
         save_soon()
         return None
 
+    def desktop_shortcut() -> str:
+        """Masaüstüne "GTA Altyazı" kısayolu (baslat.bat). OneDrive masaüstü dahil."""
+        import subprocess
+
+        folder = cfg_path.parent.resolve()
+        script = (
+            "$d=[Environment]::GetFolderPath('Desktop');"
+            "$s=(New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $d 'GTA Altyazı.lnk'));"
+            f"$s.TargetPath='{folder / 'baslat.bat'}';$s.WorkingDirectory='{folder}';"
+            "$s.Description='GTA Türkçe altyazı';$s.Save()"
+        )
+        try:
+            subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+                           check=True, capture_output=True, timeout=15,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except (OSError, subprocess.SubprocessError) as exc:
+            return f"Kısayol oluşturulamadı: {exc}"
+        return "Masaüstüne \"GTA Altyazı\" kısayolu eklendi."
+
     def open_folder(which: str) -> None:
         if which == "log":
             folder = Path(cfg.session_log_dir)
@@ -757,6 +776,9 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
 
         def open_folder(self, which: str) -> None:
             open_folder(which)
+
+        def desktop_shortcut(self) -> str:
+            return desktop_shortcut()
 
     panel = None
     panel = ControlPanel(root, Controller())
