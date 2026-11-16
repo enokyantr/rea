@@ -170,26 +170,43 @@ WM_QUIT = 0x0012
 
 
 class HotkeyThread(threading.Thread):
-    """Ctrl+Alt+<tuş> global kısayolları. Oyun penceresi odaktayken de çalışır."""
+    """Global kısayollar (oyun penceresi odaktayken de çalışır).
 
-    def __init__(self, keys: dict[str, Callable[[], None]]):
+    `bindings`: [(etiket, değiştiriciler, sanal tuş kodu, geri çağırma)]. Kayıt sonucu `status`
+    sözlüğünde: etiket -> True (çalışıyor) / False (başka program kullanıyor)."""
+
+    def __init__(self, bindings: list[tuple[str, int, int, Callable[[], None]]]):
         super().__init__(daemon=True, name="hotkeys")
-        self._keys = list(keys.items())
+        self._bindings = list(bindings)
         self._thread_id: int | None = None
-        self.failed: list[str] = []
+        self.status: dict[str, bool] = {}
+        self.ready = threading.Event()
+
+    @property
+    def failed(self) -> list[str]:
+        return [label for label, ok in self.status.items() if not ok]
 
     def run(self) -> None:
         self._thread_id = ctypes.WinDLL("kernel32").GetCurrentThreadId()
-        for idx, (key, _cb) in enumerate(self._keys, start=1):
-            if not user32.RegisterHotKey(None, idx, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, ord(key.upper())):
-                self.failed.append(f"Ctrl+Alt+{key.upper()}")
+        for idx, (label, mods, vk, _cb) in enumerate(self._bindings, start=1):
+            self.status[label] = bool(user32.RegisterHotKey(None, idx, mods | MOD_NOREPEAT, vk))
+        self.ready.set()
         msg = wintypes.MSG()
         while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
-            if msg.message == WM_HOTKEY and 1 <= msg.wParam <= len(self._keys):
-                self._keys[msg.wParam - 1][1]()
-        for idx in range(1, len(self._keys) + 1):
+            if msg.message == WM_HOTKEY and 1 <= msg.wParam <= len(self._bindings):
+                self._bindings[msg.wParam - 1][3]()
+        for idx in range(1, len(self._bindings) + 1):
             user32.UnregisterHotKey(None, idx)
 
     def stop(self) -> None:
         if self._thread_id is not None:
             user32.PostThreadMessageW(self._thread_id, WM_QUIT, 0, 0)
+
+
+def hotkey_free(mods: int, vk: int) -> bool:
+    """Bu kısayol şu an boşta mı (hiçbir program, bu program da dahil, kaydetmemiş)?"""
+    probe_id = 0xBFFE
+    if not user32.RegisterHotKey(None, probe_id, mods | MOD_NOREPEAT, vk):
+        return False
+    user32.UnregisterHotKey(None, probe_id)
+    return True

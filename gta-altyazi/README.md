@@ -80,19 +80,49 @@ proje klasörüne kopyalayın ve `pip install -r requirements-gpu.txt` çalışt
 
 1. Oyunda **İngilizce altyazıyı açın**, mümkünse altyazı boyutunu büyük yapın.
 2. PS Remote Play'i açın; tam ekran yerine **ekranı kaplayan pencere** daha sorunsuzdur.
-3. `baslat.bat` ile programı başlatın.
-4. İlk seferde **Ctrl+Alt+R** ile altyazının çıktığı alanı fareyle seçin.
+3. `baslat.bat` ile programı başlatın. **Ayar menüsü** açılır (sonra **Ctrl+Alt+M** ile aç/gizle).
+4. İlk seferde menüden ya da **Ctrl+Alt+R** ile altyazının çıktığı alanı fareyle seçin.
    Seçim Remote Play penceresine göre oransal kaydedilir; pencere taşınsa/boyutlansa da uyar.
+
+### Menü (Ctrl+Alt+M)
+
+- **Durum:** çeviriyi duraklat/devam ettir; altyazı, görev ve telefon okumasının her biri için
+  "Çalışıyor ✔ / Kapalı / Bölge seçilmedi" durumu, aç/kapat, bölge seç, hazır konum, kaldır;
+  kullanılan OCR ve çeviri motorları; son satır ve gecikmesi.
+- **Görünüm:** yazı boyutu, konumu, kontur, yazı tipi, İngilizceyi de göster, yayında görünürlük.
+  Anında uygulanır.
+- **Çeviri / OCR ve hız:** son çevirmen, model, sansürsüz çeviri, OCR motoru ve cihazı, hızlı kabul.
+  Motor değiştiren ayarlar **Kaydet ve yeniden başlat** ile uygulanır.
+- **Kısayollar:** her işlemin kısayolu ve durumu ("✔ çalışıyor", "✖ başka program kullanıyor",
+  "— atanmamış"). İşlemi seçip **Değiştir**'e basın, yeni tuş birleşimine basın (Ctrl ve/veya Alt ile).
+  **Boştaki kısayolları göster** hangi Ctrl+Alt birleşimlerinin kullanılabildiğini listeler.
+- **Ses ve kayıt:** sesli okuma (dublaj) ve oturum kaydı.
+
+Varsayılan kısayollar (menüden değiştirilebilir):
 
 | Kısayol | İşlev |
 |---|---|
+| Ctrl+Alt+M | Menüyü aç / gizle |
 | Ctrl+Alt+R | Altyazı bölgesini seç |
 | Ctrl+Alt+G | Görev hedefi bölgesini seç (seçicide Delete: kaldır) |
 | Ctrl+Alt+T | Telefon mesajı bölgesini seç (seçicide Delete: kaldır) |
-| Ctrl+Alt+H | Son satırlar paneli (aç/kapat) |
 | Ctrl+Alt+S | Duraklat / devam |
+| Ctrl+Alt+PageUp / PageDown | Yazıyı büyüt / küçült |
+| Ctrl+Alt+↑ / ↓ | Yazıyı yukarı / aşağı taşı |
 | Ctrl+Alt+O | Türkçenin üstünde İngilizceyi de göster |
+| Ctrl+Alt+H | Son satırlar paneli (aç/kapat) |
+| Ctrl+Alt+D | Sesli okuma (dublaj) aç / kapat |
 | Ctrl+Alt+Q | Çıkış |
+
+### Sesli okuma (dublaj)
+
+Türkçe satır Windows'un yerleşik Türkçe sesiyle okunur (ücretsiz, yerel). Türkçe ses yoksa:
+Ayarlar > Saat ve dil > Konuşma > Ses ekle > Türkçe. Yeni satır gelince önceki okuma kesilir.
+
+### Oturum kaydı
+
+Görülen her satır İngilizce + Türkçe olarak `kayitlar/` klasörüne (oturum başına bir dosya) yazılır:
+kaçırdığınız sahneleri okuyabilir, kötü çevirileri toplu bildirebilirsiniz.
 
 ## Görev ve telefon yazıları
 

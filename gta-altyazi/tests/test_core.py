@@ -431,3 +431,34 @@ def test_box_signature_ignores_background_motion_but_sees_a_new_line():
     gone = frame.copy()
     gone[60:80, 100:500] = 40
     assert not same_signature(sig, box_signature(gone, box, 190), 0.03)
+
+
+def test_hotkeys_parse_normalize_and_merge():
+    from altyazi import hotkeys as hk
+
+    assert hk.parse("ctrl+alt+r") == (hk.MOD_CONTROL | hk.MOD_ALT, 0x52)
+    assert hk.normalize("Alt+Ctrl+PageUp") == "ctrl+alt+pageup"
+    assert hk.display("ctrl+alt+up") == "Ctrl+Alt+↑"
+    with pytest.raises(hk.HotkeyError):
+        hk.parse("shift+r")  # oyunda yazmayı bozardı
+    with pytest.raises(hk.HotkeyError):
+        hk.parse("ctrl+alt+nope")
+    merged = hk.merged({"pause": "ctrl+alt+p", "menu": "bozuk+x", "eski-islem": "ctrl+alt+z"})
+    assert merged["pause"] == "ctrl+alt+p" and merged["menu"] == hk.DEFAULT_HOTKEYS["menu"]
+    assert "eski-islem" not in merged
+    assert hk.conflicts({"a": "ctrl+alt+x", "b": "ctrl+alt+x", "c": ""}) == {"ctrl+alt+x": ["a", "b"]}
+    assert hk.from_tk_event("Prior", 0x4 | 0x20000) == "ctrl+alt+pageup"
+    assert hk.from_tk_event("Control_L", 0x4) is None
+
+
+def test_config_keeps_hotkeys_and_region_switches(tmp_path):
+    path = tmp_path / "config.json"
+    cfg = config_mod.Config()
+    cfg.hotkeys["pause"] = "ctrl+alt+p"
+    cfg.set_extra("gorev", Region(0.1, 0.1, 0.2, 0.2))
+    cfg.extra("gorev").enabled = False
+    cfg.region_enabled = False
+    config_mod.save(cfg, path)
+    loaded = config_mod.load(path)
+    assert loaded.hotkeys["pause"] == "ctrl+alt+p" and loaded.hotkeys["menu"] == "ctrl+alt+m"
+    assert loaded.extra("gorev").enabled is False and loaded.region_enabled is False

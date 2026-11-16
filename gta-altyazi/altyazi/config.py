@@ -7,6 +7,8 @@ import os
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
+from .hotkeys import DEFAULT_HOTKEYS, merged as merged_hotkeys
+
 
 @dataclass
 class Region:
@@ -26,6 +28,8 @@ class ExtraRegion:
     region: Region
     # Türkçe, İngilizcenin üstünü kapatan kutuda gösterilir ("cover") ya da hemen üstünde ("adaptive").
     display_mode: str = "cover"
+    # Menüden / kısayolla kapatılabilir; bölge silinmeden okuma durur.
+    enabled: bool = True
 
 
 # Kısayol tuşu (Ctrl+Alt+<tuş>) -> ek bölge adı.
@@ -83,6 +87,8 @@ class Config:
     # Bulunamazsa ana ekranın tamamı esas alınır.
     window_titles: list[str] = field(default_factory=lambda: ["PS Remote Play", "Chiaki"])
     region: Region = field(default_factory=Region)
+    # Ana altyazı okuması açık mı (menüden kapatılabilir).
+    region_enabled: bool = True
     # Görev / telefon gibi ek okuma bölgeleri (Ctrl+Alt+G / Ctrl+Alt+T ile seçilir).
     extra_regions: list[ExtraRegion] = field(default_factory=list)
     # Son satırlar paneli (Ctrl+Alt+H) kaç satır tutsun.
@@ -155,6 +161,21 @@ class Config:
     cover_padding_px: int = 6
     show_original: bool = False
 
+    # Kısayollar: işlem -> "ctrl+alt+r" (menüden değiştirilir; boş = atanmamış).
+    hotkeys: dict = field(default_factory=lambda: dict(DEFAULT_HOTKEYS))
+    # Başlatınca ayar menüsü açılsın.
+    show_menu_on_start: bool = True
+
+    # Oturum kaydı: görülen her satır (İngilizce + Türkçe) kayitlar/ klasörüne yazılır.
+    session_log: bool = True
+    session_log_dir: str = "kayitlar"
+
+    # Sesli okuma (dublaj): Türkçe satırı Windows'un Türkçe sesiyle okur.
+    tts_enabled: bool = False
+    tts_voice: str = ""          # boş: ilk Türkçe ses
+    tts_rate: float = 1.15       # 0.5 - 3.0
+    tts_volume: float = 1.0      # 0.0 - 1.0
+
     # Çeviri önbelleği (aynı satırı tekrar çevirip DeepL kotası harcamamak için).
     cache_file: str = "ceviri_onbellek.jsonl"
 
@@ -166,7 +187,8 @@ class Config:
         old = self.extra(name)
         self.extra_regions = [r for r in self.extra_regions if r.name != name]
         if region is not None:
-            self.extra_regions.append(ExtraRegion(name, region, old.display_mode if old else "cover"))
+            self.extra_regions.append(ExtraRegion(name, region, old.display_mode if old else "cover",
+                                                  old.enabled if old else True))
 
     def resolved_auth_key(self) -> str:
         return self.deepl_auth_key.strip() or os.environ.get("DEEPL_AUTH_KEY", "").strip()
@@ -205,10 +227,13 @@ def _from_dict(data: dict) -> Config:
             if not isinstance(value, list):
                 continue
             cfg.extra_regions = [
-                ExtraRegion(str(item["name"]), _region(item["region"]), str(item.get("display_mode", "cover")))
+                ExtraRegion(str(item["name"]), _region(item["region"]), str(item.get("display_mode", "cover")),
+                            bool(item.get("enabled", True)))
                 for item in value
                 if isinstance(item, dict) and "name" in item and "region" in item
             ]
+        elif key == "hotkeys":
+            cfg.hotkeys = merged_hotkeys(value if isinstance(value, dict) else {})
         else:
             setattr(cfg, key, value)
     return cfg

@@ -14,6 +14,10 @@ from .translate import CachedTranslator, DeepLBackend, DryRunBackend
 APP_DIR = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
 
 
+# Menüden "Kaydet ve yeniden başlat": baslat.bat bu çıkış koduyla programı yeniden açar.
+RESTART_CODE = 3
+
+
 def main() -> int:
     # Konsol dışına (dosya/pipe) yazarken Windows varsayılanı cp1252 Türkçe karakterlerde çöker.
     for stream in (sys.stdout, sys.stderr):
@@ -165,9 +169,15 @@ def main() -> int:
     if args.ocr_test:
         app.run_ocr_test(cfg, args.ocr_test, make_translator(), args.full)
         return 0
-    app.run_gui(cfg, args.config, make_translator, args.debug,
-                dump_dir=(args.config.parent / "dump") if args.dump else None)
-    return 0
+    info = [("Çeviri modu", make_translator().mode)]
+    if local is not None:
+        info.append(("Taslak çeviri", local.describe()))
+    if final is not None:
+        model = getattr(getattr(final, "_backend", None), "model", "")
+        info.append(("Son çevirmen", f"{cfg.final_translator} {model}".strip()))
+    restart = app.run_gui(cfg, args.config, make_translator, args.debug,
+                          dump_dir=(args.config.parent / "dump") if args.dump else None, engine_info=info)
+    return RESTART_CODE if restart else 0
 
 
 def _glossary(cfg, args) -> tuple[dict[str, str], str]:

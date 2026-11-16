@@ -100,6 +100,14 @@ class Overlay:
         self._state = None
         self._redraw()
 
+    def apply_style(self) -> None:
+        """Yazı tipi/boyutu, kontur ve konum ayarı (overlay_gap_px) değişti: anında yeniden çiz."""
+        self.font.configure(family=self.cfg.font_family, size=self.cfg.font_size)
+        self.small_font.configure(family=self.cfg.font_family, size=max(10, self.cfg.font_size * 6 // 10))
+        if not self.adaptive:
+            self.palette = Palette(self.cfg.text_color, self.cfg.outline_color, self.cfg.outline_px)
+        self._redraw()
+
     def hide(self) -> None:
         self.win.withdraw()
         self.screen_rect = None
@@ -286,6 +294,14 @@ class HistoryPanel:
         win32.make_click_through(hwnd)
         win32.exclude_from_capture(hwnd)
         self.refresh(entries, base)
+
+    def apply_style(self) -> None:
+        """Yazı tipi/boyutu, kontur ve konum ayarı (overlay_gap_px) değişti: anında yeniden çiz."""
+        self.font.configure(family=self.cfg.font_family, size=self.cfg.font_size)
+        self.small_font.configure(family=self.cfg.font_family, size=max(10, self.cfg.font_size * 6 // 10))
+        if not self.adaptive:
+            self.palette = Palette(self.cfg.text_color, self.cfg.outline_color, self.cfg.outline_px)
+        self._redraw()
 
     def hide(self) -> None:
         self.win.withdraw()
