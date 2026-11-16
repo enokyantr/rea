@@ -263,7 +263,8 @@ class Pipeline(threading.Thread):
                     t0 = time.perf_counter()
                     result = self._read_text(ocr, gray)
                     text = result.text
-                    confident = bool(text) and (result.confidence or 0.0) >= cfg.fast_accept_confidence
+                    confident = (bool(text) and (result.confidence or 0.0) >= cfg.fast_accept_confidence
+                                 and textproc.all_words_known(text))
                     if result.center_x is not None and text:
                         self._center_x = round(origin.left + result.center_x)
                     if self.debug and text != last_text:

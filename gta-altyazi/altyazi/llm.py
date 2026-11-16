@@ -58,6 +58,7 @@ EXAMPLES_UNCENSORED = [
      "Hassiktir kanka. Kıl payı kurtulduk."),
     (None, "You trippin', dawg. Swing by my crib later.", "Kafayı yemişsin kanka. Sonra eve uğra."),
     (None, "That punk-ass fool still owes me money.", "O it herif hâlâ bana para borçlu."),
+    (None, "Nigga...", "Lan..."),
 ]
 EXAMPLES_PLAIN = [
     ("Holy shit, bro. That was close.", "Get in the car, we're leaving.", "Arabaya bin, gidiyoruz."),
@@ -73,6 +74,24 @@ _TAGS = re.compile(r"</?(?:line|context)>")
 # Modelin çevirinin sonuna eklediği açıklama: "... (Not: "nigga" kelimesi ...)"
 _NOTE = re.compile(r"\s*\(\s*(?:not|note|açıklama|explanation)\s*:.*$", re.IGNORECASE | re.DOTALL)
 _NOTE_LINE = re.compile(r"^\s*(?:not|note|açıklama|explanation)\s*:", re.IGNORECASE)
+
+
+# Küçük model bazen çeviri yerine açıklama/ret yazıyor (gerçek loglar):
+# "(Not translated as per guidelines. In Turkish street talk, "nigga" would be ...)",
+# "Bu cümle anlaşılmaz ve hatalı görünüyor... Türkçe'ye çeviremem."
+_META = re.compile(
+    r"\b(?:not translated|translat(?:e|ed|ion|ing)\b|guidelines?|original (?:text|line)|as an ai|"
+    r"i can(?:no|')t|çeviremem|çevrilemez|çevirmek mümkün değil|orijinal metin|anlaşılmaz)",
+    re.IGNORECASE,
+)
+
+
+def is_meta_reply(text: str) -> bool:
+    """Çeviri değil, modelin kendi açıklaması mı? (Tamamı parantez içinde ya da açıklama ifadesi.)"""
+    stripped = text.strip()
+    if stripped.startswith("(") and stripped.endswith(")"):
+        return True
+    return bool(_META.search(stripped))
 
 
 def clean_output(text: str) -> str:
@@ -219,4 +238,6 @@ class OllamaBackend:
         out = clean_output(self._chat(_user_message(context, text), timeout=self._timeout))
         if not out:
             raise RuntimeError("Yerel LLM boş yanıt verdi")
+        if is_meta_reply(out):  # hata sayılır: taslak çeviri ekranda kalır, önbelleğe girmez
+            raise RuntimeError(f"Yerel LLM çeviri yerine açıklama yazdı: {out[:80]}")
         return out

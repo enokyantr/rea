@@ -142,3 +142,17 @@ def test_num_ctx_and_context_switch(fake):
     assert body["options"]["num_ctx"] == 1024
     assert body["messages"][-1]["content"] == "<line>Hi</line>"  # bağlam gönderilmedi
     assert backend.cache_namespace() != OllamaBackend("aya-expanse:8b", fake.url).cache_namespace()
+
+
+@pytest.mark.parametrize("reply,meta", [
+    # Gerçek loglardan: çeviri yerine açıklama/ret
+    ('(Not translated as per guidelines. In Turkish street talk, "nigga" would be "it" or "şerefsiz".)', True),
+    ("Bu cümle anlaşılmaz ve hatalı görünüyor. Orijinal metinde bulunmadığı için Türkçe'ye çeviremem.", True),
+    ("Direksiyonu çevir, hadi!", False),
+    ("Siktir git lan.", False),
+    ("Lan...", False),
+])
+def test_meta_replies_are_detected(reply, meta):
+    from altyazi.llm import is_meta_reply
+
+    assert is_meta_reply(reply) is meta

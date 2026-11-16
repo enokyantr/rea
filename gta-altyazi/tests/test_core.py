@@ -402,3 +402,11 @@ def test_confident_reading_is_shown_without_waiting_for_a_second_read():
     assert s.feed("I think you are right, Lamar.", 5.2, confident=True) is None  # aynı satır tekrar gösterilmez
     assert s.feed("Get him a hybrid.", 6.0) is None  # emin olunmayan yeni satır doğrulama bekler
     assert isinstance(s.feed("Get him a hybrid.", 6.05), Show)
+
+
+def test_fast_accept_needs_real_words():
+    from altyazi.textproc import all_words_known
+
+    assert not all_words_known("acist")  # satır başının yarım okuması
+    assert all_words_known("Hey, Simeon")  # isim
+    assert all_words_known("Wassup, can a loc come up in your crib?")  # argo listesi

@@ -100,7 +100,7 @@ def needs_uncensored(text: str) -> bool:
 # Sokak argosu / ağız (küfürsüz de olsa): yerel taslak model bunları anlamıyor ("Yall telling me"
 # -> "Yall anlatıyor"), dil modeline gönderilir. OCR kesme işaretini düşürebildiği için ikisi de.
 _SLANG = re.compile(
-    r"\b(?:y'?all|ain'?t|finna|tryna|gotta|lemme|gimme|imma|'?cause|cuz|'?bout|nah|yo|ya|da"
+    r"\b(?:y'?all|ain'?t|finna|tryna|lemme|gimme|imma|'?cause|cuz|'?bout|nah|yo|ya|da"
     r"|homeboy|homes|homey|crib|loc|locs|ese|vato|playa|hood|cuh|fam|dope|ballin|trippin|frontin"
     r"|\w{2,}in'(?!\w)|(?:call|talk|play|mess|ly|go|do|com|say|noth|someth|buzz|bugg|chill|roll|rid|"
     r"hang|look|lov|kidd|kill|runn|work|think|try|keep|hold|gett|tell|want|need|walk)in)\b",
@@ -318,6 +318,21 @@ def _split_glued(text: str) -> str:
         return " ".join("I" if w == "i" else ("I" + w[1:] if w.startswith("i'") else w) for w in words)
 
     return _GLUED.sub(fix, text)
+
+
+def all_words_known(text: str) -> bool:
+    """Her kelime sözlükte (ya da büyük harfle başlayan bir isim) mi? Satır başındaki yarım
+    okumalar ("acist", "et a tax rebate") tek okumayla hızlı kabul edilmesin diye."""
+    freq = _word_freq()
+    if not freq:
+        return True
+    for t in _TOKEN.findall(text):
+        if len(t) < 2 or t.lower().replace("’", "'") in freq:
+            continue
+        if t[0].isupper() and t[1:].islower():
+            continue
+        return False
+    return True
 
 
 def _known_words(tokens: list[str]) -> int:
