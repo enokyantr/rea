@@ -137,10 +137,12 @@ def test_clean_output(raw, expected):
 
 def test_num_ctx_and_context_switch(fake):
     backend = OllamaBackend("aya-expanse:8b", fake.url, num_ctx=1024, use_context=False)
-    backend.translate("Hi", "Previous line")
+    backend.translate("Hi", "Previous line.")
     body = fake.chats[-1]
     assert body["options"]["num_ctx"] == 1024
     assert body["messages"][-1]["content"] == "<line>Hi</line>"  # bağlam gönderilmedi
+    backend.translate("or lawyer she fucking with.", "if she ever stop fucking with that brain surgeon")
+    assert fake.chats[-1]["messages"][-1]["content"].startswith("<context>")  # yarım cümle: bağlamla
     assert backend.cache_namespace() != OllamaBackend("aya-expanse:8b", fake.url).cache_namespace()
 
 
@@ -179,3 +181,23 @@ def test_ensure_running_does_nothing_when_ollama_is_up(monkeypatch):
     import subprocess
     monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: (_ for _ in ()).throw(AssertionError("başlatılmamalı")))
     assert backend.ensure_running(lambda m: None)
+
+
+@pytest.mark.parametrize("previous,line,expected", [
+    ("if she ever stop fucking with that brain surgeon", "or lawyer she fucking with.", True),
+    ("Maybe if you got rid of that haircut you got", "you'd get some money.", True),
+    ("I'll see you at work.", "Ah, man, don't hate me.", False),
+    (None, "or lawyer she fucking with.", False),
+])
+def test_is_continuation(previous, line, expected):
+    from altyazi.llm import is_continuation
+
+    assert is_continuation(previous, line) is expected
+
+
+def test_glossary_terms_with_own_translation_go_to_final():
+    from altyazi.glossary import needs_final
+
+    route = needs_final({"Vice City": "Vice City", "Grove Street": "Grove Sokağı"})
+    assert route("Meet me on grove street tonight.")
+    assert not route("Welcome to Vice City.")  # kendisiyle eşlenen isim: taslak model de korur

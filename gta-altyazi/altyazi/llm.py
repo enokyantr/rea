@@ -86,6 +86,13 @@ _META = re.compile(
 )
 
 
+def is_continuation(previous: str | None, text: str) -> bool:
+    """Satır önceki altyazının devamı mı? Önceki cümle bitmemiş ya da bu satır küçük harfle başlıyor."""
+    if not previous or not text:
+        return False
+    return previous.rstrip()[-1:] not in ".!?…\"'”" or text.lstrip()[:1].islower()
+
+
 def is_meta_reply(text: str) -> bool:
     """Çeviri değil, modelin kendi açıklaması mı? (Tamamı parantez içinde ya da açıklama ifadesi.)"""
     stripped = text.strip()
@@ -136,12 +143,13 @@ class OllamaBackend:
 
     def __init__(self, model: str, url: str = "http://127.0.0.1:11434", timeout_s: float = 10.0,
                  uncensored: bool = True, glossary: dict[str, str] | None = None, keep_alive: str = "60m",
-                 num_ctx: int = 2048, use_context: bool = True):
+                 num_ctx: int = 2048, use_context: bool = True, context_for_continuation: bool = True):
         self.model = model
         # Küçük bağlam penceresi: istem ~600 token; daha büyük pencere ekran kartı belleğini boşa harcar.
         self._num_ctx = num_ctx
         # Bazı modeller (CI'da aya-expanse) <context> satırını da çeviriyor: kapatılabilir.
         self._use_context = use_context
+        self._context_for_continuation = context_for_continuation
         self._url = url.rstrip("/")
         self._timeout = timeout_s
         self._keep_alive = keep_alive
@@ -254,7 +262,7 @@ class OllamaBackend:
 
     # --- çeviri ------------------------------------------------------------------------------
 
-    def _chat(self, user: str, timeout: float) -> str:
+    def _chat(self, user: str, timeout: float, num_predict: int = 120) -> str:
         messages = [{"role": "system", "content": self._system}]
         for context, src, dst in self._examples:
             messages.append({"role": "user", "content": _user_message(context, src)})
@@ -265,7 +273,7 @@ class OllamaBackend:
             "messages": messages,
             "stream": False,
             "keep_alive": self._keep_alive,  # model GPU'da kalsın, her satırda yeniden yüklenmesin
-            "options": {"temperature": 0.1, "num_predict": 120, "num_ctx": self._num_ctx},
+            "options": {"temperature": 0.1, "num_predict": num_predict, "num_ctx": self._num_ctx},
         })
         if r.status_code == 404:
             raise OllamaUnavailable(f"Ollama'da '{self.model}' modeli yok (ollama pull {self.model})")
@@ -280,8 +288,13 @@ class OllamaBackend:
         return r.json().get("message", {}).get("content", "")
 
     def translate(self, text: str, context: str | None) -> str:
-        context = context if self._use_context else None
-        out = clean_output(self._chat(_user_message(context, text), timeout=self._timeout))
+        # Bağlam: her zaman (use_context) ya da yalnızca satır öncekinin devamıysa ("or lawyer she
+        # fucking with." gibi yarım cümleler bağlamsız yanlış çevriliyordu).
+        if not (self._use_context or (self._context_for_continuation and is_continuation(context, text))):
+            context = None
+        # Çıktı sınırı: Türkçe satır İngilizceden çok uzun olmaz; model açıklamaya başlarsa erken kesilir.
+        limit = min(120, 24 + 4 * len(text.split()))
+        out = clean_output(self._chat(_user_message(context, text), timeout=self._timeout, num_predict=limit))
         if not out:
             raise RuntimeError("Yerel LLM boş yanıt verdi")
         if is_meta_reply(out):  # hata sayılır: taslak çeviri ekranda kalır, önbelleğe girmez

@@ -157,3 +157,16 @@ def test_draft_running_is_set_only_while_the_local_model_translates():
     local.release.set()
     assert c.done.wait(2)
     assert wait_until(lambda: not h.draft_running())
+
+
+def test_repeated_line_uses_draft_cache_instantly():
+    local = Gate("yerel")
+    local.release.set()
+    h, _ = make(local, None)
+    c = Collector()
+    h.submit("Get in the car.", None, lambda: True, c.on_result, c.on_error)
+    assert c.done.wait(2) and local.calls == 1
+    c2 = Collector()
+    h.submit("Get in the car.", None, lambda: True, c2.on_result, c2.on_error)
+    assert c2.results == [(FINAL, "yerel:Get in the car.")]  # eşzamanlı, model çağrılmadı
+    assert local.calls == 1

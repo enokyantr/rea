@@ -58,3 +58,15 @@ def fingerprint(entries: dict[str, str]) -> str:
     """Sözlük içeriğinin kısa özeti: DeepL sözlük adı ve önbellek anahtarı için."""
     blob = json.dumps(sorted(entries.items()), ensure_ascii=False).encode("utf-8")
     return hashlib.sha256(blob).hexdigest()[:12]
+
+
+def needs_final(entries: dict[str, str]):
+    """Sözlükte İngilizcesinden farklı karşılığı olan bir terim geçen satırlar: yerel taslak model
+    sözlüğü bilmez, bu satırlar sözlüğü bilen son çevirmene (yerel LLM / DeepL) gitmeli."""
+    import re
+
+    terms = sorted((src for src, dst in entries.items() if src.casefold() != dst.casefold()), key=len, reverse=True)
+    if not terms:
+        return lambda text: False
+    pattern = re.compile(r"(?<!\w)(?:" + "|".join(re.escape(t) for t in terms) + r")(?!\w)", re.IGNORECASE)
+    return lambda text: bool(pattern.search(text))

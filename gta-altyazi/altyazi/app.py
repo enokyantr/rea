@@ -23,6 +23,8 @@ from .hybrid import DRAFT, FINAL, HybridTranslator
 MAX_REUSE = 4
 # Taslak çeviri sürerken OCR en fazla bu kadar bekler (sonraki altyazı en az ~1 sn ekranda kalır).
 DRAFT_YIELD_S = 0.4
+# Yazı kutusu haritasında bu oranda hücre değişirse satır değişmiş sayılır (sıkıştırma gürültüsü ~%1).
+BOX_TOLERANCE = 0.03
 
 
 def log(msg: str) -> None:
@@ -159,6 +161,8 @@ class Pipeline(threading.Thread):
         last_sig: np.ndarray | None = None
         last_text = ""
         reused = 0
+        last_box: tuple[int, int, int, int] | None = None
+        last_ocr_at = 0.0
         last_region: Rect | None = None
         last_base_check = 0.0
         last_window_title: str | None = None
@@ -173,7 +177,7 @@ class Pipeline(threading.Thread):
                     self.reset.clear()
                     self.seq += 1  # bekleyen/gelmekte olan çeviriler geçersiz
                     stab.reset()
-                    last_sig, last_text, reused = None, "", 0
+                    last_sig, last_text, reused, last_box = None, "", 0, None
                 if self._retry.is_set() and tick >= self._retry_not_before:
                     self._retry.clear()
                     stab.forget_shown()
@@ -214,7 +218,7 @@ class Pipeline(threading.Thread):
                 region = region_to_screen(spec, self.base)
                 if region != last_region:
                     last_region = region
-                    last_sig = None
+                    last_sig, last_box = None, None
                     self.ui.put(("region", self.region_name, region))
 
                 # Bölge ile Türkçe yazının alanı tek seferde yakalanır.
@@ -259,13 +263,22 @@ class Pipeline(threading.Thread):
                     if hit is not None:  # kendi Türkçe yazımızı okuma (yayında görünür modda)
                         gray[hit.top - origin.top:hit.bottom - origin.top,
                              hit.left - origin.left:hit.right - origin.left] = 0
-                sig = imageproc.signature(gray >= cfg.bright_threshold)
-                if imageproc.same_signature(last_sig, sig) and reused < MAX_REUSE:
+                # Değişim tespiti: yazı varken yalnızca yazının kutusuna bakılır (arkadaki video oynasa
+                # da altyazı aynıysa OCR çalışmaz; ekran kartı dil modeline kalır). Yazı yokken tüm bölge.
+                if last_box is not None:
+                    sig = imageproc.box_signature(gray, last_box, cfg.bright_threshold)
+                    unchanged = (sig is not None and imageproc.same_signature(last_sig, sig, BOX_TOLERANCE)
+                                 and tick - last_ocr_at < cfg.reread_max_ms / 1000)
+                else:
+                    sig = imageproc.signature(gray >= cfg.bright_threshold)
+                    unchanged = imageproc.same_signature(last_sig, sig) and reused < MAX_REUSE
+                if unchanged:
                     text = last_text
-                    confident = False  # aynı kare: doğrulama sayılmaz, hızlı kabul de değil
+                    confident = False  # yeni okuma değil: hızlı kabul sayılmaz
                     reused += 1
                 else:
                     reused = 0
+                    last_ocr_at = tick
                     t0 = time.perf_counter()
                     result = self._read_text(ocr, gray)
                     text = result.text
@@ -276,7 +289,13 @@ class Pipeline(threading.Thread):
                     if self.debug and text != last_text:
                         conf = "" if result.confidence is None else f" (güven {result.confidence:.2f})"
                         log(f"{self._tag}OCR {1000 * (time.perf_counter() - t0):.0f} ms{conf}: {text!r}")
-                    last_sig, last_text = sig, text
+                    last_text = text
+                    last_box = result.text_box if cfg.change_detection else None
+                    last_sig = (imageproc.box_signature(gray, last_box, cfg.bright_threshold)
+                                if last_box is not None else imageproc.signature(gray >= cfg.bright_threshold))
+                    if last_sig is None:
+                        last_box = None
+                        last_sig = imageproc.signature(gray >= cfg.bright_threshold)
 
                 event = stab.feed(text, tick, confident)
                 if isinstance(event, textproc.Show):

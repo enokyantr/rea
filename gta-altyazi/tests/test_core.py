@@ -410,3 +410,24 @@ def test_fast_accept_needs_real_words():
     assert not all_words_known("acist")  # satır başının yarım okuması
     assert all_words_known("Hey, Simeon")  # isim
     assert all_words_known("Wassup, can a loc come up in your crib?")  # argo listesi
+
+
+def test_box_signature_ignores_background_motion_but_sees_a_new_line():
+    from altyazi.imageproc import box_signature
+
+    rng = np.random.default_rng(0)
+    frame = rng.integers(0, 120, (120, 600), dtype=np.uint8)  # koyu, hareketli sahne
+    frame[60:80, 100:500:6] = 250  # altyazı harfleri
+    box = (100, 60, 500, 80)
+    sig = box_signature(frame, box, 190)
+    moved = frame.copy()
+    moved[:55] = rng.integers(0, 120, (55, 600), dtype=np.uint8)  # arka plan değişti
+    moved[60:80] = np.where(moved[60:80] >= 190, moved[60:80], rng.integers(0, 120, (20, 600)))
+    assert same_signature(sig, box_signature(moved, box, 190), 0.03)
+    new_line = frame.copy()
+    new_line[60:80, 100:500] = rng.integers(0, 120, (20, 400), dtype=np.uint8)
+    new_line[62:78, 120:480:4] = 250  # başka bir satır
+    assert not same_signature(sig, box_signature(new_line, box, 190), 0.03)
+    gone = frame.copy()
+    gone[60:80, 100:500] = 40
+    assert not same_signature(sig, box_signature(gone, box, 190), 0.03)

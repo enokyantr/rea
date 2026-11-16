@@ -81,6 +81,7 @@ class RapidOcr:
             raise OcrUnavailable(f"RapidOCR kurulu değil ({exc}); guncelle.bat çalıştırın.") from exc
         self.last_confidence = 0.0
         self.last_span: tuple[float, float] | None = None
+        self.last_box: tuple[int, int, int, int] | None = None  # (x0, y0, x1, y1)
         # İşlemci çekirdeklerinin hepsini almasın: yerel taslak çeviri de işlemcide çalışıyor.
         try:
             # Metin bulma girdisi: varsayılan ("min" 736) dar bir altyazı şeridini kısa kenarı 736
@@ -113,7 +114,9 @@ class RapidOcr:
         # Son okumanın en düşük kutu güveni ve yazının yatay kapsamı (Türkçeyi ortalamak için).
         self.last_confidence = min((float(r[2]) for r in result), default=0.0)
         xs = [p[0] for r in result for p in r[0]]
+        ys = [p[1] for r in result for p in r[0]]
         self.last_span = (float(min(xs)), float(max(xs))) if xs else None
+        self.last_box = (int(min(xs)), int(min(ys)), int(max(xs)) + 1, int(max(ys)) + 1) if xs else None
         return group_lines(result)
 
 

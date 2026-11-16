@@ -67,6 +67,9 @@ class Config:
     ollama_only_profanity: bool = True
     # Önceki satırı bağlam olarak gönder. Bağlamı da çeviren modellerde (ör. aya-expanse) false yapın.
     ollama_use_context: bool = False
+    # Satır öncekinin devamıysa (önceki cümle bitmemiş / bu satır küçük harfle başlıyor) önceki satırı
+    # yine de bağlam olarak gönder: yarım cümleler bağlamsız yanlış çevriliyor.
+    ollama_context_continuation: bool = True
     # "latency_optimized": en hızlı yanıt. "quality_optimized": daha doğal ama daha yavaş. "": DeepL varsayılanı.
     deepl_model_type: str = "latency_optimized"
     deepl_timeout_s: float = 4.0
@@ -125,6 +128,10 @@ class Config:
     # RapidOCR okumadan bu kadar eminse (0..1) doğrulama okuması beklenmeden gösterilir.
     # 1.0 = her zaman doğrula (eski davranış, ~100-350 ms daha geç).
     fast_accept_confidence: float = 0.93
+    # Altyazı ekrandayken yalnızca yazının alanı değişince yeniden oku (ekran kartı/işlemci dil
+    # modeline ve çeviriye kalır). Yine de en geç bu kadar ms'de bir yeniden okunur.
+    change_detection: bool = True
+    reread_max_ms: int = 1000
     # Altyazı kaybolduktan kaç ms sonra Türkçesi de silinsin.
     clear_after_ms: int = 700
 

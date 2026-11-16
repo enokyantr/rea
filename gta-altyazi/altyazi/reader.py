@@ -29,6 +29,9 @@ class ReadResult:
     # görüntüsünün sol kenarına göre piksel).
     confidence: float | None = None
     center_x: float | None = None
+    # Bulunan yazının kutusu (x0, y0, x1, y1), girdi görüntüsü koordinatlarında. Değişim tespiti
+    # için: yalnızca bu alan değişince yeniden okunur.
+    text_box: tuple[int, int, int, int] | None = None
 
 
 def variants(gray: np.ndarray, cfg, mode: str | None = None) -> list[tuple[str, np.ndarray]]:
@@ -70,7 +73,7 @@ def read_text(gray: np.ndarray, recognize: Callable[[np.ndarray], list[str]], cf
     """`gray`: bölgenin gri tonu. `recognize`: görüntü -> satırlar. `raw`: motor (RapidOCR) doğal
     görüntüyü olduğu gibi ister; ön işleme seçenekleri ve büyütme uygulanmaz."""
     bbox = imageproc.bright_bbox(gray >= cfg.bright_threshold)
-    left = 0
+    left = top = 0
     if bbox is None:
         if cfg.skip_without_bright_text:
             return ReadResult("")
@@ -98,4 +101,7 @@ def read_text(gray: np.ndarray, recognize: Callable[[np.ndarray], list[str]], cf
         span = getattr(engine, "last_span", None)
         if span is not None:
             result.center_x = left + (span[0] + span[1]) / 2
+        box = getattr(engine, "last_box", None)
+        if box is not None and result.text:
+            result.text_box = (left + box[0], top + box[1], left + box[2], top + box[3])
     return result

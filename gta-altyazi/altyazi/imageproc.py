@@ -122,3 +122,14 @@ def same_signature(a: np.ndarray | None, b: np.ndarray, tolerance: float = 0.01)
     if a is None or a.shape != b.shape:
         return False
     return float(np.mean(a != b)) <= tolerance
+
+
+def box_signature(gray: np.ndarray, box: tuple[int, int, int, int], threshold: int,
+                  pad: int = 4) -> np.ndarray | None:
+    """Yazı kutusunun içindeki parlak piksellerin kaba haritası. Altyazı aynı kaldıkça (arkadaki
+    video oynasa da) değişmez; satır değişince ya da silinince belirgin değişir."""
+    h, w = gray.shape
+    x0, y0, x1, y1 = max(0, box[0] - pad), max(0, box[1] - pad), min(w, box[2] + pad), min(h, box[3] + pad)
+    if x1 - x0 < 8 or y1 - y0 < 4:
+        return None
+    return signature(gray[y0:y1, x0:x1] >= threshold, cols=96, rows=8)
