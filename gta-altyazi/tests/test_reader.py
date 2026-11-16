@@ -139,3 +139,20 @@ def test_rapidocr_reads_an_outline_less_subtitle_on_light_background():
     text = reader.read_text(gray, ocr.recognize, Config(bright_threshold=200), raw=True).text
     from altyazi.textproc import similar
     assert similar(text, "you'd get some money on your card.", 0.85), text
+
+
+def test_raw_engine_reports_confidence_and_text_center_in_input_coordinates():
+    class Engine:
+        raw_input = True
+        last_confidence = 0.97
+        last_span = (10.0, 110.0)  # kırpılmış görüntüde
+
+        def recognize(self, image):
+            return ["Get him a hybrid."]
+
+    engine = Engine()
+    gray = _gray_with_text()  # parlak yazı x=50..350
+    result = reader.read_text(gray, engine.recognize, Config(), raw=True, engine=engine)
+    assert result.confidence == 0.97
+    left = 50 - 8  # bright_bbox kenar payı
+    assert result.center_x == left + 60

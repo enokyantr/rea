@@ -25,6 +25,10 @@ class ReadResult:
     # (seçenek, okunan metin, puan) — --debug/--dump için
     candidates: list[tuple[str, str, float]] = field(default_factory=list)
     crop: np.ndarray | None = None
+    # Motor bildiriyorsa (RapidOCR): okumanın güveni (0..1) ve yazının yatay ortası (girdi
+    # görüntüsünün sol kenarına göre piksel).
+    confidence: float | None = None
+    center_x: float | None = None
 
 
 def variants(gray: np.ndarray, cfg, mode: str | None = None) -> list[tuple[str, np.ndarray]]:
@@ -62,10 +66,11 @@ def upscale_factor(crop_height: int, cfg) -> float:
 
 
 def read_text(gray: np.ndarray, recognize: Callable[[np.ndarray], list[str]], cfg,
-              raw: bool = False) -> ReadResult:
+              raw: bool = False, engine=None) -> ReadResult:
     """`gray`: bölgenin gri tonu. `recognize`: görüntü -> satırlar. `raw`: motor (RapidOCR) doğal
     görüntüyü olduğu gibi ister; ön işleme seçenekleri ve büyütme uygulanmaz."""
     bbox = imageproc.bright_bbox(gray >= cfg.bright_threshold)
+    left = 0
     if bbox is None:
         if cfg.skip_without_bright_text:
             return ReadResult("")
@@ -88,4 +93,9 @@ def read_text(gray: np.ndarray, recognize: Callable[[np.ndarray], list[str]], cf
             break
     if not textproc.is_plausible(result.text, cfg.min_text_chars):
         result.text = ""
+    if raw and engine is not None:
+        result.confidence = getattr(engine, "last_confidence", None)
+        span = getattr(engine, "last_span", None)
+        if span is not None:
+            result.center_x = left + (span[0] + span[1]) / 2
     return result

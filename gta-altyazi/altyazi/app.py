@@ -78,17 +78,20 @@ class Pipeline(threading.Thread):
         self._tag = "" if name == MAIN else f"[{EXTRA_REGION_LABELS.get(name, name)}] "
         self.dump_dir: Path | None = None
         self._dumped = 0
+        self._center_x: int | None = None
 
     def _on_show(self, event: textproc.Show) -> None:
         self.seq += 1
         seq = self.seq
         context, self._previous_source = self._previous_source, event.text
+        center_x = self._center_x  # İngilizce satırın ekrandaki yatay ortası (bilinmiyorsa None)
         log(f"{self._tag}EN: {event.text}")
 
         def on_result(stage: str, translated: str, took: float) -> None:
             if self.debug:
                 log(f"{self._tag}{'taslak' if stage == DRAFT else 'çeviri'} {1000 * took:.0f} ms: {translated}")
-            self.ui.put(("show", self.region_name, seq, stage, translated, event.text, event.first_seen))
+            self.ui.put(("show", self.region_name, seq, stage, translated, event.text, event.first_seen,
+                         center_x))
 
         def on_error(exc: Exception, stage: str, draft_shown: bool) -> None:
             if stage == DRAFT:
@@ -104,14 +107,14 @@ class Pipeline(threading.Thread):
 
         self.translator.submit(event.text, context, lambda: seq == self.seq, on_result, on_error)
 
-    def _read_text(self, ocr, gray: np.ndarray) -> str:
-        result = reader.read_text(gray, ocr.recognize, self.cfg, ocr.raw_input)
+    def _read_text(self, ocr, gray: np.ndarray) -> reader.ReadResult:
+        result = reader.read_text(gray, ocr.recognize, self.cfg, ocr.raw_input, ocr)
         if self.debug and len(result.candidates) > 1:
             log(f"{self._tag}seçenekler: " + " | ".join(f"{n} {q:.0f} {t!r}" for n, t, q in result.candidates)
                 + f" → {result.variant}")
         if self.dump_dir is not None and result.crop is not None and self._dumped < 300:
             self._dump(result)
-        return result.text
+        return result
 
     def _dump(self, result: reader.ReadResult) -> None:
         """--dump: OCR'a giren gerçek görüntüleri ve sonuçları kaydeder (ayar yapmak için)."""
@@ -136,8 +139,10 @@ class Pipeline(threading.Thread):
             return
         if self.region_name == MAIN:
             log(f"OCR motoru: {ocr.name}")
+        textproc.normalize(["warm up"])  # sözlük ilk satırda değil şimdi yüklensin (~0,1 sn)
 
         cfg = self.cfg
+        self._center_x = None
         stab = textproc.Stabilizer(cfg.stable_reads, cfg.similarity, cfg.clear_after_ms / 1000,
                                    cfg.confirm_hold_ms / 1000)
         picker = contrast.ColorPicker(cfg.outline_px) if self.display_mode != "cover" else None
@@ -237,16 +242,22 @@ class Pipeline(threading.Thread):
                 sig = imageproc.signature(gray >= cfg.bright_threshold)
                 if imageproc.same_signature(last_sig, sig) and reused < MAX_REUSE:
                     text = last_text
+                    confident = False  # aynı kare: doğrulama sayılmaz, hızlı kabul de değil
                     reused += 1
                 else:
                     reused = 0
                     t0 = time.perf_counter()
-                    text = self._read_text(ocr, gray)
+                    result = self._read_text(ocr, gray)
+                    text = result.text
+                    confident = bool(text) and (result.confidence or 0.0) >= cfg.fast_accept_confidence
+                    if result.center_x is not None and text:
+                        self._center_x = round(origin.left + result.center_x)
                     if self.debug and text != last_text:
-                        log(f"{self._tag}OCR {1000 * (time.perf_counter() - t0):.0f} ms: {text!r}")
+                        conf = "" if result.confidence is None else f" (güven {result.confidence:.2f})"
+                        log(f"{self._tag}OCR {1000 * (time.perf_counter() - t0):.0f} ms{conf}: {text!r}")
                     last_sig, last_text = sig, text
 
-                event = stab.feed(text, tick)
+                event = stab.feed(text, tick, confident)
                 if isinstance(event, textproc.Show):
                     self._on_show(event)
                 elif isinstance(event, textproc.Clear):
@@ -420,14 +431,14 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
                     # bayat satır olarak geri gelmesin (seq artışı iş parçacığında biraz sonra olur).
                     continue
                 elif kind == "show":
-                    _, name, seq, stage, translated, original, first_seen = msg
+                    _, name, seq, stage, translated, original, first_seen, center_x = msg
                     # Eski satırı ya da DeepL'den sonra gelen taslağı gösterme.
                     if seq == pipelines[name].seq and not (stage == DRAFT and final_seq[name] == seq):
                         if stage == FINAL:
                             final_seq[name] = seq
                         if name == MAIN:
                             state["welcome"] = False
-                        overlays[name].show(translated, original)
+                        overlays[name].show(translated, original, center_x)
                         remember(name, seq, original, translated)
                         if debug:
                             what = "taslak" if stage == DRAFT else "son çeviri"

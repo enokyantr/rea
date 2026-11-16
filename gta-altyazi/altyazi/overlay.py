@@ -42,6 +42,7 @@ class Overlay:
         # Pipeline iş parçacığı okur: overlay'in şu an ekranda kapladığı alan (yakalanan karede
         # bir okuma bölgesiyle çakışırsa OCR'dan önce karartılır).
         self.screen_rect: Rect | None = None
+        self.center_x: int | None = None
         self._state: tuple[str, str, str] | None = None  # (tr, en, durum)
         self.win.geometry("1x1+-10+-10")
         self.win.update_idletasks()
@@ -68,6 +69,7 @@ class Overlay:
     def set_region(self, region: Rect | None) -> None:
         if region != self.region:
             self.region = region
+            self.center_x = None
             self._redraw()
 
     def set_palette(self, palette: Palette) -> None:
@@ -81,10 +83,13 @@ class Overlay:
             self.canvas.itemconfigure("fill", fill=palette.fill)
             self.canvas.itemconfigure("outline", fill=palette.outline)
 
-    def show(self, translated: str, original: str = "") -> None:
+    def show(self, translated: str, original: str = "", center_x: int | None = None) -> None:
+        """`center_x`: İngilizce altyazının ekrandaki yatay ortası; Türkçe ona göre ortalanır
+        (bölge ortası, seçilen bölge altyazıya göre kaymışsa yanlış yere düşer)."""
         state = (translated, original, "")
-        if state != self._state:  # taslak ile DeepL aynıysa yeniden çizip titretme
+        if state != self._state or center_x != self.center_x:  # aynıysa yeniden çizip titretme
             self._state = state
+            self.center_x = center_x
             self._redraw()
 
     def status(self, message: str) -> None:
@@ -159,6 +164,11 @@ class Overlay:
         content_h = y - pad
 
         left = region.left - pad
+        if self.adaptive and self.center_x is not None:
+            # Yazı penceresin ortasına çiziliyor (cx = width // 2): pencereyi İngilizce satırın
+            # ortasına hizala. Bölge içinde kalsın diye en fazla bölge genişliği kadar kayar.
+            left = min(max(self.center_x - width // 2, region.left - region.width // 2),
+                       region.right - width + region.width // 2)
         if self.adaptive:
             # İngilizce altyazının hemen üstü; uzun çeviri yukarı doğru büyür.
             height = content_h + 2 * pad

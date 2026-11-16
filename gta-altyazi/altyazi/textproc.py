@@ -24,7 +24,7 @@ def _fold_accents(text: str) -> str:
 def normalize(lines: list[str]) -> str:
     """Satırları tek cümleye birleştirir, boşlukları ve kenar çöplerini temizler."""
     text = _fold_accents(" ".join(line.strip() for line in lines if line.strip()))
-    text = _spell_fix(_fix_ocr_confusions(_SPACE.sub(" ", text).strip()))
+    text = _spell_fix(_split_glued(_fix_ocr_confusions(_SPACE.sub(" ", text).strip())))
     text = _EDGE_JUNK.sub("", text).strip()
     # Satır sonunda kelime bölünmesi: "some- thing" -> "something"
     text = re.sub(r"(\w)- (\w)", r"\1\2", text)
@@ -228,12 +228,96 @@ def _spell_fix(text: str) -> str:
         first = not text[:m.start()].strip(" \"'(-")
         if not (token.islower() or (first and token[0].isupper() and token[1:].islower())):
             return token
+        if low in _apostrophe_less():  # "thats" -> "that's" ("that" değil)
+            best = _apostrophe_less()[low]
+            return best.capitalize() if token[0].isupper() else best
         best = _spell_candidate(low, freq)
         if best is None:
             return token
         return best.capitalize() if token[0].isupper() else best
 
     return _SPELL_TOKEN.sub(fix, text)
+
+
+# Bitişik kelimeler: RapidOCR bazı karelerde boşlukları atlıyor ("maybehe'snotaracist",
+# "Moneyisntanissue", "getataxrebate"). Sözlükte olmayan uzun bir parça, sözlük kelimelerine en
+# olası (sık kelime = düşük maliyet) biçimde bölünür. Kesme işaretsiz yazılan kısaltmalar da
+# ("isnt", "thats") gerçek biçimine döner.
+_GLUED = re.compile(r"(?<![\w'’])[A-Za-z'’]{6,}(?![\w'’])")
+_SEGMENT_MIN_FREQ = 200
+
+
+@lru_cache(maxsize=1)
+def _apostrophe_less() -> dict[str, str]:
+    """"isnt" -> "isn't": kesme işaretsiz hâli kendisi kelime olmayan yaygın kısaltmalar."""
+    freq = _word_freq()
+    out = {}
+    for word, n in freq.items():
+        if "'" in word and n >= 10_000:
+            bare = word.replace("'", "")
+            if freq.get(bare, 0) < _MIN_FREQ:
+                out[bare] = word
+    return out
+
+
+def _segment(chunk: str) -> list[str] | None:
+    """Küçük harfli bitişik metni kelimelere böler; bölünemezse None."""
+    import math
+
+    freq = _word_freq()
+    bare = _apostrophe_less()
+    n = len(chunk)
+    best: list[tuple[float, int]] = [(0.0, 0)] + [(math.inf, 0)] * n
+    for end in range(1, n + 1):
+        for start in range(max(0, end - 20), end):
+            piece = chunk[start:end]
+            word = bare.get(piece, piece)
+            f = freq.get(word, 0)
+            if len(piece) == 1 and piece not in ("a", "i"):
+                continue
+            if f < (10_000 if len(piece) <= 2 else _SEGMENT_MIN_FREQ):
+                continue
+            cost = best[start][0] + math.log(1e9 / f)
+            if cost < best[end][0]:
+                best[end] = (cost, start)
+    if best[n][0] == math.inf:
+        return None
+    words, end = [], n
+    while end > 0:
+        start = best[end][1]
+        piece = chunk[start:end]
+        words.append(bare.get(piece, piece))
+        end = start
+    return words[::-1]
+
+
+def _split_glued(text: str) -> str:
+    freq = _word_freq()
+    if not freq:
+        return text
+
+    def fix(m: re.Match) -> str:
+        token = m.group(0)
+        low = token.lower().replace("’", "'")
+        if low in freq:
+            return token
+        # Özel isimlere dokunma (Vinewood, Yetarian): yalnızca küçük harfli parça ya da satır başındaki
+        # büyük harfli parça; satır başındakinin en az 3 kelimeye bölünmesi gerekir.
+        first = not text[:m.start()].strip(" \"'(-")
+        if not (token.islower() or (first and token[0].isupper() and token[1:].islower())):
+            return token
+        words = _segment(low)
+        if not words or len(words) < (2 if token.islower() else 3):
+            return token
+        # İki parçaya bölünme, tek harflik bir OCR hatasından da gelebilir ("surgeor" -> "surge or"
+        # değil "surgeon"): o durumda yazım düzeltmesi (sonraki adım) tercih edilir.
+        if len(words) == 2 and _spell_candidate(low, freq) is not None:
+            return token
+        if token[0].isupper():
+            words[0] = words[0].capitalize()
+        return " ".join("I" if w == "i" else ("I" + w[1:] if w.startswith("i'") else w) for w in words)
+
+    return _GLUED.sub(fix, text)
 
 
 def _known_words(tokens: list[str]) -> int:
@@ -326,7 +410,9 @@ class Stabilizer:
         """Gösterilen satır başarısız olduysa (çeviri hatası) aynı satır tekrar okununca yeniden dene."""
         self.shown = None
 
-    def feed(self, text: str, now: float) -> Show | Clear | None:
+    def feed(self, text: str, now: float, confident: bool = False) -> Show | Clear | None:
+        """`confident`: OCR motoru bu okumadan çok emin (RapidOCR güveni yüksek). Tek okumayla
+        gösterilir; ikinci (doğrulama) okumasının ~100-350 ms'si beklenmez."""
         if not text:
             self._candidate, self._candidate_count = None, 0
             if self.shown is not None and self._last_text_at is not None:
@@ -351,8 +437,8 @@ class Stabilizer:
             self._candidate, self._candidate_score = text, score
             self._candidate_count, self._candidate_since = 1, now
 
-        if (self._candidate_count >= self.stable_reads
-                and now - self._candidate_since >= self.min_hold):
+        if confident or (self._candidate_count >= self.stable_reads
+                         and now - self._candidate_since >= self.min_hold):
             self.shown, self._shown_score = self._candidate, self._candidate_score
             self._candidate, self._candidate_count = None, 0
             return Show(self.shown, self._candidate_since)

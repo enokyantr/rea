@@ -376,3 +376,29 @@ def test_reading_score_prefers_real_english_words(worse, better):
 ])
 def test_normalize_spell_fixes_rapidocr_slips(raw, expected):
     assert normalize([raw]) == expected
+
+
+@pytest.mark.parametrize("raw,expected", [
+    # Gerçek RapidOCR okumaları: bazı karelerde boşluklar atlanıyor
+    ("maybehe'snotaracist", "maybe he's not a racist"),
+    ("Moneyisntanissue", "Money isn't an issue"),
+    ("Thisisthebestpart", "This is the best part"),
+    ("getataxrebate", "get a tax rebate"),
+    ("This is thebest part", "This is the best part"),
+    ("thats crazy", "that's crazy"),
+    # İsimler ve tek harflik OCR hatası bölünmez
+    ("Franklin and Lamar went to Vinewood.", "Franklin and Lamar went to Vinewood."),
+    ("maybe Tanishall call you", "maybe Tanishall call you"),
+    ("with that brain surgeor", "with that brain surgeon"),
+])
+def test_normalize_splits_glued_words(raw, expected):
+    assert normalize([raw]) == expected
+
+
+def test_confident_reading_is_shown_without_waiting_for_a_second_read():
+    s = Stabilizer(stable_reads=2, similarity=0.88, clear_after=0.7, min_hold=0.04)
+    shown = s.feed("I think you are right, Lamar.", 5.0, confident=True)
+    assert isinstance(shown, Show) and shown.text == "I think you are right, Lamar."
+    assert s.feed("I think you are right, Lamar.", 5.2, confident=True) is None  # aynı satır tekrar gösterilmez
+    assert s.feed("Get him a hybrid.", 6.0) is None  # emin olunmayan yeni satır doğrulama bekler
+    assert isinstance(s.feed("Get him a hybrid.", 6.05), Show)

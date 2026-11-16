@@ -119,6 +119,9 @@ class Config:
     # Yeni satır, ilk okumasından en az bu kadar ms sonra da aynı okunmalı (videonun farklı bir
     # karesi). Geçiş/solma karelerinin bozuk okumalarının çevrilmesini önler.
     confirm_hold_ms: int = 40
+    # RapidOCR okumadan bu kadar eminse (0..1) doğrulama okuması beklenmeden gösterilir.
+    # 1.0 = her zaman doğrula (eski davranış, ~100-350 ms daha geç).
+    fast_accept_confidence: float = 0.93
     # Altyazı kaybolduktan kaç ms sonra Türkçesi de silinsin.
     clear_after_ms: int = 700
 
