@@ -156,8 +156,9 @@ def main() -> int:
         has_term = lambda text: False  # noqa: E731
 
     def route_to_final(text: str) -> bool:
-        # Küfür/argo ya da sözlükte özel karşılığı olan terim: yerel LLM'e.
-        return needs_llm(text) or has_term(text)
+        # Sohbeti takip: her satır bağlamla yerel LLM'e (taslak önce görünür). Değilse yalnızca
+        # küfür/argo ya da sözlükte özel karşılığı olan terim.
+        return cfg.context_translation or needs_llm(text) or has_term(text)
 
     def make_translator() -> HybridTranslator:
         # Her bölgenin kendi kuyruğu; çeviri motorları (yerel model, DeepL, önbellek) ortak.

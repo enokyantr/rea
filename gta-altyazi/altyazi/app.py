@@ -23,6 +23,8 @@ from .hybrid import DRAFT, FINAL, HybridTranslator
 MAX_REUSE = 4
 # Taslak çeviri sürerken OCR en fazla bu kadar bekler (sonraki altyazı en az ~1 sn ekranda kalır).
 DRAFT_YIELD_S = 0.4
+# Bu kadar sn diyalog yoksa yeni sahne: sohbet geçmişi sıfırlanır.
+DIALOGUE_GAP_S = 45.0
 # Yazı kutusu haritasında bu oranda hücre değişirse satır değişmiş sayılır (sıkıştırma gürültüsü ~%1).
 BOX_TOLERANCE = 0.03
 
@@ -78,6 +80,7 @@ class Pipeline(threading.Thread):
         self.seq = 0
         self.base = win32.primary_screen()
         self._previous_source: str | None = None
+        self._dialogue: list[tuple[str, str, float]] = []  # (İngilizce, Türkçe, zaman)
         self._retry_not_before = 0.0
         self._tag = "" if name == MAIN else f"[{EXTRA_REGION_LABELS.get(name, name)}] "
         self.dump_dir: Path | None = None
@@ -94,11 +97,17 @@ class Pipeline(threading.Thread):
     def _on_show(self, event: textproc.Show) -> None:
         self.seq += 1
         seq = self.seq
-        context, self._previous_source = self._previous_source, event.text
+        context = self._dialogue_context(event.first_seen)
+        self._previous_source = event.text
+        drafts: dict[str, str] = {}
         center_x = self._center_x  # İngilizce satırın ekrandaki yatay ortası (bilinmiyorsa None)
         log(f"{self._tag}EN: {event.text}")
 
         def on_result(stage: str, translated: str, took: float) -> None:
+            if stage == FINAL:
+                self._remember_line(event.text, translated)
+            else:
+                drafts["tr"] = translated
             if self.debug:
                 log(f"{self._tag}{'taslak' if stage == DRAFT else 'çeviri'} {1000 * took:.0f} ms: {translated}")
             self.ui.put(("show", self.region_name, seq, stage, translated, event.text, event.first_seen,
@@ -113,6 +122,8 @@ class Pipeline(threading.Thread):
             if draft_shown:
                 # Taslak bu satırın kesin metni: aynı satır yeniden çevrilmez (yazı ve dublaj sonradan
                 # farklı bir çeviriyle değişmesin).
+                if "tr" in drafts:
+                    self._remember_line(event.text, drafts["tr"])
                 self.ui.put(("draft-final", self.region_name, seq))
                 return
             self.ui.put(("error", self.region_name, message))
@@ -121,6 +132,23 @@ class Pipeline(threading.Thread):
                 self._retry.set()
 
         self.translator.submit(event.text, context, lambda: seq == self.seq, on_result, on_error)
+
+    def _remember_line(self, english: str, turkish: str) -> None:
+        """Sohbet geçmişi: kesinleşen satırlar (çeviri tutarlılığı için sonraki satırlara bağlam)."""
+        if self._dialogue and self._dialogue[-1][0] == english:
+            self._dialogue[-1] = (english, turkish, time.monotonic())
+        else:
+            self._dialogue.append((english, turkish, time.monotonic()))
+        del self._dialogue[:-max(1, self.cfg.dialogue_lines)]
+
+    def _dialogue_context(self, now: float) -> textproc.Dialogue | None:
+        """Son satırlar; DIALOGUE_GAP_S'den uzun sessizlik yeni sahne sayılır, geçmiş sıfırlanır."""
+        if self._dialogue and now - self._dialogue[-1][2] > DIALOGUE_GAP_S:
+            self._dialogue.clear()
+        if not self.cfg.context_translation or not self._dialogue:
+            return textproc.Dialogue(self._previous_source) if self._previous_source else None
+        history = [(en, tr) for en, tr, _ in self._dialogue]
+        return textproc.Dialogue(self._previous_source or history[-1][0], history)
 
     def _read_text(self, ocr, gray: np.ndarray) -> reader.ReadResult:
         result = reader.read_text(gray, ocr.recognize, self.cfg, ocr.raw_input, ocr)

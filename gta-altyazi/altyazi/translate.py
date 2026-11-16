@@ -97,7 +97,7 @@ class DeepLBackend:
                     source_lang=self._source,
                     target_lang=self._target,
                     # Önceki satır bağlam olarak verilir; DeepL bağlamı ücretlendirmez.
-                    context=context or None,
+                    context=(" ".join(en for en, _ in getattr(context, "history", ())) or context) or None,
                     model_type=model_type,
                     glossary=self._glossary,
                     custom_instructions=instructions,

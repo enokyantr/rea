@@ -201,3 +201,17 @@ def test_glossary_terms_with_own_translation_go_to_final():
     route = needs_final({"Vice City": "Vice City", "Grove Street": "Grove Sokağı"})
     assert route("Meet me on grove street tonight.")
     assert not route("Welcome to Vice City.")  # kendisiyle eşlenen isim: taslak model de korur
+
+
+def test_dialogue_history_is_sent_as_conversation_turns(fake):
+    from altyazi.textproc import Dialogue
+
+    backend = OllamaBackend("aya-expanse:8b", fake.url, use_context=False)
+    history = [("Who's that guy?", "O adam kim?"), ("That's my cousin, Lamar.", "Bu benim kuzenim, Lamar.")]
+    backend.translate("He's cool, trust me.", Dialogue("That's my cousin, Lamar.", history))
+    messages = fake.chats[-1]["messages"]
+    assert messages[-1]["content"] == "<line>He's cool, trust me.</line>"  # yalnızca yeni satır çevrilir
+    tail = [m["content"] for m in messages[-5:-1]]
+    assert tail == ["<line>Who's that guy?</line>", "O adam kim?",
+                    "<line>That's my cousin, Lamar.</line>", "Bu benim kuzenim, Lamar."]
+    assert "<context>" not in messages[-1]["content"]

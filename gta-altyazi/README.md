@@ -166,6 +166,16 @@ saniye gösterilir. İsterseniz seslendirilir (menü > Çeviri > Sokak konuşmal
 - "Konuşma yok" olasılığı yüksek, düşük güvenli ya da müzik işaretli sonuçlar atılır; yine de araç
   radyosunu kısmak daha temiz sonuç verir.
 
+### Sohbeti takip eden çeviri
+
+Varsayılan olarak her satır yerel dil modeline, son 6 satırın İngilizcesi ve verdiğimiz Türkçesiyle
+birlikte gider (menü > Çeviri). Model bunları sohbet geçmişi olarak görür: hitap (sen/siz), lakaplar,
+"o / bu / onu" gibi göndermeler ve konu satırdan satıra tutarlı kalır. 6 satır yaklaşık son 20-30 sn
+diyaloğu kapsar; daha fazlası 8 GB kartta yavaşlatır ve eski sahneyi karıştırır. 45 sn diyalog olmazsa
+geçmiş sıfırlanır (yeni sahne). Hızlı taslak çeviri önce görünür, bağlamlı çeviri ~0,3-0,6 sn sonra
+yerine geçer (dublaj açıkken ikisi birlikte çıkar). Ekran kartı daha çok çalışır; kapatınca dil modeli
+yalnızca küfür/argo satırlarında kullanılır.
+
 ### Discord / OBS yayını
 
 - Program bilgisayarın yükünü sürekli ölçer (menü > Durum > Motorlar > "Yük"). İşlemci 3 sn %80'i geçerse

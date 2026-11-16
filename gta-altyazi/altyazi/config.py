@@ -74,6 +74,10 @@ class Config:
     # Satır öncekinin devamıysa (önceki cümle bitmemiş / bu satır küçük harfle başlıyor) önceki satırı
     # yine de bağlam olarak gönder: yarım cümleler bağlamsız yanlış çevriliyor.
     ollama_context_continuation: bool = True
+    # Sohbeti takip et: her satır yerel dil modeline, son `dialogue_lines` satırın İngilizcesi ve verdiğimiz
+    # Türkçesiyle birlikte gider (anlam kayması, hitap ve lakap tutarsızlığı azalır). Taslak önce görünür.
+    context_translation: bool = True
+    dialogue_lines: int = 6
     # "latency_optimized": en hızlı yanıt. "quality_optimized": daha doğal ama daha yavaş. "": DeepL varsayılanı.
     deepl_model_type: str = "latency_optimized"
     deepl_timeout_s: float = 4.0

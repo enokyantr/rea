@@ -20,6 +20,9 @@ alternatives or explanations.
 - Keep it as short and readable as the original; match the speaker's tone, attitude and register.
 - Keep character names and place names as they are.
 - <context> holds the previous subtitle line for reference only; never translate or repeat it.
+- Earlier turns are the previous lines of the same conversation with your translations. Keep names, \
+nicknames, forms of address (sen/siz), slang and the meaning consistent with them; resolve pronouns and \
+references from them. Translate only the new line.
 {uncensored}{glossary}"""
 
 UNCENSORED = """\
@@ -262,10 +265,15 @@ class OllamaBackend:
 
     # --- çeviri ------------------------------------------------------------------------------
 
-    def _chat(self, user: str, timeout: float, num_predict: int = 120) -> str:
+    def _chat(self, user: str, timeout: float, num_predict: int = 120, history=()) -> str:
         messages = [{"role": "system", "content": self._system}]
         for context, src, dst in self._examples:
             messages.append({"role": "user", "content": _user_message(context, src)})
+            messages.append({"role": "assistant", "content": dst})
+        # Sohbet geçmişi: önceki satırlar ve verdiğimiz çeviriler gerçek turlar olarak (model bağlamı
+        # çevirmeye/tekrarlamaya çalışmaz, yalnızca tutarlı devam eder).
+        for src, dst in history:
+            messages.append({"role": "user", "content": _user_message(None, src)})
             messages.append({"role": "assistant", "content": dst})
         messages.append({"role": "user", "content": user})
         r = self._http.post(f"{self._url}/api/chat", timeout=timeout, json={
@@ -290,11 +298,15 @@ class OllamaBackend:
     def translate(self, text: str, context: str | None) -> str:
         # Bağlam: her zaman (use_context) ya da yalnızca satır öncekinin devamıysa ("or lawyer she
         # fucking with." gibi yarım cümleler bağlamsız yanlış çevriliyordu).
-        if not (self._use_context or (self._context_for_continuation and is_continuation(context, text))):
+        history = getattr(context, "history", ())
+        if history:
+            context = None  # önceki satır zaten sohbet geçmişinde
+        elif not (self._use_context or (self._context_for_continuation and is_continuation(context, text))):
             context = None
         # Çıktı sınırı: Türkçe satır İngilizceden çok uzun olmaz; model açıklamaya başlarsa erken kesilir.
         limit = min(120, 24 + 4 * len(text.split()))
-        out = clean_output(self._chat(_user_message(context, text), timeout=self._timeout, num_predict=limit))
+        out = clean_output(self._chat(_user_message(context, text), timeout=self._timeout, num_predict=limit,
+                                      history=history))
         if not out:
             raise RuntimeError("Yerel LLM boş yanıt verdi")
         if is_meta_reply(out):  # hata sayılır: taslak çeviri ekranda kalır, önbelleğe girmez

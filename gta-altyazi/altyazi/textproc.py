@@ -458,3 +458,16 @@ class Stabilizer:
             self._candidate, self._candidate_count = None, 0
             return Show(self.shown, self._candidate_since)
         return None
+
+
+class Dialogue(str):
+    """Çevirmene giden bağlam: değeri önceki İngilizce satırdır (eski arayüzle uyumlu; DeepL ve devam
+    satırı denetimi bunu kullanır), `history` ise sohbetin son satırları: [(İngilizce, verdiğimiz Türkçe)].
+    Yerel dil modeli bunları sohbet geçmişi olarak görür: hitap (sen/siz), lakaplar ve konu tutarlı kalır."""
+
+    history: tuple[tuple[str, str], ...]
+
+    def __new__(cls, previous: str, history=()):
+        obj = super().__new__(cls, previous)
+        obj.history = tuple(history)
+        return obj

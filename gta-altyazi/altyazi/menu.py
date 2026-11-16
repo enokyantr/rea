@@ -60,10 +60,12 @@ def _apply_theme(root: tk.Misc) -> bool:
     # Tema pencere zeminini ve etiket arka planını boş bırakıyor (sistemin açık grisi görünüyordu).
     style.configure(".", background=DARK_BG)
     style.configure("TLabel", background=DARK_BG, foreground="#e6e6e6")
+    for name in ("TCheckbutton", "Switch.TCheckbutton", "TRadiobutton"):
+        style.configure(name, foreground="#e6e6e6")
     style.configure("Title.TLabel", font=(FONT, 16, "bold"))
     style.configure("Section.TLabel", font=(FONT, 11, "bold"))
     style.configure("Muted.TLabel", foreground=GRAY)
-    style.configure("Big.Switch.TCheckbutton", font=(FONT, 11, "bold"))
+    style.configure("Big.Switch.TCheckbutton", font=(FONT, 11, "bold"), foreground="#ffffff")
     return True
 
 
@@ -83,6 +85,7 @@ class ControlPanel:
         if self.themed:
             self.win.configure(background=DARK_BG)
         self._capture_action: str | None = None
+        self._dub_buttons: list[ttk.Button] = []
         self._switch = "Switch.TCheckbutton" if self.themed else "TCheckbutton"
         self._big_switch = "Big.Switch.TCheckbutton" if self.themed else "TCheckbutton"
         self._accent = "Accent.TButton" if self.themed else "TButton"
@@ -91,6 +94,7 @@ class ControlPanel:
         # Taşıma/boyutlandırma/küçültme: OCR'ın karartacağı alan hemen güncellensin.
         for event in ("<Configure>", "<Map>", "<Unmap>"):
             self.win.bind(event, self._update_rect, add="+")
+        self._sync_dub_buttons()
         self._refresh()
 
     # --- görünürlük -------------------------------------------------------------------------
@@ -185,6 +189,7 @@ class ControlPanel:
             self.note_lbl.configure(text=error, foreground=RED)
         else:
             self.note_lbl.configure(text="")
+        self._sync_dub_buttons()
 
     @staticmethod
     def _card(parent, title: str) -> ttk.Frame:
@@ -194,7 +199,29 @@ class ControlPanel:
 
     # Durum ------------------------------------------------------------------------------------
 
+    def _dub_button(self, parent) -> ttk.Button:
+        btn = ttk.Button(parent, text="", style=self._accent, width=22, command=self._dub_button_pressed)
+        self._dub_buttons.append(btn)
+        return btn
+
+    def _dub_button_pressed(self) -> None:
+        self.dub_var.set(not bool(self.cfg.tts_enabled))
+        self._toggle_dub()
+        self._sync_dub_buttons()
+
+    def _sync_dub_buttons(self) -> None:
+        on = bool(self.cfg.tts_enabled)
+        for btn in self._dub_buttons:
+            btn.configure(text="Dublajı kapat" if on else "Dublajı aç",
+                          style="TButton" if on else self._accent)
+
     def _tab_status(self, f: ttk.Frame) -> None:
+        card = self._card(f, "Dublaj")
+        row = ttk.Frame(card)
+        row.pack(fill="x")
+        self._dub_button(row).pack(side="left")
+        ttk.Label(row, text="Program durmadan açılıp kapanır (kısayol: menü > Kısayollar).",
+                  style="Muted.TLabel").pack(side="left", padx=12)
         card = self._card(f, "Okuma bölgeleri")
         self.region_widgets: dict[str, dict] = {}
         for i, row in enumerate(self.ctl.region_rows()):
@@ -262,8 +289,12 @@ class ControlPanel:
         r = self._combo(card, r, "Son çevirmen", "final_translator", ["ollama", "deepl"], restart=True,
                         hint="ollama: ücretsiz, sansürsüz · deepl: anahtar gerekir")
         r = self._entry(card, r, "Yerel dil modeli (Ollama)", "ollama_model", restart=True)
-        r = self._check(card, r, "Dil modeli yalnızca küfür/argo/sözlük satırlarında (önerilen)",
+        r = self._check(card, r, "Sohbet takibi kapalıyken: dil modeli yalnızca küfür/argo/sözlük satırlarında",
                         "ollama_only_profanity", restart=True)
+        r = self._check(card, r, "Sohbeti takip et: her satır son konuşmalarla birlikte çevrilsin (önerilen)",
+                        "context_translation", switch=True)
+        r = self._spin(card, r, "Takip edilen son satır sayısı", "dialogue_lines", 2, 12, 1,
+                       hint="6 önerilir: ~20-30 sn diyalog; fazlası yavaşlatır, eski sahneyi karıştırır")
         r = self._check(card, r, "Yarım cümlelerde önceki satırı bağlam olarak gönder",
                         "ollama_context_continuation", restart=True)
         r = self._check(card, r, "Sansürsüz çeviri (küfür yumuşatılmaz)", "uncensored", restart=True)
@@ -302,7 +333,8 @@ class ControlPanel:
 
     def _tab_dub(self, f: ttk.Frame) -> None:
         card = self._card(f, "Dublaj")
-        r = 0
+        self._dub_button(card).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
+        r = 1
         r = self._combo(card, r, "Ses", "dub_engine", ["gemini", "edge", "windows"], dub=True,
                         hint="gemini: duygulu (anahtar), sorun olursa anında edge · edge: doğal ses · "
                              "windows: çevrimdışı")
@@ -599,6 +631,7 @@ class ControlPanel:
                     self.translate_var.set(not paused)
                 if self.dub_var.get() != bool(self.cfg.tts_enabled):
                     self.dub_var.set(bool(self.cfg.tts_enabled))
+                self._sync_dub_buttons()
                 if self.street_var.get() != bool(self.cfg.street_enabled):
                     self.street_var.set(bool(self.cfg.street_enabled))
                 self.state_lbl.configure(
