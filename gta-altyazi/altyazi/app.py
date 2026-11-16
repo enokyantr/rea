@@ -86,6 +86,7 @@ class Pipeline(threading.Thread):
         # Menü için: son kare okuma zamanı ve OCR motorunun adı.
         self.last_read_at = 0.0
         self.engine_name = ""
+        self.last_visible_at = 0.0  # ana altyazı en son ne zaman ekrandaydı (sokak dinleme için)
 
     def _on_show(self, event: textproc.Show) -> None:
         self.seq += 1
@@ -283,6 +284,8 @@ class Pipeline(threading.Thread):
                     unchanged = imageproc.same_signature(last_sig, sig) and reused < MAX_REUSE
                 if unchanged:
                     text = last_text
+                    if text:
+                        self.last_visible_at = tick
                     confident = False  # yeni okuma değil: hızlı kabul sayılmaz
                     reused += 1
                 else:
@@ -291,6 +294,8 @@ class Pipeline(threading.Thread):
                     t0 = time.perf_counter()
                     result = self._read_text(ocr, gray)
                     text = result.text
+                    if text:
+                        self.last_visible_at = tick
                     confident = (bool(text) and (result.confidence or 0.0) >= cfg.fast_accept_confidence
                                  and textproc.all_words_known(text))
                     if result.center_x is not None and text:
@@ -332,7 +337,8 @@ PRESETS = {
     "telefon": Region(0.70, 0.45, 0.27, 0.45),
 }
 REGION_ORDER = [MAIN, *EXTRA_REGION_KEYS.values()]
-REGION_LABELS = {MAIN: "Altyazı", **EXTRA_REGION_LABELS}
+STREET = "sokak"
+REGION_LABELS = {MAIN: "Altyazı", **EXTRA_REGION_LABELS, STREET: "Sokak"}
 
 
 def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTranslator], debug: bool,
@@ -378,6 +384,11 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
         overlays[name] = Overlay(root, cfg, mode)
         pipelines[name] = Pipeline(cfg, name, get_region, mode, make_translator(), ui, debug,
                                    sample_rect=lambda ov=overlays[name]: ov.sample_rect, own_rects=own_rects)
+    from .street import StreetListener
+
+    overlays[STREET] = Overlay(root, cfg, "adaptive")
+    pipelines[STREET] = StreetListener(cfg, STREET, lambda: tts["recorder"], make_translator(), ui,
+                                       lambda a, b: street_blocked(a, b), log)
     history = HistoryPanel(root, cfg)
     entries: list[dict] = []  # son satırlar: {"key": (bölge, seq), "label", "en", "tr"}
     state = {"welcome": True, "picking": False, "paused": False, "restart": False, "save_pending": False}
@@ -628,27 +639,41 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
         save_soon()
         apply_style()
 
+    def recorder_needed() -> bool:
+        return (tts["speaker"] is not None and cfg.dub_detect_speaker) or cfg.street_enabled
+
+    def ensure_recorder():
+        """Oyun sesi kaydedicisi: dublaj (konuşan tanıma) ve sokak konuşmaları ortak kullanır."""
+        from .audio import LoopbackRecorder
+
+        if tts["recorder"] is None:
+            recorder = LoopbackRecorder(log=log)
+            recorder.start()
+            recorder.ready.wait(3)
+            if recorder.error:
+                log(recorder.error)
+            tts["recorder"] = recorder
+        return tts["recorder"]
+
+    def release_recorder() -> None:
+        if tts["recorder"] is not None and not recorder_needed():
+            tts["recorder"].stop()
+            tts["recorder"] = None
+
     def set_tts(enabled: bool) -> str | None:
         """Dublajı program durmadan aç/kapat. Hata varsa açıklaması döner (dublaj kapalı kalır)."""
-        from .audio import LoopbackRecorder
         from .tts import Speaker
 
         speaker = tts["speaker"]
         if enabled and speaker is None:
-            recorder = tts["recorder"]
-            if cfg.dub_detect_speaker and recorder is None:
-                recorder = LoopbackRecorder(log=log)
-                recorder.start()
-                recorder.ready.wait(3)
-                if recorder.error:
-                    log(recorder.error)
-                tts["recorder"] = recorder
-            speaker = Speaker(cfg, book, recorder if cfg.dub_detect_speaker else None, log)
+            recorder = ensure_recorder() if cfg.dub_detect_speaker else None
+            speaker = Speaker(cfg, book, recorder, log)
             speaker.start()
             speaker.ready.wait(5)
             if speaker.error:
                 cfg.tts_enabled = False
                 save_soon()
+                release_recorder()
                 log(speaker.error)
                 return speaker.error
             tts["speaker"] = speaker
@@ -658,13 +683,42 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
             if speaker is not None:
                 speaker.stop()
                 tts["speaker"] = None
-            if tts["recorder"] is not None:
-                tts["recorder"].stop()
-                tts["recorder"] = None
+            release_recorder()
             log("Dublaj kapalı")
         cfg.tts_enabled = enabled
         save_soon()
         return None
+
+    def set_street(enabled: bool) -> str | None:
+        """Sokak konuşmalarını (altyazısız NPC'ler) program durmadan aç/kapat."""
+        import importlib.util
+
+        if enabled and importlib.util.find_spec("faster_whisper") is None:
+            cfg.street_enabled = False
+            return "Konuşma tanıma (faster-whisper) kurulu değil: guncelle.bat çalıştırın."
+        if enabled:
+            recorder = ensure_recorder()
+            if recorder.error:
+                cfg.street_enabled = False
+                release_recorder()
+                return recorder.error
+            base = pipelines[MAIN].base
+            overlays[STREET].set_region(Rect(base.left + base.width // 5, base.top + int(base.height * 0.12),
+                                             base.width * 3 // 5, 1))
+        cfg.street_enabled = enabled
+        if not enabled:
+            overlays[STREET].clear()
+            release_recorder()
+        log(f"Sokak konuşmaları {'açık' if enabled else 'kapalı'}")
+        save_soon()
+        return None
+
+    def street_blocked(start: float, end: float) -> bool:
+        """Parça sırasında ekranda altyazı vardı (zaten çevriliyor) ya da kendi dublajımız çalıyordu."""
+        if pipelines[MAIN].last_visible_at >= start - 0.3:
+            return True
+        speaker = tts["speaker"]
+        return speaker is not None and speaker.busy_until > start
 
     def character_sample(char_id: int) -> str | None:
         speaker = tts["speaker"]
@@ -740,6 +794,7 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
         "font-up": lambda: change_font(2), "font-down": lambda: change_font(-2),
         "move-up": lambda: move_text(8), "move-down": lambda: move_text(-8),
         "tts": lambda: set_tts(not cfg.tts_enabled),
+        "street": lambda: set_street(not cfg.street_enabled),
     }
     for name in EXTRA_REGION_KEYS.values():
         actions[f"pick-{name}"] = lambda name=name: pick(name)
@@ -792,6 +847,10 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
             rows += list(engine_info or [])
             speaker = tts["speaker"]
             rows.append(("Dublaj", f"açık ({speaker.voice_in_use})" if speaker else "kapalı"))
+            street = pipelines[STREET]
+            rows.append(("Sokak konuşmaları", (f"açık · {street.engine_name or 'yükleniyor'} · çevrilen {street.heard}, "
+                                               f"altyazı/dublaj yüzünden atlanan {street.skipped}")
+                         if cfg.street_enabled else "kapalı"))
             rows.append(("Oturum kaydı", str(session.path) if session else "kapalı"))
             return rows
 
@@ -835,6 +894,9 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
         def dub_status(self) -> list[tuple[str, str]]:
             return dub_status()
 
+        def set_street(self, enabled: bool) -> str | None:
+            return set_street(enabled)
+
         def characters(self) -> list:
             return book.snapshot()
 
@@ -869,8 +931,11 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
                 center_x) -> None:
         if name == MAIN:
             state["welcome"] = False
-        overlays[name].show(translated, original, center_x)
+        overlays[name].show(f"Sokak: {translated}" if name == STREET else translated, original, center_x)
         remember(name, seq, original, translated)
+        if name == STREET:  # sokak satırı birkaç saniye sonra kendiliğinden silinir
+            ms = int(1000 * min(7.0, 2.5 + 0.06 * len(translated)))
+            root.after(ms, lambda n=name, q=seq: overlays[n].clear() if pipelines[n].seq == q else None)
         speaker = tts["speaker"]
         if speaker is not None and name == MAIN and line_started.get(name) != seq:
             line_started[name] = seq
@@ -891,7 +956,7 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
         if session is not None:
             session.write("" if name == MAIN else REGION_LABELS[name], original, translated)
         speaker = tts["speaker"]
-        if speaker is not None and name == MAIN:
+        if speaker is not None and (name == MAIN or (name == STREET and cfg.street_dub)):
             speaker.say(translated, onset=first_seen, original=original)
 
     def release_draft(name: str, seq: int) -> bool:
@@ -987,6 +1052,8 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
         p.start()
     if cfg.tts_enabled:
         root.after(100, lambda: set_tts(True))
+    if cfg.street_enabled:
+        root.after(200, lambda: set_street(True) and None)
     root.after(10, poll)
     log(f"Çalışıyor. Menü ve tüm ayarlar: {hk.display(cfg.hotkeys.get('menu', ''))}")
     try:

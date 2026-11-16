@@ -76,6 +76,20 @@ def turkish_voices() -> list[str]:
         return []
 
 
+def _duration(audio: bytes, ext: str) -> float:
+    """Ses süresi (sn): WAV başlığından; MP3 için Edge'in 48 kbit/sn akışından tahmin."""
+    if ext == ".wav" and audio[:4] == b"RIFF":
+        import io
+        import wave
+
+        try:
+            with wave.open(io.BytesIO(audio)) as w:
+                return w.getnframes() / float(w.getframerate())
+        except Exception:
+            pass
+    return len(audio) * 8 / 48000
+
+
 def _pct(value: float) -> str:
     return f"{'+' if value >= 0 else ''}{int(round(value))}%"
 
@@ -111,6 +125,8 @@ class Speaker(threading.Thread):
         self._http = requests.Session()
         self.last_engine = ""
         self.fallbacks = 0
+        # Okunan sesin tahmini bitişi (time.monotonic): sokak dinleyicisi kendi dublajımızı duymasın.
+        self.busy_until = 0.0
         self._tmp = Path(tempfile.gettempdir())
         self._file_index = 0
         self.voice_in_use = ""
@@ -131,6 +147,7 @@ class Speaker(threading.Thread):
 
     def interrupt(self) -> None:
         self._generation += 1
+        self.busy_until = time.monotonic()
         player = self._player
         if player is not None:
             try:
@@ -221,9 +238,11 @@ class Speaker(threading.Thread):
             return
         if audio:
             self.last_engine = source
+            self.busy_until = time.monotonic() + _duration(audio, ext) + 0.3
             self._play_file(self._write_temp(audio, ext))
         else:
             self.last_engine = "Windows"
+            self.busy_until = time.monotonic() + 0.075 * len(text) / max(0.5, rate) + 0.3
             self._play_windows(text, delivery, rate)
 
     def _delivery_for_line(self, onset: float, generation: int, original: str) -> Delivery | None:

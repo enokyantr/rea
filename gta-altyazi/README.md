@@ -112,6 +112,7 @@ Varsayılan kısayollar (menüden değiştirilebilir):
 | Ctrl+Alt+O | Türkçenin üstünde İngilizceyi de göster |
 | Ctrl+Alt+H | Son satırlar paneli (aç/kapat) |
 | Ctrl+Alt+D | Dublaj aç / kapat |
+| Ctrl+Alt+N | Sokak konuşmalarını aç / kapat |
 | Ctrl+Alt+Q | Çıkış |
 
 ### Dublaj (Ctrl+Alt+D ya da menüdeki "Dublaj" anahtarı; program durmadan açılıp kapanır)
@@ -145,6 +146,25 @@ Ayarlar > Saat ve dil > Konuşma > Sesleri yönet > Ses ekle > Türkçe, sonra b
 Konuşan tanıma oyun müziği ve efektler karıştığında yanılabilir: menü > Dublaj > Karakter hafızası'ndan
 karakterin cinsiyetini düzeltebilir (kalıcıdır), sesini dinleyebilir, silebilir ya da hafızayı
 sıfırlayabilirsiniz.
+
+### Karma dublaj (Gemini + Edge)
+
+Menü > Dublaj > Ses: **gemini**. Google AI Studio'dan alınan ücretsiz API anahtarını menüdeki alana yapıştırın.
+Her satır Gemini TTS'ten, algılanan duyguya göre talimatla ("çok sinirli, bağırarak", "korkmuş, fısıltıyla")
+ve karaktere özgü bir hazır sesle istenir. Aynı anda Edge sesi de hazırlanır: Gemini 1,2 sn içinde
+gelmezse, kotası dolarsa ya da hata verirse **hazır Edge sesi beklemeden çalar**; o da yoksa Windows sesi.
+Kota dolunca Gemini 10 dk dinlenir. Menü son satırı hangi motorun okuduğunu ve kaç kez Edge'e geçildiğini
+gösterir. Ücretsiz kota ve Türkçe kalitesi Google'a bağlıdır; anahtar yoksa doğrudan Edge kullanılır.
+
+### Sokak konuşmaları (Ctrl+Alt+N ya da menüdeki "Sokak" anahtarı)
+
+Altyazısı olmayan NPC konuşmaları oyun sesinden yazıya çevrilir (faster-whisper, bilgisayarınızda,
+işlemcide; ilk açılışta model bir kez indirilir), sonra çevrilip ekranın üstünde "Sokak: …" diye birkaç
+saniye gösterilir. İsterseniz seslendirilir (menü > Çeviri > Sokak konuşmaları).
+
+- Ekranda altyazı varken dinlenmez (o diyalog zaten çevriliyor), kendi dublajımız çalarken de.
+- "Konuşma yok" olasılığı yüksek, düşük güvenli ya da müzik işaretli sonuçlar atılır; yine de araç
+  radyosunu kısmak daha temiz sonuç verir.
 
 ### Oturum kaydı
 

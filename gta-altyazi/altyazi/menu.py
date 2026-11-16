@@ -37,6 +37,7 @@ class Controller(Protocol):
     def tts_voices(self) -> list[str]: ...
     def set_tts(self, enabled: bool) -> str | None: ...
     def dub_status(self) -> list[tuple[str, str]]: ...
+    def set_street(self, enabled: bool) -> str | None: ...
     def characters(self) -> list: ...
     def character_gender(self, char_id: int, gender: str) -> None: ...
     def character_remove(self, char_id: int) -> None: ...
@@ -121,6 +122,9 @@ class ControlPanel:
         self.dub_var = tk.BooleanVar(value=bool(self.cfg.tts_enabled))
         ttk.Checkbutton(head, text="Dublaj", style=self._big_switch, variable=self.dub_var,
                         command=self._toggle_dub).pack(side="left", padx=8)
+        self.street_var = tk.BooleanVar(value=bool(self.cfg.street_enabled))
+        ttk.Checkbutton(head, text="Sokak", style=self._big_switch, variable=self.street_var,
+                        command=self._toggle_street).pack(side="left", padx=8)
         ttk.Button(head, text="Çık", command=lambda: self.ctl.action("quit")).pack(side="right")
         ttk.Button(head, text="Gizle", command=self.hide).pack(side="right", padx=6)
         ttk.Button(head, text="Kaydet ve yeniden başlat", style=self._accent,
@@ -144,6 +148,15 @@ class ControlPanel:
     def _toggle_translation(self) -> None:
         if self.translate_var.get() == self.ctl.paused():
             self.ctl.action("pause")
+
+    def _toggle_street(self) -> None:
+        error = self.ctl.set_street(self.street_var.get())
+        if error:
+            self.street_var.set(False)
+            self.note_lbl.configure(text=error, foreground=RED)
+        else:
+            self.note_lbl.configure(text="Sokak konuşmaları açık: ilk açılışta konuşma tanıma modeli indirilir."
+                                    if self.street_var.get() else "")
 
     def _toggle_dub(self) -> None:
         error = self.ctl.set_tts(self.dub_var.get())
@@ -235,6 +248,15 @@ class ControlPanel:
                         "ollama_context_continuation", restart=True)
         r = self._check(card, r, "Sansürsüz çeviri (küfür yumuşatılmaz)", "uncensored", restart=True)
         r = self._entry(card, r, "DeepL anahtarı", "deepl_auth_key", restart=True, secret=True)
+        card = self._card(f, "Sokak konuşmaları (altyazısız NPC'ler)")
+        r = 0
+        r = self._combo(card, r, "Konuşma tanıma modeli", "street_model", ["base.en", "small.en", "medium.en"],
+                        restart=True, hint="base: hızlı · small: dengeli (önerilen) · medium: doğru ama yavaş")
+        r = self._check(card, r, "Sokak konuşmalarını da seslendir (dublaj açıkken)", "street_dub", switch=True)
+        ttk.Label(card, text="Oyun sesi dinlenir; ekranda altyazı varken ve dublaj çalarken dinlenmez. "
+                             "Radyo şarkıları elenir ama araçta radyoyu kısmak daha temiz sonuç verir.",
+                  style="Muted.TLabel", wraplength=820, justify="left").grid(row=r, column=0, columnspan=3,
+                                                                             sticky="w", pady=(4, 0))
         ttk.Button(f, text="Sözlüğü aç (isim/terim karşılıkları)",
                    command=lambda: self.ctl.open_folder("glossary")).pack(anchor="w")
 
@@ -554,6 +576,8 @@ class ControlPanel:
                     self.translate_var.set(not paused)
                 if self.dub_var.get() != bool(self.cfg.tts_enabled):
                     self.dub_var.set(bool(self.cfg.tts_enabled))
+                if self.street_var.get() != bool(self.cfg.street_enabled):
+                    self.street_var.set(bool(self.cfg.street_enabled))
                 self.state_lbl.configure(
                     text=("Çeviri duraklatıldı" if paused else "Çeviri çalışıyor")
                     + ("  ·  Dublaj açık" if self.cfg.tts_enabled else "")

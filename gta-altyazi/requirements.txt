@@ -22,3 +22,5 @@ sv-ttk>=2.6
 # Dublaj: doğal Türkçe kadın/erkek ses (çevrimiçi) ve oyun sesini dinleyip konuşanı tanıma
 edge-tts>=7.0
 soundcard>=0.4.3
+# Sokak konuşmaları: oyun sesinden konuşma tanıma (yerel, işlemcide)
+faster-whisper>=1.0

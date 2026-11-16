@@ -166,6 +166,12 @@ class Config:
     # Başlatınca ayar menüsü açılsın.
     show_menu_on_start: bool = True
 
+    # Sokak konuşmaları: altyazısı olmayan NPC konuşmaları oyun sesinden yazıya çevrilip çevrilir
+    # (faster-whisper, işlemcide). Ekranda altyazı varken ve dublaj çalarken dinlenmez.
+    street_enabled: bool = False
+    street_model: str = "small.en"   # base.en: daha hızlı · small.en: dengeli · medium.en: daha doğru, yavaş
+    street_dub: bool = False         # sokak satırlarını da seslendir
+
     # Oturum kaydı: görülen her satır (İngilizce + Türkçe) kayitlar/ klasörüne yazılır.
     session_log: bool = True
     session_log_dir: str = "kayitlar"

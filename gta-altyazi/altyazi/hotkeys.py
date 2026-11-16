@@ -19,7 +19,8 @@ ACTIONS: list[tuple[str, str, str]] = [
     ("font-down", "Yazıyı küçült", "ctrl+alt+pagedown"),
     ("move-up", "Yazıyı yukarı taşı", "ctrl+alt+up"),
     ("move-down", "Yazıyı aşağı taşı", "ctrl+alt+down"),
-    ("tts", "Sesli okuma (dublaj) aç / kapat", "ctrl+alt+d"),
+    ("tts", "Dublaj aç / kapat", "ctrl+alt+d"),
+    ("street", "Sokak konuşmalarını aç / kapat", "ctrl+alt+n"),
     ("quit", "Programdan çık", "ctrl+alt+q"),
 ]
 ACTION_LABELS = {action: label for action, label, _ in ACTIONS}
