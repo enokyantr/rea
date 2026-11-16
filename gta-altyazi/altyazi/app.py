@@ -391,6 +391,8 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
     root = tk.Tk()
     root.withdraw()
     ui: queue.Queue = queue.Queue()
+    # Ayrıntılı kayıt (süreler): --debug ya da menüdeki ayar; menüden program durmadan açılıp kapanır.
+    detail = {"on": bool(debug or cfg.detailed_log)}
 
     overlays: dict[str, Overlay] = {MAIN: Overlay(root, cfg, cfg.display_mode)}
     pipelines: dict[str, Pipeline] = {}
@@ -416,7 +418,7 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
         return rects
 
     pipelines[MAIN] = Pipeline(cfg, MAIN, lambda: cfg.region if cfg.region_enabled else None, cfg.display_mode,
-                               make_translator(), ui, debug,
+                               make_translator(), ui, detail["on"],
                                sample_rect=lambda: main_overlay.sample_rect, own_rects=own_rects)
     for name in EXTRA_REGION_KEYS.values():
         def get_region(name=name):
@@ -424,7 +426,7 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
             return extra.region if extra and extra.enabled else None
         mode = cfg.extra(name).display_mode if cfg.extra(name) else "cover"
         overlays[name] = Overlay(root, cfg, mode)
-        pipelines[name] = Pipeline(cfg, name, get_region, mode, make_translator(), ui, debug,
+        pipelines[name] = Pipeline(cfg, name, get_region, mode, make_translator(), ui, detail["on"],
                                    sample_rect=lambda ov=overlays[name]: ov.sample_rect, own_rects=own_rects)
     from .street import StreetListener
 
@@ -718,7 +720,7 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
         if enabled and speaker is None:
             recorder = ensure_recorder() if cfg.dub_detect_speaker else None
             speaker = Speaker(cfg, book, recorder, log)
-            speaker.debug = debug  # --debug: her satırın dublaj gecikmesi loga
+            speaker.debug = detail["on"]  # ayrıntılı kayıt: her satırın dublaj gecikmesi loga
             speaker.start()
             speaker.ready.wait(5)
             if speaker.error:
@@ -812,6 +814,29 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
         except (OSError, subprocess.SubprocessError) as exc:
             return f"Kısayol oluşturulamadı: {exc}"
         return "Masaüstüne \"GTA Altyazı\" kısayolu eklendi."
+
+    def set_detailed(on: bool) -> None:
+        detail["on"] = on
+        cfg.detailed_log = on
+        for pipeline in pipelines.values():
+            pipeline.debug = on
+        if tts["speaker"] is not None:
+            tts["speaker"].debug = on
+        save_soon()
+        log(f"Ayrıntılı kayıt {'açık' if on else 'kapalı'}")
+
+    def save_log() -> str:
+        from .logbuf import BUFFER
+
+        folder = Path(cfg.session_log_dir)
+        folder = folder if folder.is_absolute() else cfg_path.parent / folder
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            path = folder / f"sorun_kaydi_{time.strftime('%Y-%m-%d_%H-%M-%S')}.txt"
+            path.write_text(BUFFER.text() + "\n", encoding="utf-8")
+        except OSError as exc:
+            return f"Kaydedilemedi: {exc}"
+        return f"Kaydedildi: {path}"
 
     def open_folder(which: str) -> None:
         if which == "log":
@@ -940,6 +965,22 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
         def open_folder(self, which: str) -> None:
             open_folder(which)
 
+        def log_since(self, seen: int) -> tuple[int, list[str]]:
+            from .logbuf import BUFFER
+
+            return BUFFER.since(seen)
+
+        def log_text(self) -> str:
+            from .logbuf import BUFFER
+
+            return BUFFER.text()
+
+        def set_detailed(self, on: bool) -> None:
+            set_detailed(on)
+
+        def save_log(self) -> str:
+            return save_log()
+
         def desktop_shortcut(self) -> str:
             return desktop_shortcut()
 
@@ -994,7 +1035,7 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
                              info=f"{'taslak' if stage == DRAFT else 'son çeviri'}, ilk okumadan ekrana {took:.0f} ms")
         if stage == FINAL:
             finalize(name, seq, translated, original, first_seen)
-        if debug:
+        if detail["on"]:
             log(f"ilk okumadan ekrana ({'taslak' if stage == DRAFT else 'son çeviri'}): {took:.0f} ms")
 
     def finalize(name: str, seq: int, translated: str, original: str, first_seen) -> None:
@@ -1041,7 +1082,7 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
                 elif kind == "palette":
                     _, name, palette = msg
                     overlays[name].set_palette(palette)
-                    if debug:
+                    if detail["on"]:
                         log(f"yazı rengi: {palette.fill} (kontur {palette.outline_px}px)")
                 elif kind in ("show", "error") and (state["paused"] or state["picking"]):
                     # Duraklatma/seçim sırasında yolda olan çeviri: gizli pencereye yazılıp devamda

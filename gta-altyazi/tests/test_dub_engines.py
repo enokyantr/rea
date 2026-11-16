@@ -161,3 +161,44 @@ def test_consistently_late_gemini_is_not_waited_for():
     t0 = time.monotonic()
     sp._speak_line("Selam", time.monotonic(), sp._generation, None, "", None, time.monotonic())
     assert played == [".mp3"] and time.monotonic() - t0 < 0.3 and called == []
+
+
+def test_said_lines_are_prepared_immediately_not_after_previous_starts():
+    sp, played = _queue_speaker()
+    started = []
+
+    def synth(text, d, rate):
+        started.append((text, time.monotonic()))
+        time.sleep(0.3)
+        return text.encode() * 8000, ".mp3", "Edge"
+    sp._synthesize = synth
+    t0 = time.monotonic()
+    sp.say("A", t0)
+    sp.say("B", t0)
+    time.sleep(0.1)
+    assert [t for t, _ in started] == ["A", "B"]  # ikisi de hemen hazırlanmaya başladı
+    sp._speak_line(*sp._jobs.get_nowait())
+    sp.busy_until = 0
+    sp._speak_line(*sp._jobs.get_nowait())
+    assert played == ["A", "B"]
+
+
+def test_rate_rises_when_dub_falls_behind_subtitles():
+    sp, _ = _queue_speaker()
+    now = time.monotonic()
+    first = sp._plan("Evet, orada çok zaman geçirdiğini görebiliyorum.", now, 0, now)
+    later = sp._plan("Evet, mümkün olduğunca çok.", now + 0.5, 0, now + 0.5)  # önceki daha bitmemiş
+    assert first == 1.0 and 1.15 < later <= 1.45
+    assert sp._plan("x", now - 30, 0, now) == pytest.approx(1.45)  # hız sınırı
+
+
+def test_interrupt_releases_prepared_streams():
+    from altyazi.tts import _EdgeStream
+    sp, _ = _queue_speaker()
+    stream = _EdgeStream()
+    sp._synthesize = lambda text, d, rate: (stream, ".mp3", "Edge")
+    sp.say("A", time.monotonic())
+    time.sleep(0.1)
+    sp.interrupt()
+    time.sleep(0.05)
+    assert stream.closed

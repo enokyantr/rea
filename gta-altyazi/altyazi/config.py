@@ -181,6 +181,8 @@ class Config:
 
     # Oturum kaydı: görülen her satır (İngilizce + Türkçe) kayitlar/ klasörüne yazılır.
     session_log: bool = True
+    # Ayrıntılı kayıt: OCR/çeviri/dublaj süreleri konsola ve menüdeki kayda yazılır (--debug gerekmez).
+    detailed_log: bool = True
     session_log_dir: str = "kayitlar"
 
     # Dublaj: Türkçe satırı konuşan karakterin sesine uygun sesle okur (menüden / Ctrl+Alt+D anında).

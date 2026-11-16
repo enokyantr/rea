@@ -23,6 +23,9 @@ def main() -> int:
     for stream in (sys.stdout, sys.stderr):
         if stream is not None and hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
+    from .logbuf import install
+
+    install()  # menüdeki "Kayıt" bölümü konsol çıktısını gösterebilsin
     parser = argparse.ArgumentParser(prog="altyazi", description="Remote Play için anlık Türkçe altyazı")
     parser.add_argument("--config", type=Path, default=APP_DIR / "config.json")
     parser.add_argument("--dry-run", action="store_true", help="DeepL kullanmadan dene ([TR] metin)")

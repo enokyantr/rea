@@ -143,6 +143,8 @@ def _discard(job) -> None:
             result = done.result()
         except Exception:
             return
+        if isinstance(result, tuple) and result:
+            result = result[0]
         if isinstance(result, _EdgeStream):
             result.close()
     job.add_done_callback(close)
@@ -172,7 +174,12 @@ class Speaker(threading.Thread):
         self._gemini_off_until = 0.0
         self._gemini_fail = 0
         self._gemini_model = 0
-        self._pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="dublaj-ses")
+        self._pool = ThreadPoolExecutor(max_workers=6, thread_name_prefix="dublaj-ses")
+        # Satır sesleri altyazı gelir gelmez (sıra beklemeden) bununla hazırlanır.
+        self._prep = ThreadPoolExecutor(max_workers=4, thread_name_prefix="dublaj-hazirlik")
+        self._free_at = 0.0       # sıradaki satırların tahmini bittiği an (hız planı için)
+        self._cps = 15.0          # Türkçe ses hızı (harf/sn, hız x1'de); çalınan satırlarla ayarlanır
+        self._last_played = None  # (PlayHandle, harf sayısı, hız): süre ölçümü için
         import requests
 
         self._http = requests.Session()
@@ -204,18 +211,35 @@ class Speaker(threading.Thread):
             self._prepared.pop(next(iter(self._prepared)))
 
     def say(self, text: str, onset: float | None = None, original: str = "", key=None) -> None:
-        """Satırı sıraya ekle. Satırlar yarıda kesilmez; sıra birikirse sonrakiler biraz hızlı okunur,
-        çok geride kalan (dub_max_lag_ms) satır, arkasında yenisi varsa atlanır."""
-        onset = onset if onset is not None else time.monotonic()
-        self._jobs.put((text, onset, self._generation, None, original, key, time.monotonic()))
+        """Satırı sıraya ekle ve sesini HEMEN hazırlamaya başla (önceki satırlar çalarken).
+        Satırlar yarıda kesilmez; geride kalındıkça okuma hızlanır (en çok +%45), çok geride kalan
+        (dub_max_lag_ms) satır, arkasında yenisi varsa atlanır."""
+        now = time.monotonic()
+        onset = onset if onset is not None else now
+        factor = self._plan(text, onset, self._jobs.qsize(), now)
+        prepared = self._prep.submit(self._prepare, text, onset, original, key, None, factor)
+        self._jobs.put((text, onset, self._generation, None, original, key, now, prepared))
+
+    def _plan(self, text: str, onset: float, pending: int, now: float) -> float:
+        """Hız katsayısı: satırın ne kadar geç başlayacağı tahminine göre (önceki satırlar + ses
+        hazırlığı ~1 sn). Hedef: ses altyazıdan en fazla ~1,5 sn sonra başlasın."""
+        start = max(now + 1.0, self._free_at)
+        expected_lag = start - onset
+        factor = 1 + min(0.45, 0.12 * min(pending, 2) + max(0.0, expected_lag - 1.5) * 0.25)
+        rate = self.cfg.tts_rate * factor
+        self._free_at = start + len(text) / (self._cps * max(0.5, rate)) + 0.1
+        return factor
 
     def interrupt(self) -> None:
         """Her şeyi sustur ve sırayı boşalt (duraklatma, kapatma)."""
         self._generation += 1
         self.busy_until = time.monotonic()
+        self._free_at = 0.0
         try:
             while True:
-                self._jobs.get_nowait()
+                job = self._jobs.get_nowait()
+                if job is not None and len(job) > 7 and job[7] is not None:
+                    _discard(job[7])
         except queue.Empty:
             pass
         feeding, self._feeding = self._feeding, None
@@ -255,8 +279,8 @@ class Speaker(threading.Thread):
 
     def sample(self, gender: str, pitch_pct: int = 0, rate_pct: int = 0, voice: int = 0) -> None:
         """Menüden "Dinle": bu karakterin sesiyle örnek cümle."""
-        self._jobs.put(("Merhaba, bu benim sesim.", None, self._generation,
-                        Delivery(gender, voice, pitch_pct, rate_pct), "", None, time.monotonic()))
+        self._jobs.put(("Merhaba, bu benim sesim.", time.monotonic(), self._generation,
+                        Delivery(gender, voice, pitch_pct, rate_pct), "", None, time.monotonic(), None))
 
     # --- iş parçacığı ----------------------------------------------------------------------
 
@@ -294,6 +318,8 @@ class Speaker(threading.Thread):
             self.voice_in_use = "Edge (doğal Türkçe)" + (" — Gemini anahtarı yok" if self.cfg.dub_engine == "gemini" else "")
         else:
             self.voice_in_use = self._windows_voice.display_name if self._windows_voice else ""
+        if self._stream is None and self.cfg.dub_engine in ("edge", "gemini"):
+            self.voice_in_use += " · eski çalıcı (gecikmeli; guncelle.bat çalıştırın)"
         self.ready.set()
         while True:
             job = self._jobs.get()
@@ -306,28 +332,53 @@ class Speaker(threading.Thread):
         if self._stream is not None:
             self._stream.close()
 
-    def _speak_line(self, text: str, onset: float, generation: int, forced: Delivery | None, original: str,
-                    key, queued_at: float) -> None:
-        if generation != self._generation:
-            return  # duraklatıldı / kapatıldı
-        pending = self._jobs.qsize()
-        max_lag = self.cfg.dub_max_lag_ms / 1000
-        if forced is None and pending and time.monotonic() - onset > max_lag:
-            self._prepared.pop(key, None)
-            if self.debug:
-                self._log(f"dublaj: geride kalan satır atlandı ({1000 * (time.monotonic() - onset):.0f} ms): {text}")
-            return
+    def _prepare(self, text: str, onset: float, original: str, key, forced: Delivery | None,
+                 factor: float):
+        """Konuşan tanıma + ses hazırlığı (sıradan bağımsız, havuzda). Edge sesi akış olarak döner."""
         t0 = time.monotonic()
         delivery = forced or self._delivery(key, onset, original)
         t_detect = time.monotonic()
-        # Sıra birikmişse yetişmek için biraz hızlı oku (en fazla +%30).
-        catch_up = 1 + 0.12 * min(pending, 2) + (0.06 if time.monotonic() - onset > 2.0 else 0.0)
-        rate = self.cfg.tts_rate * (1 + delivery.rate_pct / 100) * catch_up
+        rate = min(2.0, self.cfg.tts_rate * (1 + delivery.rate_pct / 100) * factor)
         audio, ext, source = self._synthesize(text, delivery, rate)
-        t_audio = time.monotonic()
-        # Önceki satır bitene kadar bekle (ses hazırlığı onunla paralel yapıldı): satırlar kesilmez.
+        return audio, ext, source, delivery, rate, t_detect - t0, time.monotonic() - t_detect
+
+    def _speak_line(self, text: str, onset: float, generation: int, forced: Delivery | None, original: str,
+                    key, queued_at: float, prepared=None) -> None:
+        if generation != self._generation:
+            if prepared is not None:
+                _discard(prepared)
+            return  # duraklatıldı / kapatıldı
+        pending = self._jobs.qsize()
+        if prepared is None:  # sıraya say() dışında girdi (örnek ses, testler): şimdi hazırla
+            factor = 1 + min(0.45, 0.12 * min(pending, 2) + max(0.0, time.monotonic() - onset - 1.5) * 0.25)
+            prepared_now = self._prepare(text, onset, original, key, forced, factor if forced is None else 1.0)
+        else:
+            prepared_now = None
+        # Önceki satır bitene kadar bekle (bu satırın sesi o çalarken hazırlandı): satırlar kesilmez.
+        t_wait = time.monotonic()
         while generation == self._generation and (time.monotonic() < self._file_until or self.playing()):
             time.sleep(0.01)
+        waited = time.monotonic() - t_wait
+        self._learn_speed()
+        pending = self._jobs.qsize()
+        max_lag = self.cfg.dub_max_lag_ms / 1000
+        late = time.monotonic() - onset
+        if generation != self._generation or (forced is None and pending and late > max_lag):
+            if prepared is not None:
+                _discard(prepared)
+            elif prepared_now and isinstance(prepared_now[0], _EdgeStream):
+                prepared_now[0].close()
+            self._prepared.pop(key, None)
+            if self.debug and generation == self._generation:
+                self._log(f"dublaj: geride kalan satır atlandı ({1000 * late:.0f} ms): {text}")
+            return
+        if prepared_now is None:
+            try:
+                prepared_now = prepared.result(timeout=8.0)
+            except Exception as exc:
+                self._log(f"Dublaj sesi hazırlanamadı: {exc}")
+                return
+        audio, ext, source, delivery, rate, detect_s, synth_s = prepared_now
         if generation != self._generation:
             if isinstance(audio, _EdgeStream):
                 audio.close()
@@ -335,6 +386,8 @@ class Speaker(threading.Thread):
         if audio:
             self.last_engine = source
             self._play_audio(audio, ext)
+            if self._handle is not None and self._stream is not None:
+                self._last_played = (self._handle, len(text), rate)
         else:
             self.last_engine = "Windows"
             self.busy_until = time.monotonic() + 0.075 * len(text) / max(0.5, rate) + 0.15
@@ -342,10 +395,24 @@ class Speaker(threading.Thread):
         if self.debug and self._handle is not None and audio:
             self._handle.wait_started(1.0)  # gecikme ilk sesin aygıta verildiği andan ölçülsün
         self.lag_s = time.monotonic() - onset
+        # Gerçek başlama tahminden geçse sonraki satırların planı da kaysın.
+        self._free_at = max(self._free_at, time.monotonic() + len(text) / (self._cps * max(0.5, rate)))
         if self.debug and forced is None:
             self._log(f"dublaj: altyazıdan {1000 * self.lag_s:.0f} ms sonra başladı · tanıma "
-                      f"{1000 * (t_detect - t0):.0f} ms · ses {1000 * (t_audio - t_detect):.0f} ms ({self.last_engine})"
-                      f" · sıradaki {pending} · hız x{catch_up:.2f}")
+                      f"{1000 * detect_s:.0f} ms · ses {1000 * synth_s:.0f} ms ({self.last_engine})"
+                      f" · önceki satırı bekleme {1000 * waited:.0f} ms · sıradaki {pending}"
+                      f" · hız x{rate / max(0.1, self.cfg.tts_rate):.2f}")
+
+    def _learn_speed(self) -> None:
+        """Biten satırın gerçek süresiyle harf/sn tahminini güncelle (hız planı doğru olsun)."""
+        last, self._last_played = self._last_played, None
+        if last is None:
+            return
+        handle, chars, rate = last
+        if handle.done and handle.error is None and handle.duration_s > 0.5 and chars >= 8:
+            cps = chars / (handle.duration_s * max(0.5, rate))
+            if 6 < cps < 30:
+                self._cps = 0.7 * self._cps + 0.3 * cps
 
     def _synthesize(self, text: str, delivery: Delivery, rate: float) -> tuple[bytes | None, str, str]:
         now = time.monotonic()
@@ -481,12 +548,15 @@ class Speaker(threading.Thread):
     def _edge_produce(edge_tts, stream: _EdgeStream, text: str, voice: str, options: dict) -> None:
         """Arka planda: Edge parçalarını indikçe akışa yazar (kendi olay döngüsüyle)."""
         async def fetch() -> None:
-            comm = edge_tts.Communicate(text, voice, **options)
-            async for chunk in comm.stream():
-                if stream.closed:
-                    return
-                if chunk.get("type") == "audio":
-                    stream.put(chunk["data"])
+            chunks = edge_tts.Communicate(text, voice, **options).stream()
+            try:
+                async for chunk in chunks:
+                    if stream.closed:
+                        return
+                    if chunk.get("type") == "audio":
+                        stream.put(chunk["data"])
+            finally:
+                await chunks.aclose()  # bağlantı düzgün kapansın (yarıda bırakılınca uyarı vermesin)
 
         loop = asyncio.new_event_loop()
         try:
@@ -495,6 +565,10 @@ class Speaker(threading.Thread):
         except Exception as exc:
             stream.end(exc)
         finally:
+            try:
+                loop.run_until_complete(loop.shutdown_asyncgens())
+            except Exception:
+                pass
             loop.close()
 
     def _write_temp(self, data: bytes, ext: str) -> Path:

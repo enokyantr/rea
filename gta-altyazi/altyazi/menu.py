@@ -44,6 +44,10 @@ class Controller(Protocol):
     def characters_clear(self) -> None: ...
     def character_sample(self, char_id: int) -> str | None: ...
     def open_folder(self, which: str) -> None: ...
+    def log_since(self, seen: int) -> tuple[int, list[str]]: ...
+    def log_text(self) -> str: ...
+    def set_detailed(self, on: bool) -> None: ...
+    def save_log(self) -> str: ...
     def desktop_shortcut(self) -> str: ...
 
 
@@ -498,13 +502,78 @@ class ControlPanel:
     # Kayıt ------------------------------------------------------------------------------------
 
     def _tab_log(self, f: ttk.Frame) -> None:
+        card = self._card(f, "Canlı kayıt (sorun olunca buradan kopyalayıp gönderin)")
+        self.detail_var = tk.BooleanVar(value=bool(getattr(self.cfg, "detailed_log", True)))
+        ttk.Checkbutton(card, text="Ayrıntılı kayıt (OCR, çeviri ve dublaj süreleri)", variable=self.detail_var,
+                        command=lambda: self.ctl.set_detailed(self.detail_var.get()),
+                        style=self._switch).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 6))
+        buttons = ttk.Frame(card)
+        buttons.grid(row=1, column=0, columnspan=4, sticky="w")
+        ttk.Button(buttons, text="Tümünü kopyala", style=self._accent, command=self._copy_log).pack(side="left")
+        ttk.Button(buttons, text="Dosyaya kaydet", command=self._save_log).pack(side="left", padx=6)
+        ttk.Button(buttons, text="Ekranı temizle", command=self._clear_log).pack(side="left")
+        self.log_note = ttk.Label(buttons, text="", style="Muted.TLabel")
+        self.log_note.pack(side="left", padx=10)
+
+        box = ttk.Frame(f)
+        box.pack(fill="both", expand=True, pady=(0, 10))
+        self.log_view = tk.Text(box, height=14, wrap="none", font=("Consolas", 9), state="disabled",
+                                background="#111111" if self.themed else "white",
+                                foreground="#d6d6d6" if self.themed else "black",
+                                insertbackground="#d6d6d6", relief="flat", borderwidth=0)
+        ys = ttk.Scrollbar(box, orient="vertical", command=self.log_view.yview)
+        xs = ttk.Scrollbar(box, orient="horizontal", command=self.log_view.xview)
+        self.log_view.configure(yscrollcommand=ys.set, xscrollcommand=xs.set)
+        self.log_view.grid(row=0, column=0, sticky="nsew")
+        ys.grid(row=0, column=1, sticky="ns")
+        xs.grid(row=1, column=0, sticky="ew")
+        box.rowconfigure(0, weight=1)
+        box.columnconfigure(0, weight=1)
+        self._log_seen = 0
+        self._log_lines = 0
+
         card = self._card(f, "Oturum kaydı")
         r = self._check(card, 0, "Görülen satırları (İngilizce + Türkçe) dosyaya yaz", "session_log", restart=True,
                         switch=True)
-        ttk.Label(card, text="Kaçırdığınız sahneleri okumak ve kötü çevirileri toplu bildirmek için.",
-                  style="Muted.TLabel").grid(row=r, column=0, columnspan=3, sticky="w")
         ttk.Button(card, text="Kayıt klasörünü aç", command=lambda: self.ctl.open_folder("log")).grid(
-            row=r + 1, column=0, sticky="w", pady=(8, 0))
+            row=r, column=0, sticky="w", pady=(4, 0))
+
+    LOG_VIEW_MAX = 1500  # ekranda tutulan satır (tamamı "Tümünü kopyala" ile alınır)
+
+    def _fill_log(self) -> None:
+        view = getattr(self, "log_view", None)
+        if view is None:
+            return
+        self._log_seen, lines = self.ctl.log_since(self._log_seen)
+        if not lines:
+            return
+        at_bottom = self._log_lines == 0 or view.yview()[1] >= 0.999
+        view.configure(state="normal")
+        view.insert("end", "\n".join(lines) + "\n")
+        self._log_lines += len(lines)
+        if self._log_lines > self.LOG_VIEW_MAX:
+            view.delete("1.0", f"{self._log_lines - self.LOG_VIEW_MAX + 1}.0")
+            self._log_lines = self.LOG_VIEW_MAX
+        view.configure(state="disabled")
+        if at_bottom:
+            view.see("end")
+
+    def _copy_log(self) -> None:
+        text = self.ctl.log_text()
+        self.win.clipboard_clear()
+        self.win.clipboard_append(text)
+        self.log_note.configure(text=f"{text.count(chr(10)) + 1 if text else 0} satır kopyalandı — "
+                                     "sohbete yapıştırabilirsiniz.")
+
+    def _save_log(self) -> None:
+        self.log_note.configure(text=self.ctl.save_log())
+
+    def _clear_log(self) -> None:
+        self.log_view.configure(state="normal")
+        self.log_view.delete("1.0", "end")
+        self.log_view.configure(state="disabled")
+        self._log_lines = 0
+        self.log_note.configure(text="Ekran temizlendi (kopyalama yine tüm kaydı alır).")
 
     # --- alan yardımcıları ------------------------------------------------------------------
 
@@ -651,5 +720,6 @@ class ControlPanel:
                 self.last_info.configure(text=info)
                 self.dub_status_lbl.configure(text="\n".join(f"{k}: {v}" for k, v in self.ctl.dub_status()))
                 self._fill_characters()
+                self._fill_log()
         finally:
             self.win.after(self.REFRESH_MS, self._refresh)
