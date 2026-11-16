@@ -150,6 +150,9 @@ def test_num_ctx_and_context_switch(fake):
     # Gerçek loglardan: çeviri yerine açıklama/ret
     ('(Not translated as per guidelines. In Turkish street talk, "nigga" would be "it" or "şerefsiz".)', True),
     ("Bu cümle anlaşılmaz ve hatalı görünüyor. Orijinal metinde bulunmadığı için Türkçe'ye çeviremem.", True),
+    ("Bu mesajın anlamını anlamıyorum. Görünüşe göre bir hata veya teknik sorun var. Lütfen daha açık bir "
+     "talimat veya soru ile geri dönün.", True),
+    ("Seni anlamıyorum, ne diyorsun lan?", False),
     ("Direksiyonu çevir, hadi!", False),
     ("Siktir git lan.", False),
     ("Lan...", False),

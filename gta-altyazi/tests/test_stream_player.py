@@ -30,6 +30,15 @@ def make_mp3(seconds=1.5, kbps=48, seed=0) -> bytes:
     return bytes(enc.encode(sig.astype(np.int16).tobytes()) + enc.flush())
 
 
+def trimmed(pcm: bytes) -> bytes:
+    """Çalıcının yaptığı gibi: baştaki/sondaki sessizlik (40 ms pay bırakılarak) atılır."""
+    x = np.frombuffer(pcm, np.int16).astype(np.int32)
+    loud = np.flatnonzero(np.abs(x) > sp.SILENCE_LEVEL)
+    keep = int(sp.KEEP_EDGE_S * SR)
+    start, end = max(0, loud[0] - keep), min(len(x), loud[-1] + 1 + keep)
+    return pcm[2 * start:2 * end]
+
+
 def whole_decode(mp3: bytes) -> bytes:
     return miniaudio.decode(mp3, nchannels=1, sample_rate=SR).samples.tobytes()
 
@@ -164,10 +173,10 @@ def test_player_plays_decoded_audio_then_finishes():
     assert h._decode_done.wait(10)
     assert player.busy()
     out = pump_until_done(dev, h)
-    expected = whole_decode(mp3)
+    expected = trimmed(whole_decode(mp3))
     assert h.done and h.wait(0) and h.error is None
     assert h.started_at is not None
-    assert out[:len(expected)] == expected  # tamamı, baştan, eksiksiz
+    assert out[:len(expected)] == expected  # tamamı (uçlardaki sessizlik hariç), eksiksiz
     assert not any(out[len(expected):])  # sonrası sessizlik
     assert abs(h.duration_s - len(expected) / 2 / SR) < 1e-9
     assert not player.busy()
@@ -333,3 +342,18 @@ def test_interrupt_stops_playback_and_releases_download():
     speaker.interrupt()
     assert feeding.closed and speaker._handle.done and not speaker.playing()
     stop.set()
+
+
+def test_edge_silence_is_trimmed_so_lines_follow_each_other_quickly():
+    player, dev = make_player()
+    tone = (np.sin(np.arange(SR // 2) * 2 * np.pi * 300 / SR) * 8000).astype(np.int16)
+    pcm = np.concatenate([np.zeros(SR // 2, np.int16), tone, np.zeros(SR, np.int16)])  # 0,5 sn + 1 sn boşluk
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1), w.setsampwidth(2), w.setframerate(SR), w.writeframes(pcm.tobytes())
+    h = player.play_wav(buf.getvalue())
+    assert h._decode_done.wait(5)
+    out = pump_until_done(dev, h)
+    assert 0.5 < h.duration_s < 0.62 and 1.4 < h.trimmed_s < 1.5  # yalnızca ses (+2x40 ms) kaldı
+    first = np.flatnonzero(np.abs(np.frombuffer(out, np.int16)) > 300)[0]
+    assert first / SR < 0.06  # ses beklemeden başlıyor

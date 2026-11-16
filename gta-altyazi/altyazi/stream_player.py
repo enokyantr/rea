@@ -20,6 +20,8 @@ import threading
 import time
 from typing import Callable, Iterable, Iterator
 
+import numpy as np
+
 try:  # Kurulu değilse modül yine içe aktarılabilsin; StreamPlayer() açık bir hata verir.
     import miniaudio
 except Exception as _exc:  # pragma: no cover - kurulum eksikliği
@@ -40,6 +42,10 @@ PREBUFFER_S = 0.12
 # bitiriyor ya da bozuyor. 1024 bayt, 24 kHz MPEG-2 çerçevesinin (en çok ~480 bayt) iki katından
 # fazla; 48 kbit/s'te ~170 ms ses eder ama Edge sesi gerçek zamandan hızlı indiği için bekleme kısa.
 _MIN_READ = 1024
+# Konuşmanın başındaki/sonundaki sessizlik kırpılır (Edge sesleri boşlukla başlar ve biter); bu
+# eşiğin altı sessiz sayılır (~-40 dBFS). Kırpılan uçlarda bu kadar ses bırakılır (doğal giriş/çıkış).
+SILENCE_LEVEL = 300
+KEEP_EDGE_S = 0.04
 # Çözücü her seferde bu kadar kare üretir (20 ms): ilk ses ve durdurma tepkisi için küçük.
 _FRAMES_PER_BLOCK = 480
 
@@ -174,6 +180,9 @@ class PlayHandle:
         self._started = threading.Event()
         self._done = threading.Event()
         self._stopped = False
+        self._heard_voice = False  # baştaki sessizlik geçildi mi
+        self._lead = b""
+        self.trimmed_s = 0.0       # kırpılan sessizlik (sn)
         self._started_at: float | None = None
         self.finished_at: float | None = None  # bittiği/durdurulduğu time.monotonic() anı
         self.error: Exception | None = None  # çözme hatası (varsa); o ana kadarki ses yine çalar
@@ -209,6 +218,10 @@ class PlayHandle:
 
     # Çözücü tarafı
     def _feed(self, pcm: bytes) -> None:
+        if not self._heard_voice:
+            pcm = self._skip_leading_silence(pcm)
+            if not pcm:
+                return
         with self._lock:
             if self._stopped:
                 return
@@ -217,8 +230,39 @@ class PlayHandle:
             if len(self._buf) - self._pos >= self._prebuffer:
                 self._ready = True
 
+    def _skip_leading_silence(self, pcm: bytes) -> bytes:
+        # Atılan sessizliğin son KEEP_EDGE_S'i saklanır: ses başlayınca önüne eklenir.
+        pcm = self._lead + pcm
+        keep = int(KEEP_EDGE_S * SAMPLE_RATE) * SAMPLE_WIDTH
+        samples = np.frombuffer(pcm[:len(pcm) // 2 * 2], np.int16)
+        loud = np.flatnonzero(np.abs(samples.astype(np.int32)) > SILENCE_LEVEL)
+        if not len(loud):
+            self._lead = pcm[-keep:]
+            self.trimmed_s += (len(pcm) - len(self._lead)) / (SAMPLE_RATE * SAMPLE_WIDTH)
+            return b""
+        self._heard_voice = True
+        start = max(0, int(loud[0]) * SAMPLE_WIDTH - keep)
+        self.trimmed_s += start / (SAMPLE_RATE * SAMPLE_WIDTH)
+        self._lead = b""
+        return pcm[start:]
+
+    def _trim_trailing_silence(self) -> None:
+        """Çözme bitti: henüz çalınmamış sondaki sessizliği at (kilit altında çağrılır)."""
+        tail = np.frombuffer(bytes(self._buf[self._pos:])[:(len(self._buf) - self._pos) // 2 * 2], np.int16)
+        if not len(tail):
+            return
+        loud = np.flatnonzero(np.abs(tail.astype(np.int32)) > SILENCE_LEVEL)
+        keep = (int(loud[-1]) + 1 + int(KEEP_EDGE_S * SAMPLE_RATE)) if len(loud) else 0
+        if keep < len(tail):
+            cut = len(tail) - keep
+            del self._buf[len(self._buf) - cut * SAMPLE_WIDTH:]
+            self._decoded_bytes -= cut * SAMPLE_WIDTH
+            self.trimmed_s += cut / SAMPLE_RATE
+
     def _finish_decoding(self, error: Exception | None = None) -> None:
         with self._lock:
+            if not self._stopped:
+                self._trim_trailing_silence()
             if error is not None and self.error is None:
                 self.error = error
             self._ready = True

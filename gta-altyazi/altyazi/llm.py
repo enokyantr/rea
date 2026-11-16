@@ -84,7 +84,8 @@ _NOTE_LINE = re.compile(r"^\s*(?:not|note|açıklama|explanation)\s*:", re.IGNOR
 # "Bu cümle anlaşılmaz ve hatalı görünüyor... Türkçe'ye çeviremem."
 _META = re.compile(
     r"\b(?:not translated|translat(?:e|ed|ion|ing)\b|guidelines?|original (?:text|line)|as an ai|"
-    r"i can(?:no|')t|çeviremem|çevrilemez|çevirmek mümkün değil|orijinal metin|anlaşılmaz)",
+    r"i can(?:no|')t|çeviremem|çevrilemez|çevirmek mümkün değil|orijinal metin|anlaşılmaz|"
+    r"bu mesaj(?:ın|ı)?\b|daha (?:açık|net) bir (?:talimat|soru|ifade)|nasıl yardımcı olabilirim)",
     re.IGNORECASE,
 )
 

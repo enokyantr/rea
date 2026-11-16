@@ -409,6 +409,10 @@ class Speaker(threading.Thread):
         if last is None:
             return
         handle, chars, rate = last
+        if self.debug and handle.started_at and handle.finished_at:
+            self._log(f"dublaj: önceki satır {1000 * (handle.finished_at - handle.started_at):.0f} ms çaldı "
+                      f"(ses {1000 * handle.duration_s:.0f} ms, kırpılan sessizlik {1000 * handle.trimmed_s:.0f} ms, "
+                      f"{chars / max(0.1, handle.duration_s * max(0.5, rate)):.1f} harf/sn)")
         if handle.done and handle.error is None and handle.duration_s > 0.5 and chars >= 8:
             cps = chars / (handle.duration_s * max(0.5, rate))
             if 6 < cps < 30:
