@@ -60,3 +60,40 @@ def screen_to_region(rect: Rect, base: Rect) -> Region:
         width=round(max(0.0, right - left), 4),
         height=round(max(0.0, bottom - top), 4),
     )
+
+
+def fit_aspect(rect: Rect, aspect: float) -> Rect:
+    """Pencerede en-boy oranı korunarak ortalanan görüntünün alanı (kenarlardaki siyah bantlar
+    hariç). Pencere zaten bu orandaysa (±%1) olduğu gibi döner."""
+    if aspect <= 0 or rect.width <= 0 or rect.height <= 0:
+        return rect
+    current = rect.width / rect.height
+    if abs(current / aspect - 1) <= 0.01:
+        return rect
+    if current > aspect:  # geniş pencere: sağda/solda bant
+        width = round(rect.height * aspect)
+        return Rect(rect.left + (rect.width - width) // 2, rect.top, width, rect.height)
+    height = round(rect.width / aspect)
+    return Rect(rect.left, rect.top + (rect.height - height) // 2, rect.width, height)
+
+
+# Başlığında bunlar geçen pencere tarayıcı sekmesidir (ör. chiaki-ng'nin GitHub sayfası): son seçenek.
+_BROWSERS = ("google chrome", "mozilla firefox", "microsoft edge", "microsoft\u200b edge", "opera", "brave",
+             "vivaldi", "yandex")
+
+
+def pick_window(title_parts: list[str], windows: list[tuple[str, Rect]]) -> tuple[str, Rect] | None:
+    """Hedef pencere seçimi. Öncelik: tarayıcı sekmesi olmayan, başlığı verilen ifadeyle BAŞLAYAN
+    ("chiaki-ng | ...", "PS Remote Play") > başlığında geçen > tarayıcı sekmesi ("chiaki-ng - GitHub -
+    Google Chrome"). Aynı sınıfta en büyük pencere."""
+    needles = [p.casefold() for p in title_parts if p]
+    best, best_key = None, None
+    for title, rect in windows:
+        folded = title.casefold().strip()
+        if not any(n in folded for n in needles):
+            continue
+        browser = any(b in folded for b in _BROWSERS)
+        key = (not browser, any(folded.startswith(n) for n in needles), rect.width * rect.height)
+        if best_key is None or key > best_key:
+            best, best_key = (title, rect), key
+    return best

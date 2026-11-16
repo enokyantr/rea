@@ -189,6 +189,24 @@ yalnızca küfür/argo satırlarında kullanılır.
   ayrı bir pencerede). Menüyü yayından önce Ctrl+Alt+M ile gizleyin ya da ikinci ekrana taşıyın.
 - Sesli paylaşımda dublaj da arkadaşlarınıza gider.
 
+### chiaki-ng ile
+
+Program chiaki-ng'nin akış penceresini kendisi bulur (başlığı "chiaki" ile başlayan pencere; aynı
+adı taşıyan tarayıcı sekmeleri seçilmez). Pencere 16:9 değilse görüntünün yanındaki/altındaki siyah
+bantlar hesaba katılır; chiaki-ng'de görüntüyü pencereye **esneten** mod kullanıyorsanız `config.json`
+içinde `"video_aspect": 0` yapın.
+
+OCR doğruluğunu en çok akış kalitesi belirler (benzetim, 120 satır: 1080p'de karakter hatası %1,
+720p'de %5, 540p'de %25). chiaki-ng ayarlarında mümkün olan en yüksek değerleri seçin:
+
+- Çözünürlük **1080p** (PS5), kare hızı 60; bit hızını bağlantınızın kaldırdığı kadar yükseltin.
+- Codec **H.265 (HEVC)** ve donanım çözücü (ekran kartı): aynı bit hızında daha net yazı.
+- Mümkünse PS5'i kabloyla (Ethernet) bağlayın; Wi-Fi'de 5 GHz.
+
+Akış yine de bulanık/bloklu kalıyorsa menü → **OCR ve hız → Akış kalitesi: Düşük** seçin. Okuma
+emin değilken program görüntünün keskinleştirilmiş ve kumlanması süzülmüş hâllerini de okuyup en
+iyisini seçer (bu her zaman açık; iyi görüntüde ek iş yapılmaz).
+
 ### Oturum kaydı
 
 Görülen her satır İngilizce + Türkçe olarak `kayitlar/` klasörüne (oturum başına bir dosya) yazılır:

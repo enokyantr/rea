@@ -133,3 +133,17 @@ def box_signature(gray: np.ndarray, box: tuple[int, int, int, int], threshold: i
     if x1 - x0 < 8 or y1 - y0 < 4:
         return None
     return signature(gray[y0:y1, x0:x1] >= threshold, cols=96, rows=8)
+
+
+def sharpen(gray: np.ndarray) -> np.ndarray:
+    """Bulanık (720p civarı akış) yazıyı keskinleştirir (keskinlik maskesi)."""
+    from PIL import Image, ImageFilter
+
+    return np.asarray(Image.fromarray(gray).filter(ImageFilter.UnsharpMask(radius=2, percent=120, threshold=2)))
+
+
+def median3(gray: np.ndarray) -> np.ndarray:
+    """Sıkıştırma bloklarını/kumlanmayı (çok düşük bit hızı) yumuşatır, harf kenarını korur."""
+    from PIL import Image, ImageFilter
+
+    return np.asarray(Image.fromarray(gray).filter(ImageFilter.MedianFilter(3)))

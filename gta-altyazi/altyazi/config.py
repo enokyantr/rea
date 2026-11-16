@@ -90,6 +90,10 @@ class Config:
     # Altyazının okunacağı pencere (başlığında bu ifadelerden biri geçen ilk görünür pencere).
     # Bulunamazsa ana ekranın tamamı esas alınır.
     window_titles: list[str] = field(default_factory=lambda: ["PS Remote Play", "Chiaki"])
+    # Oyun görüntüsünün en-boy oranı: pencere bu orana uymuyorsa (Remote Play/chiaki-ng görüntüyü
+    # siyah bantlarla ortalar) bölgeler bantsız görüntüye göre hesaplanır. 0: kapalı (chiaki-ng'de
+    # "Esnet/Stretch" görüntü modu kullanılıyorsa).
+    video_aspect: float = 16 / 9
     region: Region = field(default_factory=Region)
     # Ana altyazı okuması açık mı (menüden kapatılabilir).
     region_enabled: bool = True

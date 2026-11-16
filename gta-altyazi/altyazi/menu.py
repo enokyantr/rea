@@ -326,12 +326,31 @@ class ControlPanel:
                         hint="auto: ekran kartı · cpu: dil modeli yavaşlarsa")
         r = self._scale(card, r, "Hızlı kabul güveni (yüksek = az hata, biraz geç)", "fast_accept_confidence",
                         0.80, 1.00)
+        r = self._quality(card, r)
         r = self._check(card, r, "Yalnızca yazı değişince yeniden oku (önerilen)", "change_detection")
         r = self._combo(card, r, "Performans", "performance_mode", ["auto", "yayin", "normal"],
                         hint="auto: zorlanınca kendini kısar · yayin: Discord/OBS yayınında hep hafif "
                              "(çekirdek sayısı yeniden başlatınca) · normal: kısmaz")
         r = self._spin(card, r, "Altyazı gidince Türkçe kaç ms sonra silinsin", "clear_after_ms", 200, 3000, 100,
                        restart=True)
+
+    QUALITY = {"Normal (1080p, iyi bağlantı)": 190, "Düşük (chiaki-ng / 720p ve altı)": 170}
+
+    def _quality(self, f, r):
+        """Akış kalitesi: düşükte sıkıştırılmış/bulanık yazı daha düşük parlaklıkta da aranır
+        (benzetimde 540p'de okunamayan satırlar 15 -> 4)."""
+        self._label(f, r, "Akış kalitesi", "Eksik okuyorsa: Düşük")
+        names = list(self.QUALITY)
+        var = tk.StringVar(value=names[1] if self.cfg.bright_threshold <= 175 else names[0])
+
+        def commit(_=None):
+            self.cfg.bright_threshold = self.QUALITY[var.get()]
+            self._changed(False, False)
+
+        cb = ttk.Combobox(f, textvariable=var, values=names, width=30, state="readonly")
+        cb.grid(row=r, column=1, sticky="w", padx=8)
+        cb.bind("<<ComboboxSelected>>", commit)
+        return r + 1
 
     # Dublaj -----------------------------------------------------------------------------------
 

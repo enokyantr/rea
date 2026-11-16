@@ -13,7 +13,7 @@ import numpy as np
 from . import config as config_mod
 from . import contrast, imageproc, reader, textproc, win32
 from .config import EXTRA_REGION_KEYS, EXTRA_REGION_LABELS, Config, Region
-from .geometry import Rect, intersect, region_to_screen, screen_to_region, union
+from .geometry import Rect, fit_aspect, intersect, region_to_screen, screen_to_region, union
 from . import ocr as ocr_mod
 from .ocr import OcrUnavailable, WindowsOcr
 from .hybrid import DRAFT, FINAL, HybridTranslator
@@ -253,7 +253,7 @@ class Pipeline(threading.Thread):
                     if title != last_window_title and self.region_name == MAIN:
                         log(f"Hedef pencere: {title}" if title else "Hedef pencere bulunamadı, ana ekran kullanılıyor")
                     last_window_title = title
-                    self.base = found[1] if found else win32.primary_screen()
+                    self.base = fit_aspect(found[1], cfg.video_aspect) if found else win32.primary_screen()
 
                 region = region_to_screen(spec, self.base)
                 if region != last_region:

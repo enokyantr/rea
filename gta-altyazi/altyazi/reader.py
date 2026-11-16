@@ -84,24 +84,44 @@ def read_text(gray: np.ndarray, recognize: Callable[[np.ndarray], list[str]], cf
     result = ReadResult("", crop=gray)
     factor = 1.0 if raw else upscale_factor(gray.shape[0] if bbox is not None else 0, cfg)
     best_score = None
-    for name, image in ([("ham", gray)] if raw else variants(gray, cfg)):
-        text = textproc.normalize(recognize(imageproc.upscale(image, factor)))
+    best_engine_state = None
+    options = [("ham", lambda: gray)] if raw else [(n, (lambda i=i: i)) for n, i in variants(gray, cfg)]
+    i = 0
+    while i < len(options):
+        name, make = options[i]
+        i += 1
+        text = textproc.normalize(recognize(imageproc.upscale(make(), factor)))
         score = textproc.reading_score(text)
         result.candidates.append((name, text, score))
+        state = _engine_state(engine) if raw else None
         # Uzun ve temiz okuma kazanır; kısmi okuma ("Go to") tam okumayı yenemez.
         if best_score is None or score > best_score:
-            best_score, result.text, result.variant = score, text, name
+            best_score, result.text, result.variant, best_engine_state = score, text, name, state
+        if raw and name == "ham" and state is not None and state[0] is not None and state[0] < LOW_CONFIDENCE:
+            # Düşük kaliteli akış (chiaki-ng / zayıf bağlantı): motor emin değil. Bulanık yazıda
+            # keskinleştirme, bloklu/kumlu yazıda medyan süzgeci okumayı belirgin düzeltiyor.
+            options += [("keskin", lambda: imageproc.sharpen(gray)), ("medyan", lambda: imageproc.median3(gray))]
+            continue
         if (textproc.text_quality(text) >= GOOD_ENOUGH and text.isascii()
                 and len(text) >= cfg.min_text_chars):
             break
     if not textproc.is_plausible(result.text, cfg.min_text_chars):
         result.text = ""
-    if raw and engine is not None:
-        result.confidence = getattr(engine, "last_confidence", None)
-        span = getattr(engine, "last_span", None)
+    if raw and best_engine_state is not None:
+        result.confidence, span, box = best_engine_state
         if span is not None:
             result.center_x = left + (span[0] + span[1]) / 2
-        box = getattr(engine, "last_box", None)
         if box is not None and result.text:
             result.text_box = (left + box[0], top + box[1], left + box[2], top + box[3])
     return result
+
+
+# RapidOCR'ın en düşük kutu güveni bunun altındaysa görüntünün süzülmüş hâlleri de okunur.
+LOW_CONFIDENCE = 0.90
+
+
+def _engine_state(engine):
+    if engine is None:
+        return None
+    return (getattr(engine, "last_confidence", None), getattr(engine, "last_span", None),
+            getattr(engine, "last_box", None))

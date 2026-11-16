@@ -8,7 +8,7 @@ import threading
 from ctypes import wintypes
 from typing import Callable
 
-from .geometry import Rect
+from .geometry import Rect, pick_window
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 
@@ -90,15 +90,8 @@ def visible_windows() -> list[tuple[int, str, Rect]]:
 
 
 def find_window(title_parts: list[str]) -> tuple[str, Rect] | None:
-    """Başlığında verilen ifadelerden biri geçen en büyük görünür pencere."""
-    needles = [p.casefold() for p in title_parts if p]
-    best: tuple[str, Rect] | None = None
-    for _hwnd, title, rect in visible_windows():
-        folded = title.casefold()
-        if any(n in folded for n in needles):
-            if best is None or rect.width * rect.height > best[1].width * best[1].height:
-                best = (title, rect)
-    return best
+    return pick_window(title_parts, [(title, rect) for _hwnd, title, rect in visible_windows()])
+
 
 
 GWL_EXSTYLE = -20
