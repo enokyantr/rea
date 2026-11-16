@@ -39,6 +39,11 @@ if the original is vulgar, the Turkish must be just as vulgar. Use correct Turki
   "bro" -> "kanka"
   "oh shit" -> "hassiktir" / "siktir"
   "nigga" (between friends, street talk) -> "kanka" / "lan" / "moruk"; as an insult -> "it" / "şerefsiz"
+- Street slang (translate the MEANING, never word by word):
+  "crib" -> "ev"; "wassup" -> "naber"; "homie" / "dawg" / "loc" / "G" -> "kanka" / "birader"
+  "y'all" -> "siz" / "hepiniz"; "ain't" -> "değil" / "yok"; "trippin'" -> "kafayı yemek"
+  "get bitches" / "pull bitches" -> "karı kız tavlamak"; "fuck with someone" -> "biriyle takılmak" (sexual: "biriyle yatmak")
+  "X-ass" after a word is an intensifier, not a body part: "dog-ass" / "punk-ass" -> "it" / "şerefsiz", "broke-ass" -> "meteliksiz"
 - Equally important: never ADD swearing or slang that is not in the original. A neutral line stays \
 neutral; translate the meaning exactly (left stays left, numbers and names stay the same).
 """
@@ -51,6 +56,8 @@ EXAMPLES_UNCENSORED = [
     ("Shut the fuck up and drive!", "Take the next exit on the right.", "Sağdaki ilk çıkıştan sap."),
     ("You stupid asshole, you almost got us killed.", "Holy shit, bro. That was close.",
      "Hassiktir kanka. Kıl payı kurtulduk."),
+    (None, "You trippin', dawg. Swing by my crib later.", "Kafayı yemişsin kanka. Sonra eve uğra."),
+    (None, "That punk-ass fool still owes me money.", "O it herif hâlâ bana para borçlu."),
 ]
 EXAMPLES_PLAIN = [
     ("Holy shit, bro. That was close.", "Get in the car, we're leaving.", "Arabaya bin, gidiyoruz."),

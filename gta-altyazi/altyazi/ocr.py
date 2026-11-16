@@ -72,9 +72,6 @@ class RapidOcr:
     name = "RapidOCR"
     # Doğal görüntüyü (gri ton) olduğu gibi ister; ikili maske ve büyütme okumayı bozar.
     raw_input = True
-    # Metin bulma modeli girdisinin uzun kenarı. Varsayılan ("min" 736) dar bir altyazı şeridini
-    # ~5000 piksele büyütüp kareyi 0,5 sn'ye çıkarıyordu.
-    DET_SIDE = 640
 
     def __init__(self, threads: int = 2):
         try:
@@ -83,7 +80,10 @@ class RapidOcr:
             raise OcrUnavailable(f"RapidOCR kurulu değil ({exc}); guncelle.bat çalıştırın.") from exc
         # İşlemci çekirdeklerinin hepsini almasın: yerel taslak çeviri de işlemcide çalışıyor.
         try:
-            self._engine = RapidOCR(det_limit_type="max", det_limit_side_len=self.DET_SIDE,
+            # Metin bulma girdisi: varsayılan ("min" 736) dar bir altyazı şeridini kısa kenarı 736
+            # olacak şekilde ~5000 piksele büyütüp kareyi 0,5 sn'ye çıkarıyordu. "max" modunda
+            # büyütme yok (1.4.x boyutu 960/1500/2000 sınırlarından kendisi seçer).
+            self._engine = RapidOCR(det_limit_type="max",
                                     det_intra_op_num_threads=threads, rec_intra_op_num_threads=threads)
         except Exception as exc:  # eski sürüm (< 1.4) bu ayarları tanımıyor, onnxruntime DLL hatası vb.
             raise OcrUnavailable(f"RapidOCR başlatılamadı ({type(exc).__name__}: {exc}); "

@@ -13,6 +13,9 @@ BENCH_LINES = [
     # Sansürsüz çeviri kontrolü: küfür/argo yumuşatılmamalı.
     "What the fuck are you doing?", "Shut the fuck up, asshole!", "You stupid son of a bitch!",
     "Holy shit, that was close.", "This motherfucker owes me money.", "Get your ass in the car, bro.",
+    # Sokak argosu: kelime kelime değil anlamıyla çevrilmeli (crib = ev, -ass = pekiştirme).
+    "Yo, can my homie crash at your crib tonight?", "Man, fuck you.", "Your broke-ass cousin ain't coming.",
+    "She been fucking with some rich doctor.", "Y'all trippin' if you think I'm paying.",
 ]
 
 
