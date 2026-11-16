@@ -370,8 +370,15 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
             + ("\"cover\" modu okunan yazının üstünü örttüğü için" if cfg.display_mode == "cover"
                else "capture_visible: false") + ").")
 
+    panel = None  # menü (aşağıda kurulur); own_rects okur
+
     def own_rects() -> list[Rect]:
-        return [ov.screen_rect for ov in overlays.values() if ov.capture_visible and ov.screen_rect]
+        """Ekran yakalamada görünen kendi pencerelerimiz: okuma bölgesine taşarsa OCR'dan önce karartılır."""
+        rects = [ov.screen_rect for ov in overlays.values() if ov.capture_visible and ov.screen_rect]
+        menu_rect = panel.screen_rect if panel is not None else None
+        if menu_rect is not None:
+            rects.append(menu_rect)
+        return rects
 
     pipelines[MAIN] = Pipeline(cfg, MAIN, lambda: cfg.region if cfg.region_enabled else None, cfg.display_mode,
                                make_translator(), ui, debug,
@@ -912,13 +919,9 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
         def character_sample(self, char_id: int) -> str | None:
             return character_sample(char_id)
 
-    panel = None
     panel = ControlPanel(root, Controller())
-    try:  # menü özel: yayında görünmesin, OCR da okumasın
-        panel.win.update_idletasks()
-        win32.exclude_from_capture(int(panel.win.wm_frame(), 16))
-    except Exception:
-        pass
+    # Menü ekran görüntüsünde ve yayında görünür (gizlenmez); bir okuma bölgesinin üstüne gelirse
+    # o kısım OCR'dan önce karartılır (own_rects), menü yazıları çevrilmez.
     if not cfg.show_menu_on_start:
         panel.hide()
 

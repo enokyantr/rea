@@ -75,6 +75,7 @@ class ControlPanel:
         self.cfg = ctl.cfg
         self.themed = _apply_theme(root)
         self.win = tk.Toplevel(root)
+        self.screen_rect = None
         self.win.title("GTA Altyazı")
         self.win.geometry("940x640")
         self.win.minsize(760, 520)
@@ -87,6 +88,9 @@ class ControlPanel:
         self._accent = "Accent.TButton" if self.themed else "TButton"
         self._build()
         self.win.bind("<KeyPress>", self._on_key, add="+")
+        # Taşıma/boyutlandırma/küçültme: OCR'ın karartacağı alan hemen güncellensin.
+        for event in ("<Configure>", "<Map>", "<Unmap>"):
+            self.win.bind(event, self._update_rect, add="+")
         self._refresh()
 
     # --- görünürlük -------------------------------------------------------------------------
@@ -99,10 +103,26 @@ class ControlPanel:
         self.win.deiconify()
         self.win.lift()
         self.win.focus_force()
+        self._update_rect()
 
     def hide(self) -> None:
         self._capture_action = None
         self.win.withdraw()
+        self.screen_rect = None
+
+    def _update_rect(self, _event=None) -> None:
+        """Menünün ekrandaki alanı (okuma iş parçacıkları okur): bir okuma bölgesiyle çakışırsa o kısım
+        OCR'dan önce karartılır, menü yazıları altyazı sanılmaz. Yalnızca Tk iş parçacığında güncellenir."""
+        try:
+            if self.win.state() in ("withdrawn", "iconic"):
+                self.screen_rect = None
+                return
+            from .geometry import Rect
+
+            self.screen_rect = Rect(self.win.winfo_rootx(), self.win.winfo_rooty(),
+                                    self.win.winfo_width(), self.win.winfo_height())
+        except tk.TclError:
+            self.screen_rect = None
 
     def toggle(self) -> None:
         self.hide() if self.visible else self.show()
