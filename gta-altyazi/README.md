@@ -111,13 +111,27 @@ Varsayılan kısayollar (menüden değiştirilebilir):
 | Ctrl+Alt+↑ / ↓ | Yazıyı yukarı / aşağı taşı |
 | Ctrl+Alt+O | Türkçenin üstünde İngilizceyi de göster |
 | Ctrl+Alt+H | Son satırlar paneli (aç/kapat) |
-| Ctrl+Alt+D | Sesli okuma (dublaj) aç / kapat |
+| Ctrl+Alt+D | Dublaj aç / kapat |
 | Ctrl+Alt+Q | Çıkış |
 
-### Sesli okuma (dublaj)
+### Dublaj (Ctrl+Alt+D ya da menüdeki "Dublaj" anahtarı; program durmadan açılıp kapanır)
 
-Türkçe satır Windows'un yerleşik Türkçe sesiyle okunur (ücretsiz, yerel). Türkçe ses yoksa:
-Ayarlar > Saat ve dil > Konuşma > Ses ekle > Türkçe. Yeni satır gelince önceki okuma kesilir.
+Türkçe satır, konuşan karakterin sesine uygun bir sesle okunur:
+
+1. Altyazı belirdiği andan itibaren oyun sesinin ilk ~0,6 saniyesi dinlenir (hoparlöre giden sesin
+   kopyası; hiçbir yere kaydedilmez/gönderilmez).
+2. Ses perdesinden kadın/erkek, ses renginden karakter bulunur. Hafızadaki bir karaktere benziyorsa
+   aynı karakter sayılır ve **hep aynı sesle** okunur; yoksa yeni karakter eklenir
+   (`karakter_sesleri.json`). Aynı cinsiyetteki karakterler farklı perde/hızla ayrılır.
+3. Ses: **edge** (varsayılan) Microsoft Edge'in doğal Türkçe sesleri, kadın *Emel*, erkek *Ahmet*.
+   Ücretsizdir ama internet gerekir ve Türkçe metin Microsoft'a gönderilir; resmi bir API değildir.
+   Ulaşılamazsa satır **windows** (çevrimdışı) sesiyle okunur; Windows'ta Türkçe ses genelde tektir,
+   kadın sesi perdesi yükseltilerek yapılır.
+4. Yeni satır gelince önceki okuma hemen kesilir.
+
+Konuşan tanıma oyun müziği ve efektler karıştığında yanılabilir: menü > Dublaj > Karakter hafızası'ndan
+karakterin cinsiyetini düzeltebilir (kalıcıdır), sesini dinleyebilir, silebilir ya da hafızayı
+sıfırlayabilirsiniz.
 
 ### Oturum kaydı
 

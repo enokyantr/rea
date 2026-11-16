@@ -170,10 +170,18 @@ class Config:
     session_log: bool = True
     session_log_dir: str = "kayitlar"
 
-    # Sesli okuma (dublaj): Türkçe satırı Windows'un Türkçe sesiyle okur.
+    # Dublaj: Türkçe satırı konuşan karakterin sesine uygun sesle okur (menüden / Ctrl+Alt+D anında).
     tts_enabled: bool = False
-    tts_voice: str = ""          # boş: ilk Türkçe ses
-    tts_rate: float = 1.15       # 0.5 - 3.0
+    # "edge": Microsoft Edge'in çevrimiçi doğal sesleri (Emel kadın, Ahmet erkek; ücretsiz, internet gerekir;
+    # ulaşılamazsa Windows sesine düşer). "windows": yerleşik çevrimdışı ses.
+    dub_engine: str = "edge"
+    # Konuşanı oyun sesinden tanı: kadın/erkek ve karakter hafızası (aynı karaktere hep aynı ses).
+    dub_detect_speaker: bool = True
+    # Konuşanı tanımak için altyazı belirdikten sonra en az bu kadar ms ses dinlenir.
+    dub_analysis_ms: int = 600
+    characters_file: str = "karakter_sesleri.json"
+    tts_voice: str = ""          # Windows sesi (boş: ilk Türkçe ses)
+    tts_rate: float = 1.1        # 0.6 - 2.0
     tts_volume: float = 1.0      # 0.0 - 1.0
 
     # Çeviri önbelleği (aynı satırı tekrar çevirip DeepL kotası harcamamak için).

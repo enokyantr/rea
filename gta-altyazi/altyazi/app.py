@@ -384,7 +384,12 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
             log(f"Oturum kaydı: {session.path}")
         except OSError as exc:
             log(f"Oturum kaydı açılamadı: {exc}")
-    tts = {"speaker": None}
+    tts = {"speaker": None, "recorder": None}
+    from .voiceid import CharacterBook
+
+    char_path = Path(cfg.characters_file)
+    book = CharacterBook(char_path if char_path.is_absolute() else cfg_path.parent / char_path)
+    line_started: dict[str, int] = {}  # bölge -> dublajı kesilen son satır (seq)
 
     def all_pipelines():
         return pipelines.values()
@@ -491,6 +496,8 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
             hk_state["thread"].stop()
         if tts["speaker"] is not None:
             tts["speaker"].stop()
+        if tts["recorder"] is not None:
+            tts["recorder"].stop()
         if state["save_pending"]:
             config_mod.save(cfg, cfg_path)
         if session is not None:
@@ -615,11 +622,21 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
         apply_style()
 
     def set_tts(enabled: bool) -> str | None:
+        """Dublajı program durmadan aç/kapat. Hata varsa açıklaması döner (dublaj kapalı kalır)."""
+        from .audio import LoopbackRecorder
         from .tts import Speaker
 
         speaker = tts["speaker"]
         if enabled and speaker is None:
-            speaker = Speaker(cfg.tts_voice, cfg.tts_rate, cfg.tts_volume, log)
+            recorder = tts["recorder"]
+            if cfg.dub_detect_speaker and recorder is None:
+                recorder = LoopbackRecorder(log=log)
+                recorder.start()
+                recorder.ready.wait(3)
+                if recorder.error:
+                    log(recorder.error)
+                tts["recorder"] = recorder
+            speaker = Speaker(cfg, book, recorder if cfg.dub_detect_speaker else None, log)
             speaker.start()
             speaker.ready.wait(5)
             if speaker.error:
@@ -628,14 +645,39 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
                 log(speaker.error)
                 return speaker.error
             tts["speaker"] = speaker
-            log(f"Sesli okuma açık: {speaker.voice_in_use}")
-        elif not enabled and speaker is not None:
-            speaker.stop()
-            tts["speaker"] = None
-            log("Sesli okuma kapalı")
+            log(f"Dublaj açık: {speaker.voice_in_use}"
+                + (", konuşan sesinden tanınıyor" if cfg.dub_detect_speaker else ""))
+        elif not enabled:
+            if speaker is not None:
+                speaker.stop()
+                tts["speaker"] = None
+            if tts["recorder"] is not None:
+                tts["recorder"].stop()
+                tts["recorder"] = None
+            log("Dublaj kapalı")
         cfg.tts_enabled = enabled
         save_soon()
         return None
+
+    def character_sample(char_id: int) -> str | None:
+        speaker = tts["speaker"]
+        if speaker is None:
+            return "Örnek için önce dublajı açın."
+        ch = next((c for c in book.snapshot() if c.id == char_id), None)
+        if ch is not None:
+            speaker.sample(ch.gender, ch.pitch_pct, ch.rate_pct)
+        return None
+
+    def dub_status() -> list[tuple[str, str]]:
+        speaker, recorder = tts["speaker"], tts["recorder"]
+        if speaker is None:
+            return [("Durum", "kapalı")]
+        rows = [("Ses", speaker.voice_in_use)]
+        if cfg.dub_detect_speaker:
+            rows.append(("Oyun sesi", recorder.error if recorder and recorder.error else
+                         f"dinleniyor ({recorder.device})" if recorder else "kapalı"))
+            rows.append(("Son konuşan", speaker.last_character or "henüz yok"))
+        return rows
 
     def desktop_shortcut() -> str:
         """Masaüstüne "GTA Altyazı" kısayolu (baslat.bat). OneDrive masaüstü dahil."""
@@ -739,7 +781,7 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
             rows = [("OCR", pipelines[MAIN].engine_name or "henüz başlatılmadı")]
             rows += list(engine_info or [])
             speaker = tts["speaker"]
-            rows.append(("Sesli okuma", f"açık ({speaker.voice_in_use})" if speaker else "kapalı"))
+            rows.append(("Dublaj", f"açık ({speaker.voice_in_use})" if speaker else "kapalı"))
             rows.append(("Oturum kaydı", str(session.path) if session else "kapalı"))
             return rows
 
@@ -779,6 +821,24 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
 
         def desktop_shortcut(self) -> str:
             return desktop_shortcut()
+
+        def dub_status(self) -> list[tuple[str, str]]:
+            return dub_status()
+
+        def characters(self) -> list:
+            return book.snapshot()
+
+        def character_gender(self, char_id: int, gender: str) -> None:
+            book.set_gender(char_id, gender)
+
+        def character_remove(self, char_id: int) -> None:
+            book.remove(char_id)
+
+        def characters_clear(self) -> None:
+            book.clear()
+
+        def character_sample(self, char_id: int) -> str | None:
+            return character_sample(char_id)
 
     panel = None
     panel = ControlPanel(root, Controller())
@@ -828,6 +888,10 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
                             state["welcome"] = False
                         overlays[name].show(translated, original, center_x)
                         remember(name, seq, original, translated)
+                        speaker = tts["speaker"]
+                        if speaker is not None and name == MAIN and line_started.get(name) != seq:
+                            line_started[name] = seq
+                            speaker.interrupt()  # yeni satır: önceki okuma hemen sussun
                         took = 1000 * (time.monotonic() - first_seen)
                         if name == MAIN:
                             last_line.update(en=original, tr=translated,
@@ -836,9 +900,8 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
                         if stage == FINAL:
                             if session is not None:
                                 session.write("" if name == MAIN else REGION_LABELS[name], original, translated)
-                            if tts["speaker"] is not None and name == MAIN:
-                                tts["speaker"].rate, tts["speaker"].volume = cfg.tts_rate, cfg.tts_volume
-                                tts["speaker"].say(translated)
+                            if speaker is not None and name == MAIN:
+                                speaker.say(translated, onset=first_seen)
                         if debug:
                             what = "taslak" if stage == DRAFT else "son çeviri"
                             log(f"ilk okumadan ekrana ({what}): {took:.0f} ms")

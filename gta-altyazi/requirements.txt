@@ -17,3 +17,8 @@ winrt-Windows.Media.Core>=3.0
 winrt-Windows.Storage.Streams>=3.0
 # OCR motoru (PP-OCRv4, işlemcide; modeller paketin içinde). Kurulamazsa Windows OCR kullanılır.
 rapidocr-onnxruntime>=1.4.4,<2; python_version < "3.13"
+# Menü teması (Windows 11 görünümü)
+sv-ttk>=2.6
+# Dublaj: doğal Türkçe kadın/erkek ses (çevrimiçi) ve oyun sesini dinleyip konuşanı tanıma
+edge-tts>=7.0
+soundcard>=0.4.3
