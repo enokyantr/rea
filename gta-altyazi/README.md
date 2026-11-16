@@ -22,7 +22,13 @@ ulaşılamazsa yerel çeviri ekranda kalır. `config.json` → `translation_mode
 **Anlık renk:** Türkçe yazının arkasındaki görüntü her karede (~50 ms) ölçülür. Kar, gökyüzü,
 beyaz duvar gibi açık bir sahneye gelince yazı siyah olur, beyaz kontur alır; karanlıkta beyaza döner.
 Yarısı açık yarısı koyu sahnede kontur kalınlaşır. Tek karelik patlama ve flaşlarda renk titremez.
-Overlay ekran yakalamadan gizlendiği için ölçüm kendi yazımızdan değil, gerçek oyun görüntüsünden yapılır.
+Ölçüm Türkçe yazının hemen üstündeki şeritten yapılır; böylece kendi yazımız ölçüme karışmaz.
+
+**Yayın ve ekran görüntüsü:** Türkçe altyazı OBS/Discord yayınında ve ekran görüntülerinde görünür
+(`capture_visible: true`, varsayılan). Yazı İngilizce altyazının üstünde, okunan bölgenin dışında
+durduğu için program kendi Türkçe yazısını okumaz; taşarsa o kısım OCR'dan önce karartılır.
+`"cover"` modundaki kutu (görev/telefon bölgeleri dahil) okunan yazının üstünü örttüğü için
+yakalamadan gizli kalır. Son satırlar paneli (Ctrl+Alt+H) kişiseldir, yayında görünmez.
 
 ## Gereksinimler
 
@@ -198,8 +204,10 @@ Gecikmeyi düşürmek için yapılanlar:
 - Altyazısı olmayan konuşmalar (ör. yoldan geçenler, radyo) çevrilmez.
 - Overlay, tam ekran özel (exclusive fullscreen) uygulamaların üstünde görünmeyebilir; Remote Play
   bu modu kullanmaz ama sorun olursa pencere moduna alın.
-- Overlay'in ekran yakalamadan gizlenmesi Windows 10 (2004) veya Windows 11 gerektirir. Gizlenemezse
-  başlangıçta uyarı yazılır. Aynı nedenle OBS/Discord yayınlarında Türkçe altyazı görünmez.
+- `"cover"` kutusunun ekran yakalamadan gizlenmesi Windows 10 (2004) veya Windows 11 gerektirir.
+  Gizlenemezse başlangıçta uyarı yazılır.
+- OBS'de "Ekran Yakalama" (Display Capture) kullanın; yalnızca Remote Play penceresini yakalayan
+  "Pencere Yakalama" ayrı bir pencere olan Türkçe altyazıyı içermez.
 
 ## Geliştirme
 

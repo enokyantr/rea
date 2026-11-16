@@ -36,7 +36,12 @@ class Overlay:
         self.region: Rect | None = None
         # Pipeline iş parçacığı okur: Türkçe yazının bulunduğu / bulunacağı ekran alanı.
         self.sample_rect: Rect | None = None
+        # Yayında/ekran görüntüsünde görünür mü (yalnızca "adaptive"; "cover" okunan yazıyı örter).
+        self.capture_visible = bool(cfg.capture_visible and self.adaptive)
         self.capture_excluded = False
+        # Pipeline iş parçacığı okur: overlay'in şu an ekranda kapladığı alan (yakalanan karede
+        # bir okuma bölgesiyle çakışırsa OCR'dan önce karartılır).
+        self.screen_rect: Rect | None = None
         self._state: tuple[str, str, str] | None = None  # (tr, en, durum)
         self.win.geometry("1x1+-10+-10")
         self.win.update_idletasks()
@@ -46,7 +51,11 @@ class Overlay:
     def _apply_window_styles(self) -> None:
         hwnd = int(self.win.wm_frame(), 16)
         win32.make_click_through(hwnd)
-        self.capture_excluded = win32.exclude_from_capture(hwnd)
+        if self.capture_visible:
+            win32.include_in_capture(hwnd)
+            self.capture_excluded = False
+        else:
+            self.capture_excluded = win32.exclude_from_capture(hwnd)
 
     def _keep_on_top(self) -> None:
         # Remote Play öne geldiğinde overlay'i tekrar en üste al.
@@ -88,6 +97,7 @@ class Overlay:
 
     def hide(self) -> None:
         self.win.withdraw()
+        self.screen_rect = None
 
     def unhide(self) -> None:
         self.win.deiconify()
@@ -123,6 +133,7 @@ class Overlay:
     def _redraw(self) -> None:
         self.canvas.delete("all")
         region = self.region
+        self.screen_rect = None
         if region is None:
             self.sample_rect = None
             self.win.geometry("1x1+-10+-10")
@@ -164,7 +175,16 @@ class Overlay:
 
         self.canvas.configure(width=width, height=height)
         self.win.geometry(f"{width}x{height}+{left}+{top}")
-        self.sample_rect = Rect(left, top, width, height) if self.adaptive else None
+        self.screen_rect = Rect(left, top, width, height)
+        if not self.adaptive:
+            self.sample_rect = None
+        elif self.capture_visible:
+            # Yazımız yakalamada görünür: arkasını örnekleyen renk seçimi kendi yazımızı ölçüp
+            # titrerdi. Hemen üstündeki şerit aynı sahnedir ve yazımızı içermez.
+            band = max(16, self.font.metrics("linespace"))
+            self.sample_rect = Rect(left, top - band, width, band)
+        else:
+            self.sample_rect = self.screen_rect
 
 
 class RegionPicker:
@@ -259,6 +279,7 @@ class HistoryPanel:
 
     def hide(self) -> None:
         self.win.withdraw()
+        self.screen_rect = None
 
     def refresh(self, entries: list[dict], base: Rect) -> None:
         if not self.visible_wanted:

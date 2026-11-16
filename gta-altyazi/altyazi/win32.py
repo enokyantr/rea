@@ -138,6 +138,17 @@ def exclude_from_capture(hwnd: int) -> bool:
         return False
 
 
+WDA_NONE = 0x00000000
+
+
+def include_in_capture(hwnd: int) -> bool:
+    """Overlay ekran yakalamada (OBS, ekran görüntüsü) da görünür (varsayılan Windows davranışı)."""
+    try:
+        return bool(user32.SetWindowDisplayAffinity(hwnd, WDA_NONE))
+    except AttributeError:
+        return True
+
+
 MOD_ALT = 0x0001
 MOD_CONTROL = 0x0002
 MOD_NOREPEAT = 0x4000

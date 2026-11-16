@@ -52,7 +52,8 @@ class Pipeline(threading.Thread):
 
     def __init__(self, cfg: Config, name: str, get_region: Callable[[], Region | None], display_mode: str,
                  translator: HybridTranslator, ui: queue.Queue, debug: bool,
-                 sample_rect: Callable[[], Rect | None] = lambda: None):
+                 sample_rect: Callable[[], Rect | None] = lambda: None,
+                 own_rects: Callable[[], list[Rect]] = lambda: []):
         super().__init__(daemon=True, name=f"pipeline-{name}")
         self.cfg = cfg
         self.region_name = name  # (Thread.name ile karışmasın)
@@ -62,6 +63,8 @@ class Pipeline(threading.Thread):
         self.ui = ui
         self.debug = debug
         self.sample_rect = sample_rect
+        # Yakalamada görünen kendi overlay'lerimiz: okuma bölgesine taşarsa OCR'dan önce karartılır.
+        self.own_rects = own_rects
         self.paused = threading.Event()
         self.stopped = threading.Event()
         # Arayüz duraklat/devam ettiğinde: ekrandaki altyazı yeniden okunup gösterilsin.
@@ -225,6 +228,12 @@ class Pipeline(threading.Thread):
                     time.sleep(interval)
                     continue
                 gray = imageproc.to_gray(sub)
+                origin = intersect(region, zone)  # `sub` ekran kenarında kırpılmış olabilir
+                for own in self.own_rects():
+                    hit = intersect(own, origin)
+                    if hit is not None:  # kendi Türkçe yazımızı okuma (yayında görünür modda)
+                        gray[hit.top - origin.top:hit.bottom - origin.top,
+                             hit.left - origin.left:hit.right - origin.left] = 0
                 sig = imageproc.signature(gray >= cfg.bright_threshold)
                 if imageproc.same_signature(last_sig, sig) and reused < MAX_REUSE:
                     text = last_text
@@ -267,11 +276,21 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
     overlays: dict[str, Overlay] = {MAIN: Overlay(root, cfg, cfg.display_mode)}
     pipelines: dict[str, Pipeline] = {}
     main_overlay = overlays[MAIN]
-    if not main_overlay.capture_excluded:
+    if main_overlay.capture_visible:
+        log("Türkçe altyazı yayında (OBS) ve ekran görüntülerinde görünür.")
+    elif not main_overlay.capture_excluded:
         log("UYARI: Overlay ekran yakalamadan gizlenemedi (Windows 10 2004 veya üstü gerekir). "
             "OCR kendi Türkçe yazımızı/kutumuzu okuyabilir.")
+    else:
+        log("Türkçe altyazı yayında/ekran görüntüsünde görünmez ("
+            + ("\"cover\" modu okunan yazının üstünü örttüğü için" if cfg.display_mode == "cover"
+               else "capture_visible: false") + ").")
+
+    def own_rects() -> list[Rect]:
+        return [ov.screen_rect for ov in overlays.values() if ov.capture_visible and ov.screen_rect]
+
     pipelines[MAIN] = Pipeline(cfg, MAIN, lambda: cfg.region, cfg.display_mode, make_translator(), ui, debug,
-                               sample_rect=lambda: main_overlay.sample_rect)
+                               sample_rect=lambda: main_overlay.sample_rect, own_rects=own_rects)
     for name in EXTRA_REGION_KEYS.values():
         def get_region(name=name):
             extra = cfg.extra(name)
@@ -279,7 +298,7 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
         mode = cfg.extra(name).display_mode if cfg.extra(name) else "cover"
         overlays[name] = Overlay(root, cfg, mode)
         pipelines[name] = Pipeline(cfg, name, get_region, mode, make_translator(), ui, debug,
-                                   sample_rect=lambda ov=overlays[name]: ov.sample_rect)
+                                   sample_rect=lambda ov=overlays[name]: ov.sample_rect, own_rects=own_rects)
     history = HistoryPanel(root, cfg)
     entries: list[dict] = []  # son satırlar: {"key": (bölge, seq), "label", "en", "tr"}
     state = {"welcome": True, "picking": False, "paused": False}

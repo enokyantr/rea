@@ -123,8 +123,31 @@ def _check_overlay(cfg: Config, report: Report) -> None:
         ok = picker.palette.fill == contrast.BLACK
         report.item("Uyarlanabilir renk (beyaz sahne)", "TAMAM" if ok else "HATA", f"seçilen yazı rengi {picker.palette.fill}")
 
-    # Son satırlar paneli de yakalamada görünmemeli (aksi hâlde OCR onu okuyabilir).
+    # Varsayılan ("adaptive") Türkçe altyazı yayında/ekran görüntüsünde GÖRÜNMELİ.
     overlay.clear()
+    if cfg.capture_visible and mean >= 5:
+        live_cfg = dataclasses.replace(cfg, display_mode="adaptive")
+        live = Overlay(root, live_cfg, "adaptive")
+        live.set_region(region)
+        live.set_palette(contrast.Palette(contrast.BLACK, contrast.WHITE, cfg.outline_px))
+        live.show("Arabaya bin, hemen!")
+        for _ in range(10):
+            root.update()
+            time.sleep(0.05)
+        r = live.screen_rect
+        if r is None:
+            report.item("Yayında görünürlük", "HATA", "altyazı çizilmedi")
+        else:
+            with mss.mss() as sct:
+                lshot = np.asarray(sct.grab({"left": r.left, "top": r.top, "width": r.width, "height": r.height}))
+            dark = float((imageproc.to_gray(lshot) < 100).mean())
+            report.item("Yayında görünürlük", "TAMAM" if dark > 0.01 else "HATA",
+                        "Türkçe yazı ekran yakalamada görünüyor (OBS/ekran görüntüsü)" if dark > 0.01
+                        else "Türkçe yazı ekran yakalamada görünmüyor")
+        live.clear()
+        live.win.destroy()
+
+    # Son satırlar paneli yakalamada görünmemeli (kişisel; OCR onu da okuyabilir).
     panel = HistoryPanel(root, cfg)
     panel.show([{"label": "", "en": "Get in the car!", "tr": "Arabaya bin!"}], Rect(area.left - 20, area.top - 20, 0, 0))
     for _ in range(10):

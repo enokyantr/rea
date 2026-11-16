@@ -127,6 +127,10 @@ class Config:
     #             sahneye göre anlık seçilir (açık sahnede siyah, koyu sahnede beyaz).
     # "cover":    Türkçe, İngilizcenin üstünü kapatan koyu bir kutuda sabit renkle yazılır.
     display_mode: str = "adaptive"
+    # Türkçe altyazı yayında (OBS) ve ekran görüntülerinde de görünsün. Yalnızca "adaptive" modda:
+    # yazı İngilizce altyazının üstünde, okunan bölgenin dışında durur; OCR kendi yazımızı okumaz.
+    # "cover" kutusu okunan yazının üstünde olduğu için her zaman yakalamadan gizlenir.
+    capture_visible: bool = True
     font_family: str = "Segoe UI"
     font_size: int = 26
     outline_px: int = 2
