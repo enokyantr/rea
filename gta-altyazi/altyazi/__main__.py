@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -58,6 +59,15 @@ def main() -> int:
             print(f"{rect.width:>5}x{rect.height:<5} {title}")
         return 0
 
+    instance = None
+    gui = not (args.self_test or args.mt_bench or args.llm_bench or args.ocr_test or args.ocr_compare)
+    if gui:
+        instance = win32.claim_single_instance()
+        if instance is None:
+            print("GTA Altyazı zaten açık: açık olanın menüsü öne getirildi. (İki kopya ekran kartını ve "
+                  "kısayolları paylaşır, gecikme artar.) Menü görünmezse Görev Yöneticisi'nde \"python\" "
+                  "işlemini sonlandırıp yeniden başlatın.")
+            return 0
     cfg = config_mod.load(args.config)
     if args.ollama_model:
         cfg.ollama_model = args.ollama_model
@@ -182,7 +192,8 @@ def main() -> int:
         model = getattr(getattr(final, "_backend", None), "model", "")
         info.append(("Son çevirmen", f"{cfg.final_translator} {model}".strip()))
     restart = app.run_gui(cfg, args.config, make_translator, args.debug,
-                          dump_dir=(args.config.parent / "dump") if args.dump else None, engine_info=info)
+                          dump_dir=(args.config.parent / "dump") if args.dump else None, engine_info=info,
+                          instance=instance)
     return RESTART_CODE if restart else 0
 
 
@@ -271,4 +282,12 @@ def _deepl_backend(cfg, args):
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    code = main()
+    # Arka plan iş parçacıkları (ses, çeviri havuzları) kapanışı bekletmesin: program kesin kapansın,
+    # yoksa görünmez bir kopya kısayolları ve ekran kartını tutmaya devam eder.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.flush()
+        except Exception:
+            pass
+    os._exit(code or 0)

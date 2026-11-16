@@ -210,3 +210,49 @@ def hotkey_free(mods: int, vk: int) -> bool:
         return False
     user32.UnregisterHotKey(None, probe_id)
     return True
+
+
+kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+kernel32.CreateMutexW.restype = wintypes.HANDLE
+kernel32.CreateEventW.restype = wintypes.HANDLE
+kernel32.OpenEventW.restype = wintypes.HANDLE
+kernel32.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
+kernel32.CreateEventW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.BOOL, wintypes.LPCWSTR]
+kernel32.OpenEventW.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR]
+kernel32.SetEvent.argtypes = [wintypes.HANDLE]
+kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+kernel32.WaitForSingleObject.restype = wintypes.DWORD
+_ERROR_ALREADY_EXISTS = 183
+_EVENT_MODIFY_STATE = 0x0002
+_MUTEX_NAME = "Local\\GtaAltyaziTekKopya"
+_SHOW_EVENT_NAME = "Local\\GtaAltyaziMenuGoster"
+
+
+def claim_single_instance():
+    """Program bu oturumda zaten açık mı? Açıksa ona "menünü göster" işareti gönderir ve None döner;
+    değilse (mutex, olay) tutamaçlarını döner: süreç kapanınca Windows bunları bırakır."""
+    mutex = kernel32.CreateMutexW(None, False, _MUTEX_NAME)
+    if ctypes.get_last_error() == _ERROR_ALREADY_EXISTS:
+        event = kernel32.OpenEventW(_EVENT_MODIFY_STATE, False, _SHOW_EVENT_NAME)
+        if event:
+            kernel32.SetEvent(event)
+            kernel32.CloseHandle(event)
+        if mutex:
+            kernel32.CloseHandle(mutex)
+        return None
+    event = kernel32.CreateEventW(None, False, False, _SHOW_EVENT_NAME)  # otomatik sıfırlanan
+    return mutex, event
+
+
+def watch_show_requests(handles, on_request: Callable[[], None]) -> None:
+    """İkinci kez başlatılınca (claim_single_instance) on_request çağrılır (arka plan iş parçacığı)."""
+    if not handles or not handles[1]:
+        return
+    event = handles[1]
+
+    def run():
+        while True:
+            if kernel32.WaitForSingleObject(event, 0xFFFFFFFF) == 0:
+                on_request()
+    threading.Thread(target=run, name="tek-kopya", daemon=True).start()

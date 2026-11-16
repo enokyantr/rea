@@ -377,7 +377,8 @@ REGION_LABELS = {MAIN: "Altyazı", **EXTRA_REGION_LABELS, STREET: "Sokak"}
 
 
 def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTranslator], debug: bool,
-            dump_dir: Path | None = None, engine_info: list[tuple[str, str]] | None = None) -> bool:
+            dump_dir: Path | None = None, engine_info: list[tuple[str, str]] | None = None,
+            instance=None) -> bool:
     """Overlay'ler, okuma iş parçacıkları, kısayollar ve menü. Dönüş: yeniden başlatılsın mı."""
     import os
     import tkinter as tk
@@ -391,6 +392,8 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
     root = tk.Tk()
     root.withdraw()
     ui: queue.Queue = queue.Queue()
+    # Program ikinci kez başlatılırsa yeni kopya açılmaz; bu kopyanın menüsü öne gelir.
+    win32.watch_show_requests(instance, lambda: ui.put(("action", "menu-show")))
     # Ayrıntılı kayıt (süreler): --debug ya da menüdeki ayar; menüden program durmadan açılıp kapanır.
     detail = {"on": bool(debug or cfg.detailed_log)}
 
@@ -865,6 +868,7 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
 
     actions = {
         "menu": lambda: panel.toggle() if panel is not None else None,
+        "menu-show": lambda: panel.show() if panel is not None else None,
         "pause": toggle_pause, "pick": lambda: pick(MAIN), "original": toggle_original,
         "history": toggle_history, "quit": quit_app,
         "font-up": lambda: change_font(2), "font-down": lambda: change_font(-2),
