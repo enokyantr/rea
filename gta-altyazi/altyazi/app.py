@@ -680,6 +680,9 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
         if speaker is None:
             return [("Durum", "kapalı")]
         rows = [("Ses", speaker.voice_in_use)]
+        if speaker.last_engine:
+            rows.append(("Son satırı okuyan", speaker.last_engine
+                         + (f"  ·  Edge'e geçiş: {speaker.fallbacks}" if speaker.fallbacks else "")))
         if cfg.dub_detect_speaker:
             rows.append(("Oyun sesi", recorder.error if recorder and recorder.error else
                          f"dinleniyor ({recorder.device})" if recorder else "kapalı"))

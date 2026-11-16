@@ -258,8 +258,12 @@ class ControlPanel:
     def _tab_dub(self, f: ttk.Frame) -> None:
         card = self._card(f, "Dublaj")
         r = 0
-        r = self._combo(card, r, "Ses", "dub_engine", ["edge", "windows"], dub=True,
-                        hint="edge: doğal kadın/erkek ses (internet) · windows: çevrimdışı")
+        r = self._combo(card, r, "Ses", "dub_engine", ["gemini", "edge", "windows"], dub=True,
+                        hint="gemini: duygulu (anahtar), sorun olursa anında edge · edge: doğal ses · "
+                             "windows: çevrimdışı")
+        r = self._entry(card, r, "Gemini API anahtarı (ücretsiz, Google AI Studio)", "gemini_api_key", secret=True,
+                        dub=True)
+        r = self._spin(card, r, "Gemini için en fazla bekleme (ms)", "dub_gemini_wait_ms", 400, 3000, 100)
         r = self._combo(card, r, "Ses havuzu (edge)", "dub_voice_pool", ["turkce", "genis"], dub=True,
                         hint="turkce: Emel/Ahmet · genis: her karaktere farklı ses (aksanlı olabilir)")
         r = self._check(card, r, "Konuşanı sesinden tanı (kadın/erkek, aynı karaktere aynı ses)",
@@ -515,14 +519,14 @@ class ControlPanel:
         cb.bind("<<ComboboxSelected>>", commit)
         return r + 1
 
-    def _entry(self, f, r, text, key, restart=False, secret=False):
+    def _entry(self, f, r, text, key, restart=False, secret=False, dub=False):
         self._label(f, r, text)
         var = tk.StringVar(value=str(getattr(self.cfg, key)))
 
         def commit(_=None):
             if var.get().strip() != getattr(self.cfg, key):
                 setattr(self.cfg, key, var.get().strip())
-                self._changed(False, restart)
+                self._changed(False, restart, dub)
 
         e = ttk.Entry(f, textvariable=var, width=30, show="•" if secret else "")
         e.grid(row=r, column=1, sticky="w", padx=8)

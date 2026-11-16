@@ -11,6 +11,8 @@ Akış (her satır, arka plan iş parçacığında):
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 import os
 import queue
 import tempfile
@@ -51,6 +53,8 @@ class Delivery:
     rate_pct: float = 0.0
     volume_pct: float = 0.0
     note: str = ""
+    emotion: str = "neutral"
+    intensity: float = 0.0
 # Windows sesi tek (genelde erkek, "Tolga"): kadın için perde yükseltilir (Hz).
 _WINDOWS_FEMALE_PITCH_HZ = 70
 _BASE_F0 = {"kadin": 200, "erkek": 120}
@@ -98,6 +102,15 @@ class Speaker(threading.Thread):
         self._windows_voice = None
         self._edge_fail = 0
         self._edge_off_until = 0.0
+        self._gemini_off_until = 0.0
+        self._gemini_fail = 0
+        self._gemini_model = 0
+        self._pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="dublaj-ses")
+        import requests
+
+        self._http = requests.Session()
+        self.last_engine = ""
+        self.fallbacks = 0
         self._tmp = Path(tempfile.gettempdir())
         self._file_index = 0
         self.voice_in_use = ""
@@ -149,38 +162,68 @@ class Speaker(threading.Thread):
         voices = [v for v in SpeechSynthesizer.all_voices if v.language.lower().startswith("tr")]
         wanted = getattr(self.cfg, "tts_voice", "")
         self._windows_voice = next((v for v in voices if v.display_name == wanted), voices[0] if voices else None)
-        if self._windows_voice is None and self.cfg.dub_engine != "edge":
+        if self._windows_voice is None and self.cfg.dub_engine not in ("edge", "gemini"):
             self.error = ("Türkçe Windows sesi yok: Ayarlar > Saat ve dil > Konuşma > Ses ekle > Türkçe, "
                           "ya da menüden ses motorunu \"edge\" yapın.")
             self.ready.set()
             return
         self._player = MediaPlayer()
-        self.voice_in_use = "Edge (Emel / Ahmet)" if self.cfg.dub_engine == "edge" else \
-            (self._windows_voice.display_name if self._windows_voice else "")
+        if self.cfg.dub_engine == "gemini" and self.cfg.gemini_api_key:
+            self.voice_in_use = "Karma: Gemini (duygulu), sorun olursa anında Edge"
+        elif self.cfg.dub_engine in ("edge", "gemini"):
+            self.voice_in_use = "Edge (doğal Türkçe)" + (" — Gemini anahtarı yok" if self.cfg.dub_engine == "gemini" else "")
+        else:
+            self.voice_in_use = self._windows_voice.display_name if self._windows_voice else ""
         self.ready.set()
         while True:
             job = self._jobs.get()
             if job is None:
                 break
             try:
-                self._handle(*job)
+                self._speak_line(*job)
             except Exception as exc:  # bir satırın hatası dublajı durdurmasın
                 self._log(f"Dublaj hatası: {exc}")
 
-    def _handle(self, text: str, onset: float | None, generation: int, forced: Delivery | None,
+    def _speak_line(self, text: str, onset: float | None, generation: int, forced: Delivery | None,
                 original: str) -> None:
         delivery = forced or self._delivery_for_line(onset, generation, original)
         if delivery is None or (forced is None and generation != self._generation):
             return  # beklerken yeni satır geldi
         rate = self.cfg.tts_rate * (1 + delivery.rate_pct / 100)
-        path = None
-        if self.cfg.dub_engine == "edge" and time.monotonic() >= self._edge_off_until:
-            path = self._edge(text, delivery, rate)
+        now = time.monotonic()
+        engine = self.cfg.dub_engine
+        use_gemini = engine == "gemini" and bool(self.cfg.gemini_api_key) and now >= self._gemini_off_until
+        use_edge = engine in ("edge", "gemini") and now >= self._edge_off_until
+        # Karma: Gemini (duygulu) ile Edge AYNI ANDA istenir; Gemini dub_gemini_wait_ms içinde gelmezse
+        # ya da hata verirse beklemeden hazır Edge sesi çalınır, o da yoksa Windows sesi.
+        edge_job = self._pool.submit(self._edge_bytes, text, delivery, rate) if use_edge else None
+        audio, ext, source = None, "", ""
+        if use_gemini:
+            gem_job = self._pool.submit(self._gemini_bytes, text, delivery)
+            try:
+                audio = gem_job.result(timeout=self.cfg.dub_gemini_wait_ms / 1000)
+            except FutureTimeout:
+                self.fallbacks += 1
+                source = "Edge (Gemini geç kaldı)"
+            except Exception:
+                self.fallbacks += 1
+                source = "Edge (Gemini hata)"
+            if audio:
+                ext, source = ".wav", "Gemini"
+        if audio is None and edge_job is not None:
+            try:
+                audio = edge_job.result(timeout=5.0)
+            except Exception:
+                audio = None
+            if audio:
+                ext, source = ".mp3", source or "Edge"
         if forced is None and generation != self._generation:
             return
-        if path is not None:
-            self._play_file(path)
+        if audio:
+            self.last_engine = source
+            self._play_file(self._write_temp(audio, ext))
         else:
+            self.last_engine = "Windows"
             self._play_windows(text, delivery, rate)
 
     def _delivery_for_line(self, onset: float, generation: int, original: str) -> Delivery | None:
@@ -191,7 +234,7 @@ class Speaker(threading.Thread):
         if not detect:
             mood = emo.classify(original, None)
             rate, pitch, volume = mood.prosody()
-            return Delivery("erkek", 0, pitch, rate, volume, f"duygu: {mood.describe()}")
+            return Delivery("erkek", 0, pitch, rate, volume, f"duygu: {mood.describe()}", mood.label, mood.intensity)
         early, full = onset + EARLY_S, onset + self.cfg.dub_analysis_ms / 1000
         feats = None
         while True:
@@ -211,7 +254,7 @@ class Speaker(threading.Thread):
             mood = emo.classify(original, None)
             rate, pitch, volume = mood.prosody()
             self.last_character = f"tanınamadı (konuşma sesi yok/kısa) · {mood.describe()}"
-            return Delivery("erkek", 0, pitch, rate, volume)
+            return Delivery("erkek", 0, pitch, rate, volume, "", mood.label, mood.intensity)
         known, dist = self.book.best(feats)
         # Duygu: bu satırdaki ses, karakterin KENDİ normaline göre (yeni karakterde yalnızca metin).
         level = (emo.arousal(feats.loud_db, feats.f0, known.loud_db, known.f0)
@@ -222,11 +265,13 @@ class Speaker(threading.Thread):
         took = int(1000 * (time.monotonic() - onset))
         self.last_character = (f"{ch.label} ({'kadın' if ch.gender == 'kadin' else 'erkek'}, {feats.f0:.0f} Hz) · "
                                f"{mood.describe()} · {took} ms'de tanındı")
-        return Delivery(ch.gender, ch.voice, ch.pitch_pct + pitch, ch.rate_pct + rate, volume)
+        return Delivery(ch.gender, ch.voice, ch.pitch_pct + pitch, ch.rate_pct + rate, volume, "",
+                        mood.label, min(1.0, mood.intensity * ch.expressive))
 
     # --- Edge (çevrimiçi) ----------------------------------------------------------------------
 
-    def _edge(self, text: str, d: Delivery, rate: float) -> Path | None:
+    def _edge_bytes(self, text: str, d: Delivery, rate: float) -> bytes | None:
+        """Edge sesi (iş parçacığı havuzunda; kendi olay döngüsüyle)."""
         try:
             import edge_tts
         except ImportError:
@@ -247,28 +292,68 @@ class Speaker(threading.Thread):
                     data.extend(chunk["data"])
             return bytes(data)
 
+        loop = asyncio.new_event_loop()
         try:
             try:
-                data = self._loop.run_until_complete(asyncio.wait_for(fetch(voice), timeout=4.0))
+                data = loop.run_until_complete(asyncio.wait_for(fetch(voice), timeout=4.0))
             except Exception:
                 if voice == pool[0]:
                     raise
                 # Çok dilli ses okuyamadı: aynı satır yerli Türkçe sesle.
-                data = self._loop.run_until_complete(asyncio.wait_for(fetch(pool[0]), timeout=4.0))
+                data = loop.run_until_complete(asyncio.wait_for(fetch(pool[0]), timeout=4.0))
         except Exception as exc:
             self._edge_fail += 1
             if self._edge_fail >= 3:
                 self._edge_off_until = time.monotonic() + self.EDGE_RETRY_S
                 self._log(f"Edge seslerine ulaşılamıyor ({exc}); {self.EDGE_RETRY_S} sn Windows sesi kullanılacak.")
             return None
+        finally:
+            loop.close()
         if not data:
             return None
         self._edge_fail = 0
+        return data
+
+    def _write_temp(self, data: bytes, ext: str) -> Path:
         # İki dosya dönüşümlü: çalınmakta olan dosyanın üstüne yazılmaz.
         self._file_index ^= 1
-        path = self._tmp / f"gta_altyazi_dublaj_{os.getpid()}_{self._file_index}.mp3"
+        path = self._tmp / f"gta_altyazi_dublaj_{os.getpid()}_{self._file_index}{ext}"
         path.write_bytes(data)
         return path
+
+    # --- Gemini (çevrimiçi, duygulu) ------------------------------------------------------------
+
+    def _gemini_bytes(self, text: str, d: Delivery) -> bytes | None:
+        from . import gemini_tts as gt
+
+        pool = gt.VOICES[d.gender]
+        voice = pool[d.voice % len(pool)]
+        prompt = gt.style_prompt(text, d.emotion, d.intensity)
+        while self._gemini_model < len(gt.MODELS):
+            model = gt.MODELS[self._gemini_model]
+            try:
+                data = gt.synthesize(self._http, self.cfg.gemini_api_key, model, prompt, voice, timeout=6.0)
+                self._gemini_fail = 0
+                return data
+            except gt.GeminiModelMissing:
+                self._gemini_model += 1
+            except gt.GeminiQuota:
+                self._gemini_off_until = time.monotonic() + 600
+                self._log("Gemini ücretsiz kotası/hız sınırı doldu: 10 dk Edge sesiyle devam.")
+                raise
+            except gt.GeminiAuth as exc:
+                self._gemini_off_until = time.monotonic() + 86400
+                self._log(f"Gemini anahtarı reddedildi ({exc}); Edge sesiyle devam. Menüden anahtarı kontrol edin.")
+                raise
+            except gt.GeminiError:
+                self._gemini_fail += 1
+                if self._gemini_fail >= 3:
+                    self._gemini_off_until = time.monotonic() + 120
+                    self._log("Gemini'ye ulaşılamıyor: 2 dk Edge sesiyle devam.")
+                raise
+        self._gemini_off_until = time.monotonic() + 86400
+        self._log("Gemini ses modeli bulunamadı; Edge sesiyle devam.")
+        return None
 
     def _play_file(self, path: Path) -> None:
         from winrt.windows.foundation import Uri

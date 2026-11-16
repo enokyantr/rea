@@ -175,6 +175,10 @@ class Config:
     # "edge": Microsoft Edge'in çevrimiçi doğal sesleri (Emel kadın, Ahmet erkek; ücretsiz, internet gerekir;
     # ulaşılamazsa Windows sesine düşer). "windows": yerleşik çevrimdışı ses.
     dub_engine: str = "edge"
+    # "gemini" (karma): Google Gemini TTS ile talimatla duygulu ses (ücretsiz anahtar: Google AI Studio);
+    # Edge sesi aynı anda hazırlanır, Gemini bu kadar ms'de gelmezse/hata verirse Edge çalar.
+    gemini_api_key: str = ""
+    dub_gemini_wait_ms: int = 1200
     # Edge ses havuzu: "turkce" (Emel/Ahmet) | "genis" (+ Microsoft'un çok dilli sesleri: her karaktere
     # farklı ses, ama Türkçe telaffuzları aksanlı olabilir).
     dub_voice_pool: str = "turkce"
