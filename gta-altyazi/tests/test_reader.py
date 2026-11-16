@@ -91,3 +91,51 @@ def test_small_text_is_upscaled_more():
     assert reader.upscale_factor(16 + 14, cfg) > 2.5   # ~14 px yazı (düşük çözünürlüklü video)
     assert reader.upscale_factor(16 + 40, cfg) == cfg.upscale
     assert reader.upscale_factor(16 + 4, cfg) == 4.0
+
+
+def test_group_lines_joins_boxes_split_on_one_line_and_orders_lines():
+    from altyazi.ocr import group_lines
+
+    # Gerçek RapidOCR çıktısı biçimi: bir satır iki kutuya bölünmüş + altında ikinci satır
+    boxes = [
+        ([[300, 2], [600, 2], [600, 30], [300, 30]], "jee ass haircut you got", 0.98),
+        ([[0, 0], [290, 0], [290, 31], [0, 31]], "Maybe if you got rid of that oldkyee-y", 0.94),
+        ([[40, 40], [500, 40], [500, 70], [40, 70]], "second line", 0.9),
+    ]
+    assert group_lines(boxes) == ["Maybe if you got rid of that oldkyee-y jee ass haircut you got", "second line"]
+
+
+def test_raw_engine_gets_the_crop_as_is():
+    seen = []
+
+    def recognize(image):
+        seen.append(image)
+        return ["Go to Franklin's house."]
+
+    gray = _gray_with_text()
+    result = reader.read_text(gray, recognize, Config(preprocess="auto"), raw=True)
+    assert result.text == "Go to Franklin's house." and result.variant == "ham"
+    assert len(seen) == 1 and seen[0].shape[0] < gray.shape[0]  # yalnızca kırpıldı, büyütülmedi
+    assert set(np.unique(seen[0])) - {0, 255}  # ikili maske değil, gri ton
+
+
+def test_rapidocr_reads_an_outline_less_subtitle_on_light_background():
+    import pytest
+    pytest.importorskip("rapidocr_onnxruntime")
+    from PIL import Image, ImageDraw, ImageFilter, ImageFont
+    from altyazi.ocr import OcrUnavailable, RapidOcr
+
+    try:
+        ocr = RapidOcr()
+    except OcrUnavailable as exc:  # bu makinede eski sürüm
+        pytest.skip(str(exc))
+    img = Image.new("L", (900, 90), 190)  # açık gri zemin (beton), yazının konturu yok
+    try:
+        font = ImageFont.truetype("DejaVuSans.ttf", 34)
+    except OSError:
+        font = ImageFont.load_default(34)
+    ImageDraw.Draw(img).text((20, 22), "you'd get some money on your card.", font=font, fill=245)
+    gray = np.asarray(img.filter(ImageFilter.GaussianBlur(0.8)))
+    text = reader.read_text(gray, ocr.recognize, Config(bright_threshold=200), raw=True).text
+    from altyazi.textproc import similar
+    assert similar(text, "you'd get some money on your card.", 0.85), text

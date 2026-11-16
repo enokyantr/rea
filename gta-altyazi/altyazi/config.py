@@ -86,6 +86,8 @@ class Config:
     history_size: int = 8
 
     # OCR
+    # "auto": RapidOCR (kurulu değilse Windows OCR). "windows": yalnızca Windows OCR.
+    ocr_engine: str = "auto"
     ocr_language: str = "en-US"
     capture_interval_ms: int = 33
     # Yeni satır görülünce doğrulama okuması bu kadar ms sonra yapılır (tam kare aralığı beklenmez).

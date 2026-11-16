@@ -14,6 +14,7 @@ from . import config as config_mod
 from . import contrast, imageproc, reader, textproc, win32
 from .config import EXTRA_REGION_KEYS, EXTRA_REGION_LABELS, Config, Region
 from .geometry import Rect, intersect, region_to_screen, screen_to_region, union
+from . import ocr as ocr_mod
 from .ocr import OcrUnavailable, WindowsOcr
 from .hybrid import DRAFT, FINAL, HybridTranslator
 
@@ -100,8 +101,8 @@ class Pipeline(threading.Thread):
 
         self.translator.submit(event.text, context, lambda: seq == self.seq, on_result, on_error)
 
-    def _read_text(self, ocr: WindowsOcr, gray: np.ndarray) -> str:
-        result = reader.read_text(gray, ocr.recognize, self.cfg)
+    def _read_text(self, ocr, gray: np.ndarray) -> str:
+        result = reader.read_text(gray, ocr.recognize, self.cfg, ocr.raw_input)
         if self.debug and len(result.candidates) > 1:
             log(f"{self._tag}seçenekler: " + " | ".join(f"{n} {q:.0f} {t!r}" for n, t, q in result.candidates)
                 + f" → {result.variant}")
@@ -123,13 +124,15 @@ class Pipeline(threading.Thread):
         import mss
 
         try:
-            ocr = WindowsOcr(self.cfg.ocr_language)
+            ocr = ocr_mod.create(self.cfg)
         except OcrUnavailable as exc:
             self.ui.put(("fatal", str(exc)))
             return
-        except Exception as exc:  # pywinrt kurulu değil vb.
-            self.ui.put(("fatal", f"Windows OCR başlatılamadı: {exc}"))
+        except Exception as exc:  # pywinrt / onnxruntime kurulu değil vb.
+            self.ui.put(("fatal", f"OCR başlatılamadı: {exc}"))
             return
+        if self.region_name == MAIN:
+            log(f"OCR motoru: {ocr.name}")
 
         cfg = self.cfg
         stab = textproc.Stabilizer(cfg.stable_reads, cfg.similarity, cfg.clear_after_ms / 1000,
@@ -449,7 +452,7 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
 
 
 def run_ocr_compare(cfg: Config, folder: Path) -> None:
-    """--dump ile kaydedilen gerçek kırpıntılarda her ön işleme seçeneğini Windows OCR ile dener.
+    """--dump ile kaydedilen gerçek kırpıntılarda Windows OCR'ın her ön işleme seçeneğini ve RapidOCR'ı dener.
     Doğru metin bilinmediği için puan (reading_score) ve "anlamlı satır" sayısı karşılaştırılır."""
     from PIL import Image
 
@@ -457,14 +460,25 @@ def run_ocr_compare(cfg: Config, folder: Path) -> None:
     if not images:
         log(f"{folder} içinde .png yok. Önce --debug --dump ile çalıştırın.")
         return
-    ocr = WindowsOcr(cfg.ocr_language)
+    engines = []
+    for make in (lambda: WindowsOcr(cfg.ocr_language), ocr_mod.RapidOcr):
+        try:
+            engines.append(make())
+        except Exception as exc:
+            log(f"OCR motoru kullanılamıyor: {exc}")
     totals: dict[str, list[float]] = {}
     for path in images:
         gray = np.asarray(Image.open(path).convert("L"))
         print(path.name)
-        for name, image in reader.variants(gray, cfg, "all"):
+        jobs = []
+        for engine in engines:
+            if engine.raw_input:
+                jobs.append(("rapidocr", gray, 1.0, engine))
+            else:
+                jobs += [(name, image, cfg.upscale, engine) for name, image in reader.variants(gray, cfg, "all")]
+        for name, image, factor, engine in jobs:
             t0 = time.perf_counter()
-            text = textproc.normalize(ocr.recognize(imageproc.upscale(image, cfg.upscale)))
+            text = textproc.normalize(engine.recognize(imageproc.upscale(image, factor)))
             ms = 1000 * (time.perf_counter() - t0)
             score = textproc.reading_score(text)
             ok = textproc.is_plausible(text, cfg.min_text_chars)
@@ -472,10 +486,10 @@ def run_ocr_compare(cfg: Config, folder: Path) -> None:
             t[0] += score
             t[1] += ok
             t[2] += ms
-            print(f"  {name:7} {score:4.0f} {'✓' if ok else ' '} {text}")
+            print(f"  {name:8} {score:4.0f} {'✓' if ok else ' '} {text}")
     print(f"\n{len(images)} görüntü. Seçenek / toplam puan / anlamlı satır / ort. OCR ms:")
     for name, (score, ok, ms) in sorted(totals.items(), key=lambda kv: -kv[1][0]):
-        print(f"  {name:7} {score:7.0f} {int(ok):5d} {ms / len(images):6.1f}")
+        print(f"  {name:8} {score:7.0f} {int(ok):5d} {ms / len(images):6.1f}")
     print("Hangi seçeneğin hangi satırı doğru okuduğuna yukarıdaki listeden bakın.")
 
 
@@ -492,9 +506,10 @@ def run_ocr_test(cfg: Config, image_path: Path, translator: HybridTranslator, fu
         bgra = bgra[r.top:r.bottom, r.left:r.right]
         log(f"Bölge (piksel): x={r.left} y={r.top} {r.width}x{r.height}")
     gray = imageproc.to_gray(bgra)
-    ocr = WindowsOcr(cfg.ocr_language)
+    ocr = ocr_mod.create(cfg)
+    log(f"OCR motoru: {ocr.name}")
     t0 = time.perf_counter()
-    result = reader.read_text(gray, ocr.recognize, cfg)
+    result = reader.read_text(gray, ocr.recognize, cfg, ocr.raw_input)
     log(f"OCR süresi (tüm seçenekler): {1000 * (time.perf_counter() - t0):.0f} ms")
     if result.crop is not None:
         debug_path = image_path.with_name(image_path.stem + "_ocr_girdi.png")

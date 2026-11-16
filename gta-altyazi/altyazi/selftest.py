@@ -46,15 +46,15 @@ def _render_subtitle(text: str, background=(40, 55, 70)) -> np.ndarray:
 
 
 def _check_ocr(cfg: Config, report: Report) -> None:
-    from .ocr import OcrUnavailable, WindowsOcr
+    from . import ocr as ocr_mod
 
     try:
-        ocr = WindowsOcr(cfg.ocr_language)
-    except OcrUnavailable as exc:
-        report.item("Windows OCR", "HATA", str(exc).splitlines()[0])
+        ocr = ocr_mod.create(cfg)
+    except ocr_mod.OcrUnavailable as exc:
+        report.item("OCR", "HATA", str(exc).splitlines()[0])
         return
     except Exception as exc:
-        report.item("Windows OCR", "HATA", f"{type(exc).__name__}: {exc}")
+        report.item("OCR", "HATA", f"{type(exc).__name__}: {exc}")
         return
     # Koyu sahne ve açık (gökyüzü) sahne: beyaz yazı + siyah kontur her ikisinde de okunmalı.
     for scene, background in (("koyu sahne", (40, 55, 70)), ("açık sahne", (214, 226, 238))):
@@ -62,11 +62,11 @@ def _check_ocr(cfg: Config, report: Report) -> None:
         times, text = [], ""
         for _ in range(5):
             t0 = time.perf_counter()
-            result = reader.read_text(gray, ocr.recognize, cfg)  # oyundaki okuma yolunun aynısı
+            result = reader.read_text(gray, ocr.recognize, cfg, ocr.raw_input)  # oyundaki okuma yolu
             times.append(1000 * (time.perf_counter() - t0))
             text = result.text
         ok = textproc.similar(text, SAMPLE, 0.9)
-        report.item(f"Windows OCR ({scene})", "TAMAM" if ok else "HATA",
+        report.item(f"{ocr.name} ({scene})", "TAMAM" if ok else "HATA",
                     f"{statistics.median(times):.0f} ms, okunan: {text!r} [{result.variant}]")
 
 

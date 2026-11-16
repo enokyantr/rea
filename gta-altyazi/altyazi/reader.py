@@ -61,8 +61,10 @@ def upscale_factor(crop_height: int, cfg) -> float:
     return max(cfg.upscale, min(MAX_UPSCALE, TARGET_TEXT_HEIGHT / text_h))
 
 
-def read_text(gray: np.ndarray, recognize: Callable[[np.ndarray], list[str]], cfg) -> ReadResult:
-    """`gray`: bölgenin gri tonu. `recognize`: görüntü -> satırlar (Windows OCR)."""
+def read_text(gray: np.ndarray, recognize: Callable[[np.ndarray], list[str]], cfg,
+              raw: bool = False) -> ReadResult:
+    """`gray`: bölgenin gri tonu. `recognize`: görüntü -> satırlar. `raw`: motor (RapidOCR) doğal
+    görüntüyü olduğu gibi ister; ön işleme seçenekleri ve büyütme uygulanmaz."""
     bbox = imageproc.bright_bbox(gray >= cfg.bright_threshold)
     if bbox is None:
         if cfg.skip_without_bright_text:
@@ -72,9 +74,9 @@ def read_text(gray: np.ndarray, recognize: Callable[[np.ndarray], list[str]], cf
         gray = gray[top:bottom, left:right]
 
     result = ReadResult("", crop=gray)
-    factor = upscale_factor(gray.shape[0] if bbox is not None else 0, cfg)
+    factor = 1.0 if raw else upscale_factor(gray.shape[0] if bbox is not None else 0, cfg)
     best_score = None
-    for name, image in variants(gray, cfg):
+    for name, image in ([("ham", gray)] if raw else variants(gray, cfg)):
         text = textproc.normalize(recognize(imageproc.upscale(image, factor)))
         score = textproc.reading_score(text)
         result.candidates.append((name, text, score))

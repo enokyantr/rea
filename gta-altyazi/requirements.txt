@@ -11,3 +11,5 @@ winrt-Windows.Globalization>=3.0
 winrt-Windows.Graphics.Imaging>=3.0
 winrt-Windows.Media.Ocr>=3.0
 winrt-Windows.Storage.Streams>=3.0
+# OCR motoru (PP-OCRv4, işlemcide; modeller paketin içinde). Kurulamazsa Windows OCR kullanılır.
+rapidocr-onnxruntime>=1.4.4,<2; python_version < "3.13"
