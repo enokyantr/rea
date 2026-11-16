@@ -168,6 +168,7 @@ class Speaker(threading.Thread):
         self._stream = None          # StreamPlayer (miniaudio): inerken çalar; yoksa MediaPlayer
         self._handle = None          # çalan akış konuşması (PlayHandle)
         self._feeding: _EdgeStream | None = None
+        self._fast = None            # EdgeFast: hazır bağlantılar (ilk ses ~0,1 sn); yoksa normal edge-tts
         self._windows_voice = None
         self._edge_fail = 0
         self._edge_off_until = 0.0
@@ -312,6 +313,13 @@ class Speaker(threading.Thread):
                 self._log(f"Hızlı ses çalıcı açılamadı ({exc}); dublaj eski yolla (biraz daha gecikmeli) çalınacak.")
         except Exception as exc:
             self._log(f"Hızlı ses çalıcı yüklenemedi ({exc}); guncelle.bat çalıştırın.")
+        if self.cfg.dub_engine in ("edge", "gemini"):
+            try:
+                from .edge_fast import EdgeFast
+
+                self._fast = EdgeFast(log=self._log)
+            except Exception as exc:
+                self._log(f"Edge hızlı bağlantı kullanılamıyor ({exc}); normal bağlantıyla devam.")
         if self.cfg.dub_engine == "gemini" and self.cfg.gemini_api_key:
             self.voice_in_use = "Karma: Gemini (duygulu), sorun olursa anında Edge"
         elif self.cfg.dub_engine in ("edge", "gemini"):
@@ -331,6 +339,8 @@ class Speaker(threading.Thread):
                 self._log(f"Dublaj hatası: {exc}")
         if self._stream is not None:
             self._stream.close()
+        if self._fast is not None:
+            self._fast.close()
 
     def _prepare(self, text: str, onset: float, original: str, key, forced: Delivery | None,
                  factor: float):
@@ -529,6 +539,15 @@ class Speaker(threading.Thread):
         volume = max(-90.0, min(50.0, (self.cfg.tts_volume - 1) * 100 + d.volume_pct))
         options = {"rate": _pct((rate - 1) * 100), "pitch": _hz(pitch_hz), "volume": _pct(volume)}
         error: Exception | None = None
+        fast = self._fast
+        if fast is not None:
+            stream = _EdgeStream()
+            fast.request(text, voice, options["rate"], options["pitch"], options["volume"],
+                         stream.put, stream.end, timeout=6.0 + 0.15 * len(text))
+            if stream.first.wait(2.5) and stream.nbytes:
+                self._edge_fail = 0
+                return stream
+            stream.close()  # hazır bağlantı olmadı: aynı satır normal yoldan
         for name in dict.fromkeys([voice, pool[0]]):
             stream = _EdgeStream()
             threading.Thread(target=self._edge_produce, args=(edge_tts, stream, text, name, options),

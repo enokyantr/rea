@@ -202,3 +202,42 @@ def test_interrupt_releases_prepared_streams():
     sp.interrupt()
     time.sleep(0.05)
     assert stream.closed
+
+
+class FakeFast:
+    def __init__(self, chunks):
+        self.chunks, self.calls = chunks, []
+
+    def request(self, text, voice, rate, pitch, volume, on_audio, on_end, timeout):
+        self.calls.append(voice)
+        for c in self.chunks:
+            on_audio(c)
+        on_end(None if self.chunks else ConnectionError("yok"))
+
+
+def test_edge_uses_ready_connection_first(monkeypatch):
+    import sys
+    import types
+    monkeypatch.setitem(sys.modules, "edge_tts", types.ModuleType("edge_tts"))
+    sp, _ = _speaker(dub_engine="edge")
+    sp._fast = FakeFast([b"a", b"b"])
+    stream = sp._edge_open("Selam", Delivery(gender="erkek"), 1.1)
+    assert stream.read_all() == b"ab" and sp._fast.calls == ["tr-TR-AhmetNeural"]
+
+
+def test_failed_ready_connection_falls_back_to_normal_edge(monkeypatch):
+    import sys
+    import types
+    from altyazi.tts import Speaker as Sp
+    monkeypatch.setitem(sys.modules, "edge_tts", types.ModuleType("edge_tts"))
+    used = []
+
+    def produce(edge_tts, stream, text, voice, options):
+        used.append(voice)
+        stream.put(b"normal")
+        stream.end()
+    monkeypatch.setattr(Sp, "_edge_produce", staticmethod(produce))
+    sp, _ = _speaker(dub_engine="edge")
+    sp._fast = FakeFast([])
+    stream = sp._edge_open("Selam", Delivery(gender="erkek"), 1.1)
+    assert stream.read_all() == b"normal" and used == ["tr-TR-AhmetNeural"]
