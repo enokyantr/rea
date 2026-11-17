@@ -1,9 +1,12 @@
 """Edge seslerine hazır (önceden açılmış) bağlantılarla istek: ilk ses ~0,1 sn'de gelir.
 
 edge-tts her satır için yeni TLS/WebSocket bağlantısı kurar; ilk ses parçası ~0,8 sn sonra gelir.
-Burada arka planda hep `POOL_SIZE` (3) kadar bağlantı açık ve ayarları (speech.config) gönderilmiş
+Burada arka planda hep `POOL_SIZE` (4) kadar bağlantı açık ve ayarları (speech.config) gönderilmiş
 tutulur; satır gelince yalnızca metin gönderilir. Her bağlantı tek satırda kullanılıp kapatılır
 (aynı bağlantının yeniden kullanımı ölçümde düzensiz gecikti), yerine hemen yenisi açılır.
+Dublaj bir satır için en çok 3 istek açabilir (konuşan tanıma bitmeden 2 olası sesle, tahmin
+tutmazsa doğru sesle); 4 hazır bağlantı, art arda gelen satırda da yeni bağlantı kurmayı
+(~0,3-0,7 sn) beklemesin diye. `on_audio` False döndürürse (ses artık istenmiyor) indirme bırakılır.
 
 edge-tts'in iç yardımcılarını (DRM belirteci, SSML biçimi) kullanır; sürüm değişip bunlar
 bulunamazsa ya da bağlantı açılamazsa `EdgeFastUnavailable` / hata verilir ve çağıran
@@ -19,7 +22,7 @@ import time
 from typing import Callable
 from xml.sax.saxutils import escape
 
-POOL_SIZE = 3
+POOL_SIZE = 4
 MAX_IDLE_S = 60.0  # bundan eski hazır bağlantı kullanılmaz (sunucu kapatmış olabilir)
 
 _CONFIG = ("X-Timestamp:{}\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n"
@@ -62,7 +65,7 @@ class EdgeFast:
                 on_audio: Callable[[bytes], None], on_end: Callable[[Exception | None], None],
                 timeout: float) -> None:
         """Satırı istet; ses parçaları geldikçe `on_audio`, sonunda `on_end(hata ya da None)` çağrılır.
-        Hemen döner."""
+        `on_audio` False döndürürse istek bırakılır (bağlantı kapanır, `on_end(None)`). Hemen döner."""
         if self._closed:
             on_end(EdgeFastUnavailable("kapatıldı"))
             return
@@ -171,7 +174,8 @@ class EdgeFast:
                 _, data = comm.get_headers_and_data(message.data, header_length)
                 if data:
                     got_audio = True
-                    on_audio(data)
+                    if on_audio(data) is False:
+                        return  # ses artık istenmiyor (ör. tutmayan tahmin): bağlantı kapatılır
             elif message.type == aiohttp.WSMsgType.TEXT:
                 if "Path:turn.end" in message.data:
                     break

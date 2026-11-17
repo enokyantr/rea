@@ -241,3 +241,169 @@ def test_failed_ready_connection_falls_back_to_normal_edge(monkeypatch):
     sp._fast = FakeFast([])
     stream = sp._edge_open("Selam", Delivery(gender="erkek"), 1.1)
     assert stream.read_all() == b"normal" and used == ["tr-TR-AhmetNeural"]
+
+
+# --- Tahmini ses: konuşan tanıma bitmeden Edge istenir ---------------------------------------
+
+def _char(cid, gender, pitch=0, voice=0):
+    from altyazi.voiceid import Character
+    return Character(id=cid, gender=gender, f0=120 if gender == "erkek" else 210, timbre=[1.0] * 12,
+                     pitch_pct=pitch, voice=voice)
+
+
+def _spec_speaker(first_chunk_s=0.0, slow_gender=None):
+    """Tanıması elle bitirilen, Edge isteklerini kaydeden konuşmacı (akışlar _EdgeStream)."""
+    from concurrent.futures import Future
+    from altyazi.tts import _Detection, _EdgeStream
+    sp, played = _speaker(dub_engine="edge")
+    del sp._delivery  # gerçek tanıma yolu
+    calls = []
+
+    def synth(text, d, rate):
+        stream = _EdgeStream()
+        calls.append((time.monotonic(), d, stream))
+        time.sleep(first_chunk_s + (0.5 if d.gender == slow_gender else 0.0))
+        stream.put(b"ses-" + d.gender.encode())
+        stream.end()
+        return stream, ".mp3", "Edge"
+    sp._synthesize = synth
+    det = _Detection()
+    det.job = Future()
+    sp._prepared["satir"] = det
+    return sp, det, calls
+
+
+def test_speculative_voice_starts_before_detection_and_matching_detection_keeps_it():
+    from altyazi.tts import _Turn
+    sp, det, calls = _spec_speaker()
+    adam = _char(1, "erkek")
+    sp._recent.append((time.monotonic(), adam))  # önceki satırı o söyledi
+    t0 = time.monotonic()
+    job = sp._prep.submit(sp._prepare, "Selam", t0, "Hi", "satir", None, 1.0, _Turn())
+    time.sleep(0.15)
+    assert len(calls) == 1 and calls[0][1].gender == "erkek" and not det.job.done()  # tanıma beklenmedi
+    det.job.set_result((adam, None, 120.0))
+    audio, ext, source, d, rate, detect_s, synth_s, guess = job.result(2)
+    assert guess == "tuttu" and audio is calls[0][2] and not audio.closed
+    assert len(calls) == 1 and d.speaker == 1  # ikinci istek yok
+    assert "Karakter 1" in sp.last_character
+
+
+def test_wrong_speculative_voice_is_replaced_and_closed():
+    from altyazi.tts import _Turn
+    sp, det, calls = _spec_speaker(slow_gender="kadin")  # doğru (kadın) ses 0,5 sn geç gelir
+    sp._recent.append((time.monotonic(), _char(1, "erkek")))
+    turn = _Turn()
+    job = sp._prep.submit(sp._prepare, "Selam", time.monotonic(), "Hi", "satir", None, 1.0, turn)
+    time.sleep(0.1)
+    turn.mark()  # çalma sırası çoktan geldi: yine de yanlış cinsiyetteki ses çalınmaz
+    det.job.set_result((_char(2, "kadin"), None, 210.0))
+    audio, ext, source, d, rate, detect_s, synth_s, guess = job.result(3)
+    assert [c[1].gender for c in calls] == ["erkek", "kadin"]
+    assert d.gender == "kadin" and audio is calls[1][2] and "tutmadı" in guess
+    assert calls[0][2].closed and not audio.closed  # tutmayan tahminin akışı bırakıldı
+    assert audio.read_all() == b"ses-kadin"
+
+
+def test_two_recent_speakers_are_both_tried_in_a_dialogue():
+    from altyazi.tts import _Turn
+    sp, det, calls = _spec_speaker()
+    a, b = _char(1, "erkek"), _char(2, "kadin")
+    now = time.monotonic()
+    sp._recent.extend([(now - 3, a), (now - 1, b)])  # A, B konuştu; sıra büyük olasılıkla A'da
+    job = sp._prep.submit(sp._prepare, "Selam", now, "Hi", "satir", None, 1.0, _Turn())
+    time.sleep(0.1)
+    assert [c[1].speaker for c in calls] == [2, 1]
+    det.job.set_result((a, None, 120.0))
+    audio, *_, guess = job.result(2)
+    assert guess == "tuttu" and audio is calls[1][2] and calls[0][2].closed and len(calls) == 2
+
+
+def test_unfinished_detection_plays_the_guess_shortly_after_the_turn_comes():
+    from altyazi.tts import LATE_S, _Turn
+    sp, det, calls = _spec_speaker()
+    sp._recent.append((time.monotonic(), _char(1, "erkek")))
+    turn = _Turn()
+    job = sp._prep.submit(sp._prepare, "Selam", time.monotonic(), "Hi", "satir", None, 1.0, turn)
+    time.sleep(0.1)
+    turn.mark()
+    t_due = time.monotonic()
+    audio, *_, guess = job.result(2)
+    waited = time.monotonic() - t_due
+    assert LATE_S - 0.05 <= waited < LATE_S + 0.2 and "tahmin" in guess and not audio.closed
+    det.job.set_result((None, None, 0.0))
+
+
+def test_same_character_with_other_emotion_waits_for_right_tone_only_briefly():
+    from altyazi.tts import LATE_S, _Turn
+    sp, det, calls = _spec_speaker()
+    adam = _char(1, "erkek")
+    sp._recent.append((time.monotonic(), adam))
+
+    def synth(text, d, rate):  # doğru tonlama (bağıran) çok geç gelir
+        from altyazi.tts import _EdgeStream
+        stream = _EdgeStream()
+        calls.append((time.monotonic(), d, stream))
+        if len(calls) > 1:
+            time.sleep(1.0)
+        stream.put(b"x")
+        stream.end()
+        return stream, ".mp3", "Edge"
+    sp._synthesize = synth
+    turn = _Turn()
+    job = sp._prep.submit(sp._prepare, "Kapa çeneni!", time.monotonic(), "Shut up!", "satir", None, 1.0, turn)
+    time.sleep(0.1)
+    det.job.set_result((adam, 1.0, 160.0))  # ses yükselmiş: sinirli, tonlama tahminden farklı
+    time.sleep(0.05)
+    turn.mark()
+    t_due = time.monotonic()
+    audio, ext, source, d, *_, guess = job.result(3)
+    assert len(calls) == 2 and audio is calls[0][2] and "tonlama" in guess
+    assert time.monotonic() - t_due < LATE_S + 0.2
+
+
+def test_edge_fast_stops_downloading_a_discarded_stream():
+    import asyncio
+    import aiohttp
+    from altyazi.edge_fast import EdgeFast
+    from altyazi.tts import _EdgeStream
+
+    class Msg:
+        def __init__(self, data):
+            self.type, self.data = aiohttp.WSMsgType.BINARY, data
+
+    class Ws:
+        def __init__(self):
+            self.sent, self.read = [], 0
+
+        async def send_str(self, s):
+            self.sent.append(s)
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            self.read += 1
+            if self.read > 50:
+                raise StopAsyncIteration
+            return Msg((2).to_bytes(2, "big") + b"\r\n" + b"ses")
+
+    class Comm:
+        mkssml = staticmethod(lambda config, text: text)
+        remove_incompatible_characters = staticmethod(lambda t: t)
+        ssml_headers_plus_data = staticmethod(lambda *a: "istek")
+        connect_id = staticmethod(lambda: "id")
+        date_to_string = staticmethod(lambda: "zaman")
+        get_headers_and_data = staticmethod(lambda data, n: ({}, data[2 + n:]))
+
+    fast = object.__new__(EdgeFast)
+    fast._comm, fast._aiohttp, fast._config_cls = Comm, aiohttp, lambda *a: None
+    stream, ws = _EdgeStream(), Ws()
+    got = []
+
+    def on_audio(data):
+        got.append(data)
+        stream.close()  # ilk parçadan sonra artık istenmiyor
+        return stream.put(data)
+    asyncio.run(fast._speak(ws, "Selam", "v", "+0%", "+0Hz", "+0%", on_audio))
+    assert got == [b"ses"] and ws.read == 1

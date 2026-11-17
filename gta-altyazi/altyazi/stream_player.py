@@ -179,6 +179,8 @@ class PlayHandle:
         self._decode_done = threading.Event()
         self._started = threading.Event()
         self._done = threading.Event()
+        self._drained = threading.Event()  # gerçek sesin tamamı aygıta verildi (kuyruk sessizliği hariç)
+        self.drained_at: float | None = None
         self._stopped = False
         self._heard_voice = False  # baştaki sessizlik geçildi mi
         self._lead = b""
@@ -215,6 +217,13 @@ class PlayHandle:
     @property
     def done(self) -> bool:
         return self._done.is_set()
+
+    @property
+    def drained(self) -> bool:
+        """Çözme bitti ve sesin tamamı aygıta verildi (ya da durduruldu). `done`dan ~3 aygıt periyodu
+        (aygıt tamponu) önce olur: sıradaki konuşma bu anda başlatılırsa aygıtta öncekinin ardına
+        eklenir, kesmez; araya boşuna sessizlik girmez."""
+        return self._drained.is_set()
 
     # Çözücü tarafı
     def _feed(self, pcm: bytes) -> None:
@@ -277,7 +286,13 @@ class PlayHandle:
             self._pos = 0
             self._mark_done()
 
+    def _mark_drained(self) -> None:
+        if not self._drained.is_set():
+            self.drained_at = time.monotonic()
+            self._drained.set()
+
     def _mark_done(self) -> None:
+        self._mark_drained()
         if not self._done.is_set():
             self.finished_at = time.monotonic()
             self._done.set()
@@ -299,6 +314,7 @@ class PlayHandle:
                 self._started_at = time.monotonic()
                 self._started.set()
             if self._decode_done.is_set() and self._pos >= len(self._buf):
+                self._mark_drained()
                 self._tail_left -= nbytes - len(out)
                 if self._tail_left <= 0:
                     self._mark_done()

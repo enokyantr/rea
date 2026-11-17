@@ -357,3 +357,31 @@ def test_edge_silence_is_trimmed_so_lines_follow_each_other_quickly():
     assert 0.5 < h.duration_s < 0.62 and 1.4 < h.trimmed_s < 1.5  # yalnızca ses (+2x40 ms) kaldı
     first = np.flatnonzero(np.abs(np.frombuffer(out, np.int16)) > 300)[0]
     assert first / SR < 0.06  # ses beklemeden başlıyor
+
+
+def test_handle_is_drained_before_device_tail_finishes():
+    player, dev = make_player()
+    h = player.play_chunks(split(make_mp3(seconds=0.6), [700]))
+    assert h._decode_done.wait(10)
+    pulls = 0
+    while not h.drained:
+        dev.pull()
+        pulls += 1
+        assert pulls < 200
+    assert not h.done and h.drained_at is not None  # aygıt tamponu (kuyruk sessizliği) henüz çalıyor
+    pump_until_done(dev, h)
+    assert h.done and h.finished_at >= h.drained_at
+
+
+def test_next_line_is_queued_right_after_previous_audio_without_extra_gap():
+    speaker, heard, stop = _speaker_with_player()
+    speaker._edge_open = _slow_edge(make_mp3(0.6), delay=0.0)
+    t0 = time.monotonic()
+    speaker._speak_line("Bir", t0, speaker._generation, None, "", None, t0)
+    first = speaker._handle
+    speaker._speak_line("İki", time.monotonic(), speaker._generation, None, "", None, time.monotonic())
+    second = speaker._handle
+    assert first.drained and first.error is None and first.duration_s > 0.5  # sonuna kadar verildi
+    assert second.wait_started(5) and second.started_at >= first.drained_at
+    second.wait(10)
+    stop.set()

@@ -222,17 +222,30 @@ class CharacterBook:
                     best.gender = "kadin" if best.f0 >= FEMALE_F0 else "erkek"
                 self._save()
                 return best
-            gender = feats.gender
-            same = sum(1 for c in self.characters if c.gender == gender)
-            pitch, rate, expressive = _VARIANTS[same % len(_VARIANTS)]
-            ch = Character(id=max((c.id for c in self.characters), default=0) + 1, gender=gender, f0=feats.f0,
-                           timbre=list(feats.timbre), pitch_pct=pitch, rate_pct=rate, voice=same,
-                           expressive=expressive, loud_db=feats.loud_db, f0_spread=feats.f0_spread)
+            ch = self._new_character(feats)
             self.characters.append(ch)
             if len(self.characters) > self.MAX_CHARACTERS:  # en az konuşanı unut
                 self.characters.remove(min(self.characters, key=lambda c: c.lines))
             self._save()
             return ch
+
+    def predict(self, feats: VoiceFeatures) -> Character:
+        """`identify`'ın büyük olasılıkla döndüreceği karakter (kopya; hafızayı değiştirmez).
+        Dublaj, tanıma bitmeden sesi bu tahminle hazırlamaya başlar."""
+        best, best_d = self.best(feats)
+        with self._lock:
+            if best is not None and best_d <= self.MATCH:
+                return Character(**asdict(best))
+            return self._new_character(feats)
+
+    def _new_character(self, feats: VoiceFeatures) -> Character:
+        """Hafızada olmayan ses için yeni karakter (kilit altında çağrılır; hafızaya eklemez)."""
+        gender = feats.gender
+        same = sum(1 for c in self.characters if c.gender == gender)
+        pitch, rate, expressive = _VARIANTS[same % len(_VARIANTS)]
+        return Character(id=max((c.id for c in self.characters), default=0) + 1, gender=gender, f0=feats.f0,
+                         timbre=list(feats.timbre), pitch_pct=pitch, rate_pct=rate, voice=same,
+                         expressive=expressive, loud_db=feats.loud_db, f0_spread=feats.f0_spread)
 
     def set_gender(self, char_id: int, gender: str) -> None:
         with self._lock:

@@ -6,12 +6,22 @@ Akış (her satır, arka plan iş parçacığında):
 3. Ses: "edge" (Microsoft Edge'in çevrimiçi doğal sesleri: Emel kadın, Ahmet erkek; ücretsiz, internet
    gerekir) ya da "windows" (yerleşik çevrimdışı ses; kadın sesi perde yükseltilerek). Edge'e
    ulaşılamazsa o satır Windows sesiyle okunur.
-4. Yeni satır gelince eski okuma hemen kesilir; geç kalan eski satır hiç okunmaz."""
+4. Satırlar sırayla, kesilmeden okunur; geride kalındıkça hızlanır, çok geride kalan satır atlanır.
+
+Tahmini ses (tanıma beklenmez): metin hazır olduğunda konuşan tanıma henüz bitmediyse Edge sesi
+en olası konuşanla (bu satırın ilk ses tahmini, yoksa son konuşan(lar); en çok SPECULATE_MAX ses)
+HEMEN istenir. Tanıma bitince ses ayarları (Edge sesi, perde, hız, ses düzeyi) tutan tahmin
+kullanılır, ötekiler kapatılır; hiçbiri tutmazsa doğru sesle yeniden istenir. Karar çalmadan önce
+verilir:
+- Konuşan farklı çıktıysa (başka karakter/cinsiyet) her zaman doğru ses beklenir: bilinen doğru
+  ses varken yanlış karakterin sesi çalınmaz.
+- Yalnızca duygu tonlaması farklıysa (aynı karakter) ya da tanıma hâlâ bitmediyse, satırın çalma
+  sırası geldikten sonra en çok LATE_S (0,3 sn) doğru ses beklenir; gelmezse hazır tahmin çalınır."""
 
 from __future__ import annotations
 
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from concurrent.futures import TimeoutError as FutureTimeout
 import os
 import queue
@@ -43,6 +53,12 @@ EDGE_VOICES_WIDE = {
 # Hafızadaki bir karaktere bu kadar yakın ses, ilk EARLY_S saniyede kesin tanınır (beklemeden).
 EARLY_S = 0.3
 EARLY_MATCH = 0.6  # CharacterBook.MATCH'in oranı
+# Tahmini ses: aynı anda en çok bu kadar olası konuşanla istenir (diyalogda son iki konuşan).
+SPECULATE_MAX = 2
+CONVERSATION_S = 20.0  # bundan eski konuşanlar tahmin edilmez (başka sahne)
+# Çalma sırası gelmiş satır, tanıma ya da (aynı karakterin) doğru tonlaması için en çok bu kadar
+# daha bekler; sonra hazır tahmini ses çalınır (bkz. modül açıklaması).
+LATE_S = 0.3
 
 
 @dataclass
@@ -56,6 +72,7 @@ class Delivery:
     note: str = ""
     emotion: str = "neutral"
     intensity: float = 0.0
+    speaker: int | None = None  # karakter no (tanınamadıysa None): tahmini sesi karşılaştırmak için
 # Windows sesi tek (genelde erkek, "Tolga"): kadın için perde yükseltilir (Hz).
 _WINDOWS_FEMALE_PITCH_HZ = 70
 _BASE_F0 = {"kadin": 200, "erkek": 120}
@@ -110,11 +127,15 @@ class _EdgeStream:
         self.nbytes = 0
         self.error: Exception | None = None
 
-    def put(self, data: bytes) -> None:
-        if not self.closed and data:
+    def put(self, data: bytes) -> bool:
+        """Parçayı ekle; akış kapatıldıysa False (üretici indirmeyi bırakabilir)."""
+        if self.closed:
+            return False
+        if data:
             self.nbytes += len(data)
             self._q.put(data)
             self.first.set()
+        return True
 
     def end(self, error: Exception | None = None) -> None:
         self.error = error
@@ -134,6 +155,44 @@ class _EdgeStream:
 
     def read_all(self) -> bytes:
         return b"".join(self)
+
+
+class _Detection:
+    """Bir satırın konuşan tanıması: arka plandaki iş + ilk tahmin (EARLY_S'de, bitmeden önce)."""
+
+    def __init__(self):
+        self.job = None
+        self.estimate = None  # (Character, uyarılmışlık) — voiceid.CharacterBook.predict
+
+
+class _Turn:
+    """Satırın çalma sırası geldi mi (önceki satır bitti): hazırlık buna göre tahmini sese razı olur."""
+
+    def __init__(self):
+        self.due_at: float | None = None
+
+    def mark(self) -> None:
+        if self.due_at is None:
+            self.due_at = time.monotonic()
+
+    def late(self, now: float) -> bool:
+        return self.due_at is not None and now >= self.due_at + LATE_S
+
+
+def _has_audio(job) -> bool:
+    if not job.done() or job.exception() is not None:
+        return False
+    result = job.result()
+    return bool(result and result[0])
+
+
+def _wait_any(jobs, timeout: float) -> None:
+    """İşlerden biri bitene ya da süre dolana kadar bekle (bitmiş işler yüzünden dönüp durmadan)."""
+    pending = [j for j in jobs if j is not None and not j.done()]
+    if pending:
+        wait(pending, timeout=timeout, return_when=FIRST_COMPLETED)
+    else:
+        time.sleep(timeout)
 
 
 def _discard(job) -> None:
@@ -175,9 +234,15 @@ class Speaker(threading.Thread):
         self._gemini_off_until = 0.0
         self._gemini_fail = 0
         self._gemini_model = 0
-        self._pool = ThreadPoolExecutor(max_workers=6, thread_name_prefix="dublaj-ses")
+        # Edge/Gemini istekleri (satır başına tahminlerle en çok ~3 Edge isteği aynı anda).
+        self._pool = ThreadPoolExecutor(max_workers=12, thread_name_prefix="dublaj-ses")
         # Satır sesleri altyazı gelir gelmez (sıra beklemeden) bununla hazırlanır.
         self._prep = ThreadPoolExecutor(max_workers=4, thread_name_prefix="dublaj-hazirlik")
+        # Tahmini/düzeltilmiş ses sentezleri (bir satırın _prepare'i bunları bekler).
+        self._synth_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="dublaj-tahmin")
+        # Konuşan tanıma ayrı havuzda: Edge beklemeleri (sn'lerce sürebilir) tanımayı geciktirmesin.
+        self._detector = ThreadPoolExecutor(max_workers=3, thread_name_prefix="dublaj-tanima")
+        self._recent: deque = deque(maxlen=6)     # (zaman, Character ya da None): son konuşanlar
         self._free_at = 0.0       # sıradaki satırların tahmini bittiği an (hız planı için)
         self._cps = 15.0          # Türkçe ses hızı (harf/sn, hız x1'de); çalınan satırlarla ayarlanır
         self._last_played = None  # (PlayHandle, harf sayısı, hız): süre ölçümü için
@@ -186,7 +251,7 @@ class Speaker(threading.Thread):
         self._http = requests.Session()
         self.last_engine = ""
         self.fallbacks = 0
-        self._prepared: dict = {}                 # satır anahtarı -> konuşan tanıma (Future)
+        self._prepared: dict = {}                 # satır anahtarı -> konuşan tanıma (_Detection)
         self._gemini_times: deque = deque(maxlen=8)  # son Gemini cevap süreleri (sn)
         self._gemini_skips = 0
         self.debug = False
@@ -207,7 +272,9 @@ class Speaker(threading.Thread):
         gelince sonuç büyük olasılıkla hazırdır."""
         if self.book is None or key in self._prepared:
             return
-        self._prepared[key] = self._pool.submit(self._detect, onset)
+        det = self._start_detection(onset)
+        det.job.add_done_callback(self._remember_speaker)
+        self._prepared[key] = det
         while len(self._prepared) > 8:
             self._prepared.pop(next(iter(self._prepared)))
 
@@ -218,8 +285,9 @@ class Speaker(threading.Thread):
         now = time.monotonic()
         onset = onset if onset is not None else now
         factor = self._plan(text, onset, self._jobs.qsize(), now)
-        prepared = self._prep.submit(self._prepare, text, onset, original, key, None, factor)
-        self._jobs.put((text, onset, self._generation, None, original, key, now, prepared))
+        turn = _Turn()
+        prepared = self._prep.submit(self._prepare, text, onset, original, key, None, factor, turn)
+        self._jobs.put((text, onset, self._generation, None, original, key, now, prepared, turn))
 
     def _plan(self, text: str, onset: float, pending: int, now: float) -> float:
         """Hız katsayısı: satırın ne kadar geç başlayacağı tahminine göre (önceki satırlar + ses
@@ -241,6 +309,8 @@ class Speaker(threading.Thread):
                 job = self._jobs.get_nowait()
                 if job is not None and len(job) > 7 and job[7] is not None:
                     _discard(job[7])
+                if job is not None and len(job) > 8 and job[8] is not None:
+                    job[8].mark()  # hazırlık doğru sesi boşuna beklemesin
         except queue.Empty:
             pass
         feeding, self._feeding = self._feeding, None
@@ -273,6 +343,12 @@ class Speaker(threading.Thread):
         """Akış çalıcıda hâlâ ses çalıyor mu (sokak dinleyicisi kendi dublajımızı duymasın)."""
         handle = self._handle
         return handle is not None and not handle.done
+
+    def _previous_unfinished(self) -> bool:
+        """Önceki satırın sesi hâlâ aygıta veriliyor mu. Tamamı verildiyse (aygıt tamponu çalarken)
+        sıradaki başlatılabilir: aygıtta ardına eklenir, kesmez, ~3 periyot boşuna beklenmez."""
+        handle = self._handle
+        return handle is not None and not handle.drained
 
     def stop(self) -> None:
         self.interrupt()
@@ -343,20 +419,120 @@ class Speaker(threading.Thread):
             self._fast.close()
 
     def _prepare(self, text: str, onset: float, original: str, key, forced: Delivery | None,
-                 factor: float):
-        """Konuşan tanıma + ses hazırlığı (sıradan bağımsız, havuzda). Edge sesi akış olarak döner."""
+                 factor: float, turn: _Turn | None = None):
+        """Konuşan tanıma + ses hazırlığı (sıradan bağımsız, havuzda). Edge sesi akış olarak döner:
+        (ses, uzantı, motor, Delivery, hız, tanıma sn, ses sn, tahmin durumu)."""
         t0 = time.monotonic()
-        delivery = forced or self._delivery(key, onset, original)
+        det = None
+        if forced is None and self._can_speculate():
+            det = self._prepared.pop(key, None)
+            if det is None and self._detection_active():
+                det = self._start_detection(onset)
+            if det is not None and not det.job.done():
+                return self._prepare_speculative(text, original, det, factor, turn, t0)
+        if forced is not None:
+            delivery = forced
+        elif det is not None:  # tanıma zaten bitmiş
+            delivery = self._deliver(self._detection_result(det.job), original)
+        else:
+            delivery = self._delivery(key, onset, original)
         t_detect = time.monotonic()
-        rate = min(2.0, self.cfg.tts_rate * (1 + delivery.rate_pct / 100) * factor)
+        rate = self._rate(delivery, factor)
         audio, ext, source = self._synthesize(text, delivery, rate)
-        return audio, ext, source, delivery, rate, t_detect - t0, time.monotonic() - t_detect
+        return audio, ext, source, delivery, rate, t_detect - t0, time.monotonic() - t_detect, ""
+
+    def _rate(self, delivery: Delivery, factor: float) -> float:
+        return min(2.0, self.cfg.tts_rate * (1 + delivery.rate_pct / 100) * factor)
+
+    def _can_speculate(self) -> bool:
+        """Tahmini ses yalnızca Edge ile (ücretsiz, akışlı). Gemini denenecekse tahmin edilmez: kotası
+        sınırlı, tutmayan tahmin istek harcar."""
+        now = time.monotonic()
+        engine = self.cfg.dub_engine
+        if engine not in ("edge", "gemini") or now < self._edge_off_until:
+            return False
+        return not (engine == "gemini" and self.cfg.gemini_api_key and now >= self._gemini_off_until)
+
+    def _prepare_speculative(self, text: str, original: str, det: _Detection, factor: float,
+                             turn: _Turn | None, t0: float):
+        """Tanıma sürerken sesi olası konuşan(lar)la hemen iste; tanıma bitince doğru olanı seç.
+        Kurallar modül açıklamasında (LATE_S)."""
+        started: dict = {}
+
+        def synth(d: Delivery, r: float):
+            job = self._synth_pool.submit(self._synthesize, text, d, r)
+            started[job] = time.monotonic()
+            return job
+
+        guesses = [(d, self._rate(d, factor)) for d in self._guesses(det, original)]
+        spec = [(d, r, synth(d, r)) for d, r in guesses]
+        chosen = None            # (Delivery, hız, iş)
+        delivery = None          # tanınan konuşana göre doğru okuma
+        correct = None           # doğru sesin işi (tahmin tutmadıysa)
+        minor = None             # aynı karakterin farklı tonlamalı tahmini (beklenmezse çalınabilir)
+        t_known = None
+        verdict = ""
+        deadline = t0 + 1.5      # tanıma en çok bu kadar beklenir (eski sınır)
+        try:
+            while chosen is None:
+                now = time.monotonic()
+                if delivery is None:
+                    if det.job.done() or now >= deadline:
+                        t_known = now
+                        if not det.job.done():
+                            chosen, verdict = spec[0], "tanıma gecikti, tahmin"
+                            break
+                        delivery = self._deliver(self._detection_result(det.job), original)
+                        rate = self._rate(delivery, factor)
+                        fits = [(self._fits(d, r, delivery, rate), (d, r, job)) for d, r, job in spec]
+                        chosen = next((c for f, c in fits if f == "same"), None)
+                        if chosen is not None:
+                            verdict = "tuttu"
+                            break
+                        minor = next((c for f, c in fits if f == "minor"), None)
+                        for _, (_, _, job) in fits:
+                            if minor is None or job is not minor[2]:
+                                _discard(job)
+                        correct = (delivery, rate, synth(delivery, rate))
+                        verdict = "tutmadı, doğru ses"
+                        continue
+                    if turn is not None and turn.late(now):
+                        ready = next((c for c in spec if _has_audio(c[2])), None)
+                        if ready is not None:
+                            chosen, verdict = ready, "tanıma gecikti, tahmin"
+                            break
+                    _wait_any([det.job] + [job for _, _, job in spec], 0.01)
+                    continue
+                if correct[2].done():
+                    chosen = correct
+                    break
+                if minor is not None and turn is not None and turn.late(now) and _has_audio(minor[2]):
+                    chosen, verdict = minor, "tonlama farklı, tahmin (beklenmedi)"
+                    break
+                _wait_any([correct[2], minor[2] if minor else None], 0.01)
+        except BaseException:
+            for _, _, job in spec + ([correct] if correct else []):
+                _discard(job)
+            raise
+        for _, _, job in spec + ([correct] if correct else []):
+            if job is not chosen[2]:
+                _discard(job)
+        d, r, job = chosen
+        try:
+            audio, ext, source = job.result(timeout=15.0)
+        except Exception:
+            audio, ext, source = None, "", ""
+        synth_s = time.monotonic() - started[job]
+        detect_s = (t_known if t_known is not None else time.monotonic()) - t0
+        return audio, ext, source, d, r, detect_s, synth_s, verdict
 
     def _speak_line(self, text: str, onset: float, generation: int, forced: Delivery | None, original: str,
-                    key, queued_at: float, prepared=None) -> None:
+                    key, queued_at: float, prepared=None, turn: _Turn | None = None) -> None:
         if generation != self._generation:
             if prepared is not None:
                 _discard(prepared)
+            if turn is not None:
+                turn.mark()
             return  # duraklatıldı / kapatıldı
         pending = self._jobs.qsize()
         if prepared is None:  # sıraya say() dışında girdi (örnek ses, testler): şimdi hazırla
@@ -366,9 +542,12 @@ class Speaker(threading.Thread):
             prepared_now = None
         # Önceki satır bitene kadar bekle (bu satırın sesi o çalarken hazırlandı): satırlar kesilmez.
         t_wait = time.monotonic()
-        while generation == self._generation and (time.monotonic() < self._file_until or self.playing()):
-            time.sleep(0.01)
+        while generation == self._generation and (time.monotonic() < self._file_until
+                                                  or self._previous_unfinished()):
+            time.sleep(0.005)
         waited = time.monotonic() - t_wait
+        if turn is not None:
+            turn.mark()  # çalma sırası geldi: hazırlık en çok LATE_S daha doğru sesi bekler
         self._learn_speed()
         pending = self._jobs.qsize()
         max_lag = self.cfg.dub_max_lag_ms / 1000
@@ -388,7 +567,7 @@ class Speaker(threading.Thread):
             except Exception as exc:
                 self._log(f"Dublaj sesi hazırlanamadı: {exc}")
                 return
-        audio, ext, source, delivery, rate, detect_s, synth_s = prepared_now
+        audio, ext, source, delivery, rate, detect_s, synth_s, guess = prepared_now
         if generation != self._generation:
             if isinstance(audio, _EdgeStream):
                 audio.close()
@@ -411,7 +590,8 @@ class Speaker(threading.Thread):
             self._log(f"dublaj: altyazıdan {1000 * self.lag_s:.0f} ms sonra başladı · tanıma "
                       f"{1000 * detect_s:.0f} ms · ses {1000 * synth_s:.0f} ms ({self.last_engine})"
                       f" · önceki satırı bekleme {1000 * waited:.0f} ms · sıradaki {pending}"
-                      f" · hız x{rate / max(0.1, self.cfg.tts_rate):.2f}")
+                      f" · hız x{rate / max(0.1, self.cfg.tts_rate):.2f}"
+                      + (f" · tahmini ses: {guess}" if guess else ""))
 
     def _learn_speed(self) -> None:
         """Biten satırın gerçek süresiyle harf/sn tahminini güncelle (hız planı doğru olsun)."""
@@ -419,11 +599,11 @@ class Speaker(threading.Thread):
         if last is None:
             return
         handle, chars, rate = last
-        if self.debug and handle.started_at and handle.finished_at:
-            self._log(f"dublaj: önceki satır {1000 * (handle.finished_at - handle.started_at):.0f} ms çaldı "
+        if self.debug and handle.started_at and handle.drained_at:
+            self._log(f"dublaj: önceki satır {1000 * (handle.drained_at - handle.started_at):.0f} ms çaldı "
                       f"(ses {1000 * handle.duration_s:.0f} ms, kırpılan sessizlik {1000 * handle.trimmed_s:.0f} ms, "
                       f"{chars / max(0.1, handle.duration_s * max(0.5, rate)):.1f} harf/sn)")
-        if handle.done and handle.error is None and handle.duration_s > 0.5 and chars >= 8:
+        if handle.drained and handle.error is None and handle.duration_s > 0.5 and chars >= 8:
             cps = chars / (handle.duration_s * max(0.5, rate))
             if 6 < cps < 30:
                 self._cps = 0.7 * self._cps + 0.3 * cps
@@ -479,28 +659,99 @@ class Speaker(threading.Thread):
 
     def _delivery(self, key, onset: float, original: str) -> Delivery:
         """Karakter (önceden başlatılmış tanımadan) + bu satırın son metnine göre duygu."""
-        job = self._prepared.pop(key, None)
+        det = self._prepared.pop(key, None)
+        if det is None and self._detection_active():
+            det = self._start_detection(onset)
+        result = self._detection_result(det.job, timeout=1.5) if det is not None else (None, None, 0.0)
+        return self._deliver(result, original)
+
+    @staticmethod
+    def _detection_result(job, timeout: float = 0.0):
         try:
-            ch, level, f0 = job.result(timeout=1.5) if job is not None else self._detect(onset)
+            return job.result(timeout=timeout)
         except Exception:
-            ch, level, f0 = None, None, 0.0
+            return None, None, 0.0
+
+    def _deliver(self, result, original: str) -> Delivery:
+        """Tanıma sonucuna göre okuma (ve menüdeki "son konuşan" bilgisi)."""
+        ch, level, f0 = result
+        delivery, mood = self._compose(ch, level, original)
+        if ch is None:
+            self.last_character = f"tanınamadı (konuşma sesi yok/kısa) · {mood.describe()}"
+        else:
+            self.last_character = (f"{ch.label} ({'kadın' if ch.gender == 'kadin' else 'erkek'}, {f0:.0f} Hz) · "
+                                   f"{mood.describe()}")
+        return delivery
+
+    @staticmethod
+    def _compose(ch, level, original: str):
+        """Karakter + duygu -> okuma ayarı (yan etkisiz; tahminler için de)."""
         if ch is None:
             mood = emo.classify(original, None)
             rate, pitch, volume = mood.prosody()
-            self.last_character = f"tanınamadı (konuşma sesi yok/kısa) · {mood.describe()}"
-            return Delivery("erkek", 0, pitch, rate, volume, "", mood.label, mood.intensity)
+            return Delivery("erkek", 0, pitch, rate, volume, "", mood.label, mood.intensity), mood
         mood = emo.classify(original, level)
         rate, pitch, volume = mood.prosody(ch.expressive)
-        self.last_character = (f"{ch.label} ({'kadın' if ch.gender == 'kadin' else 'erkek'}, {f0:.0f} Hz) · "
-                               f"{mood.describe()}")
         return Delivery(ch.gender, ch.voice, ch.pitch_pct + pitch, ch.rate_pct + rate, volume, "",
-                        mood.label, min(1.0, mood.intensity * ch.expressive))
+                        mood.label, min(1.0, mood.intensity * ch.expressive), ch.id), mood
 
-    def _detect(self, onset: float):
+    def _guesses(self, det: _Detection, original: str) -> list[Delivery]:
+        """Tanıma bitmeden olası okumalar: bu satırın ilk ses tahmini, sonra son konuşanlar (diyalogda
+        sıra genelde son ikisi arasında döner). Hiç bilgi yoksa tanınamayan satırın okuması."""
+        now = time.monotonic()
+        candidates = []
+        if det.estimate is not None:
+            candidates.append(det.estimate)
+        for at, ch in reversed(list(self._recent)):
+            if now - at <= CONVERSATION_S:
+                candidates.append((ch, None))
+        out: list[Delivery] = []
+        seen_speakers, seen_params = set(), set()
+        for ch, level in candidates or [(None, None)]:
+            speaker = ch.id if ch is not None else None
+            if speaker in seen_speakers:
+                continue
+            seen_speakers.add(speaker)
+            d, _ = self._compose(ch, level, original)
+            params = (self._edge_voice(d), round(d.pitch_pct), round(d.rate_pct), round(d.volume_pct))
+            if params in seen_params:
+                continue
+            seen_params.add(params)
+            out.append(d)
+            if len(out) >= SPECULATE_MAX:
+                break
+        return out
+
+    def _fits(self, guess: Delivery, guess_rate: float, right: Delivery, right_rate: float) -> str:
+        """Tahmin doğru okumaya uyuyor mu: "same" (aynı Edge isteği sayılır: aynı ses, perde farkı
+        <= 2,5 %, hız <= 3 %, ses düzeyi <= 10 %; kulakla ayırt edilmez), "minor" (aynı karakter ve ses,
+        yalnızca duygu tonlaması farklı), "other" (başka karakter/ses: asla çalınmaz)."""
+        if self._edge_voice(guess) != self._edge_voice(right):
+            return "other"
+        if (abs(guess.pitch_pct - right.pitch_pct) <= 2.5 and abs(guess_rate - right_rate) <= 0.03
+                and abs(guess.volume_pct - right.volume_pct) <= 10):
+            return "same"
+        return "minor" if guess.speaker == right.speaker else "other"
+
+    def _detection_active(self) -> bool:
+        return bool(self.cfg.dub_detect_speaker and self.recorder is not None and self.book is not None
+                    and self.recorder.error is None)
+
+    def _start_detection(self, onset: float) -> _Detection:
+        det = _Detection()
+        det.job = self._detector.submit(self._detect, onset, det)
+        return det
+
+    def _remember_speaker(self, job) -> None:
+        """Tanıma bitti: konuşanı (tanınamadıysa None) sonraki satırların tahmini için sakla."""
+        ch, _, _ = self._detection_result(job)
+        self._recent.append((time.monotonic(), ch))
+
+    def _detect(self, onset: float, det: _Detection | None = None):
         """Konuşanı oyun sesinden bul: (karakter, uyarılmışlık, perde) ya da (None, None, 0).
-        Hafızadaki karakter genelde ilk EARLY_S saniyede; emin olunamazsa dub_analysis_ms dinlenir."""
-        if not (self.cfg.dub_detect_speaker and self.recorder is not None and self.book is not None
-                and self.recorder.error is None):
+        Hafızadaki karakter genelde ilk EARLY_S saniyede; emin olunamazsa dub_analysis_ms dinlenir.
+        Her ara ölçümde `det.estimate` güncellenir (tahmini ses için)."""
+        if not self._detection_active():
             return None, None, 0.0
         early, full = onset + EARLY_S, onset + self.cfg.dub_analysis_ms / 1000
         feats = None
@@ -512,17 +763,28 @@ class Speaker(threading.Thread):
                     best, dist = self.book.best(feats)
                     if (best is not None and dist <= self.book.MATCH * EARLY_MATCH) or now >= full:
                         break
+                    if det is not None:
+                        det.estimate = (self.book.predict(feats), self._arousal(feats, best, dist))
             if now >= full:
                 break
             time.sleep(0.03)
         if feats is None:
             return None, None, 0.0
         known, dist = self.book.best(feats)
-        level = (emo.arousal(feats.loud_db, feats.f0, known.loud_db, known.f0)
-                 if known is not None and dist <= self.book.MATCH else None)
-        return self.book.identify(feats), level, feats.f0
+        return self.book.identify(feats), self._arousal(feats, known, dist), feats.f0
+
+    def _arousal(self, feats, known, dist: float) -> float | None:
+        return (emo.arousal(feats.loud_db, feats.f0, known.loud_db, known.f0)
+                if known is not None and dist <= self.book.MATCH else None)
 
     # --- Edge (çevrimiçi) ----------------------------------------------------------------------
+
+    def _edge_pool(self, d: Delivery) -> list[str]:
+        return (EDGE_VOICES_WIDE if self.cfg.dub_voice_pool == "genis" else EDGE_VOICES_TR)[d.gender]
+
+    def _edge_voice(self, d: Delivery) -> str:
+        pool = self._edge_pool(d)
+        return pool[d.voice % len(pool)]
 
     def _edge_open(self, text: str, d: Delivery, rate: float) -> _EdgeStream | None:
         """Edge sesini akış olarak başlatır; ilk ses parçası gelince döner (gerisi inerken çalınır).
@@ -534,8 +796,8 @@ class Speaker(threading.Thread):
             self._log("edge-tts kurulu değil; Windows sesi kullanılıyor (guncelle.bat).")
             return None
         pitch_hz = _BASE_F0[d.gender] * d.pitch_pct / 100
-        pool = (EDGE_VOICES_WIDE if self.cfg.dub_voice_pool == "genis" else EDGE_VOICES_TR)[d.gender]
-        voice = pool[d.voice % len(pool)]
+        pool = self._edge_pool(d)
+        voice = self._edge_voice(d)
         volume = max(-90.0, min(50.0, (self.cfg.tts_volume - 1) * 100 + d.volume_pct))
         options = {"rate": _pct((rate - 1) * 100), "pitch": _hz(pitch_hz), "volume": _pct(volume)}
         error: Exception | None = None

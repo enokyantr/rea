@@ -65,3 +65,20 @@ def test_manual_gender_is_kept(tmp_path):
     book.set_gender(ch.id, "kadin")
     again = book.identify(v.features(_speak(*MAN_A, seed=2)))
     assert again.id == ch.id and again.gender == "kadin"  # kullanıcının seçimi korunur
+
+
+def test_predict_matches_identify_without_changing_memory(tmp_path):
+    book = v.CharacterBook(tmp_path / "karakterler.json")
+    man = v.features(_speak(*MAN_A, seed=1))
+    woman = v.features(_speak(*WOMAN, seed=2))
+    guess = book.predict(man)  # hafıza boş: yeni karakter tahmini
+    assert book.snapshot() == [] and (guess.id, guess.gender) == (1, "erkek")
+    first = book.identify(man)
+    assert (first.id, first.gender, first.voice, first.pitch_pct) == (guess.id, guess.gender, guess.voice,
+                                                                      guess.pitch_pct)
+    before = book.snapshot()
+    again = book.predict(v.features(_speak(*MAN_A, seed=3)))
+    assert again.id == first.id and book.snapshot() == before  # öğrenmedi, satır sayısı artmadı
+    new_woman = book.predict(woman)
+    assert new_woman.gender == "kadin" and new_woman.id == 2 and len(book.snapshot()) == 1
+    assert book.identify(woman).id == new_woman.id
