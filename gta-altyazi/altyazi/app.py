@@ -30,6 +30,8 @@ BOX_TOLERANCE = 0.03
 # Önceden çeviri: doğrulama okuması beklenmeden, OCR bu kadar eminse ve tüm kelimeler sözlükteyse
 # son çeviri (LLM) ilk okumada başlatılır. Doğrulanan satır farklı çıkarsa sonuç kullanılmaz.
 PREFETCH_CONFIDENCE = 0.85
+# guvenli_baslat.bat (--guvenli): yalnızca bu oturum için deneysel hızlandırmalar kapalı.
+SAFE_MODE = False
 
 
 def log(msg: str) -> None:
@@ -375,7 +377,8 @@ class Pipeline(threading.Thread):
                       and (stab.shown is None or not textproc.same_line(text, stab.shown, cfg.similarity))):
                     # Yeni satır doğrulanmayı bekliyor: çeviriyi şimdiden başlat. Taslak yalnızca OCR
                     # ekran kartındaysa (işlemcide OCR, taslak sürerken bekletiliyor).
-                    self._prefetch(text, tick, draft=ocr_on_gpu)
+                    if cfg.speculative_translation and not SAFE_MODE:
+                        self._prefetch(text, tick, draft=ocr_on_gpu)
 
                 # Doğrulanmayı bekleyen satır varsa hemen tekrar oku; yoksa normal kare aralığı.
                 interval = self.load.capture_interval_s

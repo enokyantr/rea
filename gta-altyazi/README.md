@@ -189,6 +189,16 @@ yalnızca küfür/argo satırlarında kullanılır.
   ayrı bir pencerede). Menüyü yayından önce Ctrl+Alt+M ile gizleyin ya da ikinci ekrana taşıyın.
 - Sesli paylaşımda dublaj da arkadaşlarınıza gider.
 
+### Oyun günü: sorun çıkarsa
+
+- **`guvenli_baslat.bat`**: yalnızca altyazı açılır; dublaj, sokak konuşmaları ve önceden çeviri
+  kapalı. Bir özellik sorun çıkarırsa oyuna bununla devam edin, menüden özellikleri tek tek açıp
+  hangisinin sorun çıkardığını görebilirsiniz (dublaj/sokak menüden açılınca kaydedilir).
+- Menü → **Kayıt → Tümünü kopyala**: sorun anındaki kaydı gönderin.
+- GTA VI'nın karakter ve yer adları (Jason, Lucia, Vice City, Leonida, Grassrivers, Port Gellhorn…)
+  programda yerleşik: OCR bunları "düzeltmez", çeviri çevirmeden bırakır. Yeni isimleri
+  `sozluk.txt`'ye `İsim = İsim` diye ekleyin.
+
 ### chiaki-ng ile
 
 Program chiaki-ng'nin akış penceresini kendisi bulur (başlığı "chiaki" ile başlayan pencere; aynı

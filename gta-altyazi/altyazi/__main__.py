@@ -31,6 +31,8 @@ def main() -> int:
     parser.add_argument("--config", type=Path, default=APP_DIR / "config.json")
     parser.add_argument("--dry-run", action="store_true", help="DeepL kullanmadan dene ([TR] metin)")
     parser.add_argument("--debug", action="store_true", help="OCR ve çeviri sürelerini yazdır")
+    parser.add_argument("--guvenli", action="store_true",
+                        help="Güvenli mod: yalnızca altyazı (dublaj, sokak, önceden çeviri kapalı)")
     parser.add_argument("--ocr-test", type=Path, metavar="RESIM", help="Ekran görüntüsünde OCR+çeviri dene")
     parser.add_argument("--ocr-compare", type=Path, nargs="?", const=APP_DIR / "dump", metavar="KLASOR",
                         help="dump/ kırpıntılarında tüm ön işleme seçeneklerini karşılaştır")
@@ -62,13 +64,24 @@ def main() -> int:
     instance = None
     gui = not (args.self_test or args.mt_bench or args.llm_bench or args.ocr_test or args.ocr_compare)
     if gui:
-        instance = win32.claim_single_instance()
+        try:
+            instance = win32.claim_single_instance()
+        except Exception as exc:  # tek kopya denetimi çalışmazsa program yine açılsın
+            print(f"Tek kopya denetimi yapılamadı ({exc}); devam ediliyor.")
+            instance = ()
         if instance is None:
             print("GTA Altyazı zaten açık: açık olanın menüsü öne getirildi. (İki kopya ekran kartını ve "
                   "kısayolları paylaşır, gecikme artar.) Menü görünmezse Görev Yöneticisi'nde \"python\" "
                   "işlemini sonlandırıp yeniden başlatın.")
             return 0
     cfg = config_mod.load(args.config)
+    if args.guvenli:
+        # Güvenli mod (guvenli_baslat.bat): yalnızca altyazı; dublaj, sokak dinleme ve önceden çeviri
+        # kapalı. Sorun çıkan bir özellik oyunu bozmasın; menüden tek tek yeniden açılabilir.
+        cfg.tts_enabled = False
+        cfg.street_enabled = False
+        app.SAFE_MODE = True  # ayara yazılmaz: normal başlatmada önceden çeviri yine açık
+        print("Güvenli mod: yalnızca altyazı (dublaj, sokak konuşmaları ve önceden çeviri kapalı).")
     if args.ollama_model:
         cfg.ollama_model = args.ollama_model
     if args.no_context:

@@ -462,3 +462,21 @@ def test_config_keeps_hotkeys_and_region_switches(tmp_path):
     loaded = config_mod.load(path)
     assert loaded.hotkeys["pause"] == "ctrl+alt+p" and loaded.hotkeys["menu"] == "ctrl+alt+m"
     assert loaded.extra("gorev").enabled is False and loaded.region_enabled is False
+
+
+def test_game_names_are_not_spell_corrected_and_count_as_known():
+    from altyazi import textproc
+
+    assert textproc._spell_fix("Lucia, get in the car.") == "Lucia, get in the car."
+    assert textproc._spell_fix("Grassrivers is a swamp.") == "Grassrivers is a swamp."
+    assert textproc.all_words_known("Jason, meet me in Port Gellhorn.")
+
+
+def test_game_names_are_kept_untranslated_and_user_entries_win(tmp_path):
+    from altyazi import glossary
+
+    path = tmp_path / "sozluk.txt"
+    path.write_text("Roxy = Roksi\n", encoding="utf-8")
+    entries = glossary.load(path)
+    assert entries["Leonida Keys"] == "Leonida Keys" and entries["Lucia Caminos"] == "Lucia Caminos"
+    assert entries["Roxy"] == "Roksi"

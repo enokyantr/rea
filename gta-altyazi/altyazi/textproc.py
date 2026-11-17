@@ -178,6 +178,11 @@ _SLANG_WORDS = {"nigga", "niggas", "niggaz", "yee", "loc", "locs", "wassup", "y'
                 "tryna", "homie", "homies", "cuz", "dawg", "bruh", "imma", "lemme", "gimme"}
 
 
+_GAME_WORDS = {"jason", "duval", "lucia", "caminos", "boobie", "ike", "brian", "heder", "lori", "cal",
+               "hampton", "dre'quan", "drequan", "priest", "raul", "bautista", "dimez", "bae", "luxe", "roxy",
+               "vice", "leonida", "leonida's", "grassrivers", "gellhorn", "ambrosia", "kalaga"}
+
+
 @lru_cache(maxsize=1)
 def _word_freq() -> dict[str, int]:
     """Kelime -> sıklık. pyspellchecker kurulu değilse boş (yalnızca kelime benzerliği kullanılır)."""
@@ -192,6 +197,9 @@ def _word_freq() -> dict[str, int]:
         return {}
     words = {w: n for w, n in freq.items() if n >= _MIN_FREQ}
     words.update(dict.fromkeys(_SLANG_WORDS, 1_000_000))
+    # Oyundaki isimler: satır başında "Lucia" -> "Lucid" gibi "düzeltilmesin", hızlı kabulü
+    # engellemesin; yaygınlığı yazım düzeltmesine aday olacak kadar (OCR "Lucla" -> "Lucia").
+    words.update(dict.fromkeys(_GAME_WORDS, 5_000))
     return words
 
 

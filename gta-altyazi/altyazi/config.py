@@ -146,6 +146,8 @@ class Config:
     # de okunur, en iyisi seçilir. Benzetim (120 satır, işlemci): 0.90 -> 0.95 tam doğru satır 1080p'de
     # 89 -> 100, 720p'de 55 -> 68; okuma başına +60-80 ms. Menüdeki "Akış kalitesi: Düşük" 0.95 yapar.
     ocr_retry_confidence: float = 0.90
+    # Önceden çeviri: OCR ilk okumadan eminse son çeviri doğrulama beklenmeden başlar (~150 ms kazanç).
+    speculative_translation: bool = True
     # Performans: "auto" (bilgisayar zorlanınca kendini kısar), "yayin" (Discord/OBS yayını: hep hafif;
     # taslak çeviri 2 çekirdek, sokak dinlemede hafif model), "normal" (hiç kısmaz).
     performance_mode: str = "auto"

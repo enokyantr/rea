@@ -26,6 +26,15 @@ Leonida Keys = Leonida Keys
 """
 
 
+# GTA VI'nın bilinen karakter ve yer adları (fragmanlar ve Rockstar'ın sitesi): her zaman çevrilmeden
+# kalır. Kullanıcının sozluk.txt'sindeki aynı terim bunların önüne geçer.
+GAME_NAMES = [
+    "Jason", "Jason Duval", "Lucia", "Lucia Caminos", "Boobie Ike", "Brian Heder", "Lori Heder",
+    "Cal Hampton", "Dre'Quan", "Dre'Quan Priest", "Raul Bautista", "Real Dimez", "Bae-Luxe", "Roxy",
+    "Vice City", "Leonida", "Leonida Keys", "Grassrivers", "Port Gellhorn", "Ambrosia", "Mount Kalaga",
+]
+
+
 class GlossaryError(ValueError):
     pass
 
@@ -51,7 +60,7 @@ def parse(text: str) -> dict[str, str]:
 def load(path: Path) -> dict[str, str]:
     if not path.exists():
         path.write_text(DEFAULT_TEXT, encoding="utf-8")
-    return parse(path.read_text(encoding="utf-8-sig"))
+    return {**{name: name for name in GAME_NAMES}, **parse(path.read_text(encoding="utf-8-sig"))}
 
 
 def fingerprint(entries: dict[str, str]) -> str:
