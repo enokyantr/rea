@@ -350,6 +350,15 @@ def all_words_known(text: str) -> bool:
     return True
 
 
+def known_fraction(text: str) -> float:
+    """Harflerin ne kadarı sözlükteki gerçek İngilizce kelimelerde (isimler sayılmaz). Sözlük yoksa 1."""
+    if not _word_freq():
+        return 1.0
+    tokens = _TOKEN.findall(text)
+    total = sum(len(t) for t in tokens)
+    return _known_words(tokens) / total if total else 0.0
+
+
 def _known_words(tokens: list[str]) -> int:
     freq = _word_freq()
     return sum(len(t) for t in tokens if t.lower().replace("’", "'") in freq)

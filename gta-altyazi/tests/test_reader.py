@@ -156,3 +156,55 @@ def test_raw_engine_reports_confidence_and_text_center_in_input_coordinates():
     assert result.confidence == 0.97
     left = 50 - 8  # bright_bbox kenar payı
     assert result.center_x == left + 60
+
+
+class _EmptyEngine:
+    """Hiç yazı bulamayan motor (yazısız parlak sahne)."""
+
+    def __init__(self):
+        self.calls = 0
+        self.last_confidence, self.last_span, self.last_box = 0.0, None, None
+
+    def recognize(self, image):
+        self.calls += 1
+        return []
+
+
+def _bright():
+    import numpy as np
+    gray = np.zeros((40, 200), np.uint8)
+    gray[10:30, 20:180] = 250
+    return gray
+
+
+def test_empty_read_retries_only_when_allowed():
+    from altyazi import reader
+    from altyazi.config import Config
+
+    eng = _EmptyEngine()
+    reader.read_text(_bright(), eng.recognize, Config(), True, eng)
+    assert eng.calls == 3  # ham + keskin + medyan
+    eng.calls = 0
+    reader.read_text(_bright(), eng.recognize, Config(), True, eng, retry_empty=False)
+    assert eng.calls == 1
+
+
+class _GarbageEngine:
+    def __init__(self, text, conf):
+        self.text, self.conf = text, conf
+        self.last_span, self.last_box = (10.0, 90.0), (10, 2, 90, 20)
+
+    def recognize(self, image):
+        self.last_confidence = self.conf
+        return [self.text]
+
+
+def test_low_confidence_non_words_are_dropped_but_real_lines_kept():
+    from altyazi import reader
+    from altyazi.config import Config
+
+    cfg = Config(ocr_retry_confidence=0.0)  # ek okuma yok: yalnızca süzgeç sınanır
+    eng = _GarbageEngine("Selitiyphamaykaot.", 0.59)
+    assert reader.read_text(_bright(), eng.recognize, cfg, True, eng).text == ""
+    eng = _GarbageEngine("Geralt of Rivia. Witcher with tenure.", 0.62)
+    assert reader.read_text(_bright(), eng.recognize, cfg, True, eng).text.startswith("Geralt")

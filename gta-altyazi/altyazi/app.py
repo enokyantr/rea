@@ -90,6 +90,7 @@ class Pipeline(threading.Thread):
         self._retry_not_before = 0.0
         self._tag = "" if name == MAIN else f"[{EXTRA_REGION_LABELS.get(name, name)}] "
         self._last_ignored = ""  # son yoksayılan okuma (aynısı her okumada tekrar loglanmasın)
+        self._empty_retry_until = 0.0  # bu ana kadar boş okumada süzgeçli ek okuma yapılmaz
         self.dump_dir: Path | None = None
         self._dumped = 0
         self._center_x: int | None = None
@@ -173,7 +174,12 @@ class Pipeline(threading.Thread):
             log(f"{self._tag}önceden çeviri: {text!r}")
 
     def _read_text(self, ocr, gray: np.ndarray) -> reader.ReadResult:
-        result = reader.read_text(gray, ocr.recognize, self.cfg, ocr.raw_input, ocr)
+        now = time.monotonic()
+        result = reader.read_text(gray, ocr.recognize, self.cfg, ocr.raw_input, ocr,
+                                  retry_empty=now >= self._empty_retry_until)
+        if not result.text and len(result.candidates) > 1:
+            # Yazısız parlak sahne: ek okumalar da boş çıktı; 1 sn boyunca boş karede tekrarlanmaz.
+            self._empty_retry_until = now + 1.0
         if result.ignored and result.ignored != self._last_ignored:
             log(f"{self._tag}yoksayıldı: {result.ignored!r}" + (f" → {result.text!r}" if result.text else ""))
         self._last_ignored = result.ignored
@@ -1134,8 +1140,10 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
         if speaker is not None and (name == MAIN or (name == STREET and cfg.street_dub)):
             speaker.say(translated, onset=first_seen, original=original, key=(name, seq))
 
-    def release_draft(name: str, seq: int) -> bool:
-        """Bekletilen taslağı kesin metin olarak göster (son çeviri gelmedi). Bekleyen yoksa False."""
+    def release_draft(name: str, seq: int, final: bool = True) -> bool:
+        """Bekletilen taslağı göster (son çeviri zamanında gelmedi). `final`: taslak bu satırın kesin
+        metni (dublaj bekletmesi, son çeviri başarısız); değilse son çeviri gelince yerine geçer.
+        Bekleyen yoksa False."""
         msg = held_draft.get(name)
         if msg is None or msg[2] != seq:
             return False
@@ -1143,7 +1151,7 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
         if seq != pipelines[name].seq or final_seq[name] == seq or state["paused"] or state["picking"]:
             return True
         _, _, _, _, translated, original, first_seen, center_x = msg
-        display(name, seq, FINAL, translated, original, first_seen, center_x)
+        display(name, seq, FINAL if final else DRAFT, translated, original, first_seen, center_x)
         return True
 
     def welcome_off() -> None:
@@ -1186,6 +1194,14 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
                         held_draft[name] = msg
                         root.after(int(DUB_DRAFT_HOLD_S * 1000), lambda n=name, q=seq: release_draft(n, q))
                         continue
+                    if stage == DRAFT:
+                        # Son çeviri kısa sürede gelecekse taslağı hiç gösterme: okunan yazı yarım saniye
+                        # sonra değişmesin. En geç ilk okumadan draft_hold_ms sonra taslak görünür.
+                        wait = first_seen + cfg.draft_hold_ms / 1000 - time.monotonic()
+                        if wait > 0.02:
+                            held_draft[name] = msg
+                            root.after(int(wait * 1000), lambda n=name, q=seq: release_draft(n, q, final=False))
+                            continue
                     if stage == FINAL:
                         held_draft.pop(name, None)
                     display(name, seq, stage, translated, original, first_seen, center_x)

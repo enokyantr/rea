@@ -71,9 +71,11 @@ def upscale_factor(crop_height: int, cfg) -> float:
 
 
 def read_text(gray: np.ndarray, recognize: Callable[[np.ndarray], list[str]], cfg,
-              raw: bool = False, engine=None) -> ReadResult:
+              raw: bool = False, engine=None, retry_empty: bool = True) -> ReadResult:
     """`gray`: bölgenin gri tonu. `recognize`: görüntü -> satırlar. `raw`: motor (RapidOCR) doğal
-    görüntüyü olduğu gibi ister; ön işleme seçenekleri ve büyütme uygulanmaz."""
+    görüntüyü olduğu gibi ister; ön işleme seçenekleri ve büyütme uygulanmaz.
+    `retry_empty=False`: ham okuma hiç yazı bulamadıysa süzgeçli ek okumalar yapılmaz (çağıran,
+    yazısız ama parlak sahnede her karede üç OCR çalışmasın diye kısa süre kapatır)."""
     bbox = imageproc.bright_bbox(gray >= cfg.bright_threshold)
     left = top = 0
     if bbox is None:
@@ -99,7 +101,8 @@ def read_text(gray: np.ndarray, recognize: Callable[[np.ndarray], list[str]], cf
         # Uzun ve temiz okuma kazanır; kısmi okuma ("Go to") tam okumayı yenemez.
         if best_score is None or score > best_score:
             best_score, result.text, result.variant, best_engine_state = score, text, name, state
-        if raw and name == "ham" and state is not None and state[0] is not None and state[0] < getattr(cfg, "ocr_retry_confidence", LOW_CONFIDENCE):
+        if (raw and name == "ham" and state is not None and state[0] is not None
+                and state[0] < getattr(cfg, "ocr_retry_confidence", LOW_CONFIDENCE) and (text or retry_empty)):
             # Düşük kaliteli akış (chiaki-ng / zayıf bağlantı): motor emin değil. Bulanık yazıda
             # keskinleştirme, bloklu/kumlu yazıda medyan süzgeci okumayı belirgin düzeltiyor.
             options += [("keskin", lambda: imageproc.sharpen(gray)), ("medyan", lambda: imageproc.median3(gray))]
@@ -108,6 +111,11 @@ def read_text(gray: np.ndarray, recognize: Callable[[np.ndarray], list[str]], cf
                 and len(text) >= cfg.min_text_chars):
             break
     if not textproc.is_plausible(result.text, cfg.min_text_chars):
+        result.text = ""
+    # Süzgeçli görüntüden çıkan anlamsız okuma ("Selitiyphamaykaot."): motor emin değil ve
+    # kelimeler sözlükte yok -> yazı sayılmaz (çevrilip ekrana basılmasın).
+    if (raw and result.text and best_engine_state is not None and best_engine_state[0] is not None
+            and best_engine_state[0] < GARBAGE_CONFIDENCE and textproc.known_fraction(result.text) < 0.3):
         result.text = ""
     if raw and best_engine_state is not None:
         result.confidence, span, box = best_engine_state
@@ -127,6 +135,8 @@ def read_text(gray: np.ndarray, recognize: Callable[[np.ndarray], list[str]], cf
 # RapidOCR'ın en düşük kutu güveni bunun altındaysa görüntünün süzülmüş hâlleri de okunur
 # (varsayılan; config.ocr_retry_confidence ile değişir).
 LOW_CONFIDENCE = 0.90
+# Bu güvenin altındaki okuma, kelimeleri sözlükte de yoksa atılır.
+GARBAGE_CONFIDENCE = 0.70
 
 
 def _engine_state(engine):
