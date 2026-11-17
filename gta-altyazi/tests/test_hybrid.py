@@ -170,3 +170,14 @@ def test_repeated_line_uses_draft_cache_instantly():
     h.submit("Get in the car.", None, lambda: True, c2.on_result, c2.on_error)
     assert c2.results == [(FINAL, "yerel:Get in the car.")]  # eşzamanlı, model çağrılmadı
     assert local.calls == 1
+
+
+def test_backends_that_ignore_source_accept_it():
+    deepl = Gate("deepl")
+    deepl.release.set()
+    h, final = make(None, deepl)
+    c = Collector()
+    h.submit("Hi", None, lambda: True, c.on_result, c.on_error, source="asr")
+    assert c.done.wait(2) and c.results == [(FINAL, "deepl:Hi")]
+    # Kaynak DeepL'in çevirisini değiştirmez: OCR satırı aynı önbellek kaydını kullanır
+    assert final.cached("Hi") == "deepl:Hi" and deepl.calls == 1

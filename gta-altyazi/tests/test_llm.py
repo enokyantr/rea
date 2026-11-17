@@ -256,3 +256,103 @@ def test_num_gpu_is_sent_only_when_set(fake):
     assert fake.chats[-1]["options"]["num_gpu"] == 12
     OllamaBackend("aya-expanse:8b", fake.url, num_gpu=0).translate("Hi", None)  # 0 = tamamen işlemci
     assert fake.chats[-1]["options"]["num_gpu"] == 0
+
+
+def test_source_noise_rule_is_fixed_and_asr_marker_only_in_user_message(fake):
+    backend = OllamaBackend("aya-expanse:8b", fake.url, use_context=False)
+    backend.translate("Yo, wassup rnan?", None)
+    backend.translate("Yo, wassup man?", None, source="asr")
+    ocr, asr = (c["messages"] for c in fake.chats[-2:])
+    # Sistem istemi ve örnekler her kaynakta birebir aynı (Ollama önek önbelleği)
+    assert ocr[:-1] == asr[:-1]
+    assert "OCR" in ocr[0]["content"] and "speech recognition" in ocr[0]["content"]
+    assert "never \"correct\" slang, profanity" in ocr[0]["content"]
+    assert "Never soften" in ocr[0]["content"]  # sansürsüz kural korunur
+    assert ocr[-1]["content"] == "<line>Yo, wassup rnan?</line>"
+    assert asr[-1]["content"] == '<line source="asr">Yo, wassup man?</line>'
+    assert not any('source="asr"' in m["content"] for m in asr[1:-1])  # yalnızca sistem kuralında anlatılır
+    with pytest.raises(ValueError):
+        backend.translate("Hi", None, source="mic")
+
+
+def test_cache_keys_differ_for_asr_but_not_for_backends_that_ignore_source(fake):
+    from altyazi.translate import DryRunBackend
+
+    llm = CachedTranslator(OllamaBackend("aya-expanse:8b", fake.url), None)
+    assert llm.key("Hello") == llm.key("Hello", source="ocr")
+    assert llm.key("Hello", source="asr") != llm.key("Hello")
+    llm.translate("Hello")
+    assert llm.cached("Hello") is not None and llm.cached("Hello", source="asr") is None
+    llm.translate("Hello", source="asr")
+    assert len(fake.chats) == 2 and fake.chats[-1]["messages"][-1]["content"].startswith('<line source="asr">')
+    # DeepL/deneme arka ucu kaynağı kullanmaz: aynı anahtar, parametre geçirilmez
+    dry = CachedTranslator(DryRunBackend(), None)
+    assert dry.key("Hello", source="asr") == dry.key("Hello")
+    assert dry.translate("Hello", source="asr") == "[TR] Hello"
+
+
+def test_think_false_is_sent(fake):
+    OllamaBackend("aya-expanse:8b", fake.url).translate("Hi", None)
+    assert fake.chats[-1]["think"] is False
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_think_rejection_falls_back_once_and_is_remembered(fake, stream):
+    import threading as th
+
+    rejected = []
+    # Sahte sunucu: "think" içeren isteği HTTP 400 ile reddeder (eski Ollama/desteklemeyen model)
+    handler = fake.server.RequestHandlerClass
+    do_post = handler.do_POST
+
+    def do_POST(self):
+        if self.path == "/api/chat":
+            body = json.loads(self.rfile.read(int(self.headers["content-length"])))
+            if "think" in body:
+                rejected.append(body)
+                return self._json({"error": 'invalid option "think"'}, 400)
+            fake.chats.append(body)
+            return self._json({"message": {"role": "assistant", "content": fake.reply}, "done": True})
+        return do_post(self)
+
+    handler.do_POST = do_POST
+    try:
+        backend = OllamaBackend("aya-expanse:8b", fake.url)
+        cancel = th.Event() if stream else None
+        assert backend.translate("Hi", None, cancel=cancel) == fake.reply
+        assert backend.translate("Hello", None, cancel=cancel) == fake.reply
+        assert len(rejected) == 1  # yalnızca ilk istek reddedildi; sonra hiç gönderilmedi
+        assert all("think" not in c for c in fake.chats[-2:])
+    finally:
+        handler.do_POST = do_post
+
+
+def test_other_400_errors_are_not_retried(fake):
+    handler = fake.server.RequestHandlerClass
+    do_post = handler.do_POST
+    calls = []
+
+    def do_POST(self):
+        self.rfile.read(int(self.headers["content-length"]))
+        calls.append(1)
+        return self._json({"error": "invalid model name"}, 400)
+
+    handler.do_POST = do_POST
+    try:
+        backend = OllamaBackend("aya-expanse:8b", fake.url)
+        with pytest.raises(OllamaUnavailable, match="invalid model name"):
+            backend.translate("Hi", None)
+        assert len(calls) == 1 and backend._send_think
+    finally:
+        handler.do_POST = do_post
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("<think>\nThe user wants Turkish.\n</think>\n\nKapa lan çeneni!", "Kapa lan çeneni!"),
+    ("<think></think>Siktir git.", "Siktir git."),
+    ("Okay, translating...</think>Hassiktir kanka.", "Hassiktir kanka."),  # şablon <think>'i istemde açtı
+    ("<think>The line is vulgar so I", ""),  # kesilmiş akıl yürütme: çeviri yok
+    ('<line source="asr">Naber kanka?</line>', "Naber kanka?"),
+])
+def test_think_blocks_and_tag_attributes_are_cleaned(raw, expected):
+    assert clean_output(raw) == expected

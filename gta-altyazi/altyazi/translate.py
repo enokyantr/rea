@@ -176,11 +176,19 @@ class CachedTranslator:
                     except (ValueError, KeyError, TypeError):
                         continue  # bozuk satırı atla, kalan önbellek kullanılabilir
 
-    def key(self, text: str, namespace: str | None = None) -> str:
+    def _source_tag(self, source: str) -> str | None:
+        """Arka uç satır kaynağını istemde kullanıyorsa (`cache_source`, ör. yerel LLM) kaynağın
+        izi ("" = varsayılan, istem değişmez); kullanmıyorsa (DeepL, yerel MT) None. Kaynak arka
+        uca ve anahtara yalnızca iz boş değilse girer: varsayılan çağrı biçimi değişmez."""
+        tag = getattr(self._backend, "cache_source", None)
+        return tag(source) if tag is not None else None
+
+    def key(self, text: str, namespace: str | None = None, source: str = "ocr") -> str:
         """Anahtar, arka ucun o anki ayarlarını (sözlük, sansürsüz talimat) içerir; ayar değişince
         eski çeviriler kullanılmaz. Önceden çeviri (hybrid.prefetch) de aynı anahtarla eşleştirir.
         Arka uç `cache_terms` verirse (yerel LLM: satıra özel sözlük terimleri) onun özeti de eklenir:
-        yalnızca bu satıra uygulanan terimler değişince anahtar değişir."""
+        yalnızca bu satıra uygulanan terimler değişince anahtar değişir. Kaynak (`source`: "ocr" ya da
+        "asr") yalnızca istemi değiştiriyorsa anahtara girer."""
         if namespace is None:
             namespace = getattr(self._backend, "cache_namespace", lambda: "")()
         key = " ".join(text.split()).casefold()
@@ -188,29 +196,34 @@ class CachedTranslator:
         terms_fp = terms(text) if terms is not None else ""
         if terms_fp:
             key = f"t{terms_fp}\x1f{key}"
+        source_fp = self._source_tag(source)
+        if source_fp:
+            key = f"s{source_fp}\x1f{key}"
         return f"{namespace}\x1f{key}" if namespace else key
 
-    def cached(self, text: str) -> str | None:
+    def cached(self, text: str, source: str = "ocr") -> str | None:
         with self._lock:
-            return self._cache.get(self.key(text))
+            return self._cache.get(self.key(text, source=source))
 
     def translate_uncommitted(self, text: str, context: str | None = None,
-                              cancel: threading.Event | None = None) -> tuple[str, str]:
+                              cancel: threading.Event | None = None, source: str = "ocr") -> tuple[str, str]:
         """Çevirir ama önbelleğe yazmaz: (anahtar, çeviri). Önceden yapılan (spekülatif) çeviri
         yalnızca gerçekten kullanılırsa `commit` ile kaydedilir; yanlış okumalar önbelleği kirletmez.
         `cancel`: arka uç destekliyorsa (`cancellable`) kurulunca istek yarıda kesilir."""
-        key = self.key(text)
+        key = self.key(text, source=source)
         with self._lock:
             hit = self._cache.get(key)
         if hit is not None:
             return key, hit
+        kwargs = {}
         if cancel is not None and getattr(self._backend, "cancellable", False):
-            translated = self._backend.translate(text, context, cancel=cancel)
-        else:
-            translated = self._backend.translate(text, context)
+            kwargs["cancel"] = cancel
+        if self._source_tag(source):  # yalnızca istemi değiştiren kaynak geçirilir (varsayılan: OCR)
+            kwargs["source"] = source
+        translated = self._backend.translate(text, context, **kwargs)
         # Çeviri sırasında ayar geri çekilmiş olabilir (ör. talimat reddedildi): çevirinin
         # gerçekte hangi ayarla yapıldığını kaydet.
-        return self.key(text), translated
+        return self.key(text, source=source), translated
 
     def commit(self, key: str, translated: str) -> None:
         with self._lock:
@@ -221,8 +234,8 @@ class CachedTranslator:
                 with self._cache_path.open("a", encoding="utf-8") as fh:
                     fh.write(json.dumps({"src": key, "tr": translated}, ensure_ascii=False) + "\n")
 
-    def translate(self, text: str, context: str | None = None) -> str:
-        key, translated = self.translate_uncommitted(text, context)
+    def translate(self, text: str, context: str | None = None, source: str = "ocr") -> str:
+        key, translated = self.translate_uncommitted(text, context, source=source)
         self.commit(key, translated)
         return translated
 

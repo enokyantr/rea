@@ -444,3 +444,42 @@ def test_ollama_speculative_request_is_aborted_on_cancel():
         assert fake.sent < 100
     finally:
         fake.server.shutdown()
+
+
+class SourceLLM(FakeLLM):
+    """Kaynağı istemde kullanan arka uç (yerel LLM gibi): kaynağı kaydeder, anahtara iz bırakır."""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.sources = []
+
+    def cache_source(self, source):
+        return "" if source == "ocr" else source
+
+    def translate(self, text, context, cancel=None, source="ocr"):
+        self.sources.append(source)
+        return super().translate(text, context, cancel) + ("" if source == "ocr" else f"|{source}")
+
+
+def test_source_is_threaded_through_submit_and_prefetch_and_separates_the_cache():
+    llm = SourceLLM()
+    h, final = make(llm)
+    c = submit(h, "Yo, what up?")
+    assert c.done.wait(2) and c.results[-1] == (FINAL, "llm:Yo, what up?")
+    c = Collector()
+    h.submit("Yo, what up?", None, lambda: True, c.on_result, c.on_error, source="asr")
+    assert c.done.wait(2) and c.results[-1] == (FINAL, "llm:Yo, what up?|asr")
+    assert llm.sources == ["ocr", "asr"]  # aynı metin, farklı kaynak: önbellekten alınmadı
+    # OCR önceden çevirisi konuşma tanıma satırına verilmez (anahtar farklı)
+    assert h.prefetch("Where you at?", lambda: None)
+    c = Collector()
+    h.submit("Where you at?", None, lambda: True, c.on_result, c.on_error, source="asr")
+    assert c.done.wait(2) and c.results[-1] == (FINAL, "llm:Where you at?|asr")
+    assert final.cached("Where you at?", source="asr") == "llm:Where you at?|asr"
+    # Aynı kaynakla önceden çeviri sahiplenilir
+    assert h.prefetch("Move!", lambda: None, source="asr")
+    assert wait_until(lambda: llm.sources.count("asr") == 3)
+    c = Collector()
+    h.submit("Move!", None, lambda: True, c.on_result, c.on_error, source="asr")
+    assert c.done.wait(2) and c.results[-1] == (FINAL, "llm:Move!|asr")
+    assert llm.requests.count(("Move!", None, ())) == 1

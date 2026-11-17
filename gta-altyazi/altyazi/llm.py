@@ -26,6 +26,7 @@ alternatives or explanations.
 - Earlier turns are the previous lines of the same conversation with your translations. Keep names, \
 nicknames, forms of address (sen/siz), slang and the meaning consistent with them; resolve pronouns and \
 references from them. Translate only the new line.
+- Lines are read from the screen by OCR and may contain misread characters ("rn" read as "m", "I" as "l", "0" as "O", missing apostrophes or spaces). A <line source="asr"> was transcribed by speech recognition instead and may contain misheard words or missing punctuation. Translate the meaning the speaker most likely intended, using the context; never "correct" slang, profanity or deliberate misspellings into polite or standard words, and never mention the errors or add notes.
 {uncensored}{glossary}"""
 
 UNCENSORED = """\
@@ -85,14 +86,32 @@ EXAMPLES_GLOSSARY = [
 ]
 
 
-def _user_message(context: str | None, line: str, terms: dict[str, str] | None = None) -> str:
+# Satırın kaynağı: "ocr" (ekrandaki altyazı, varsayılan) ya da "asr" (konuşma tanıma, ör. sokak
+# konuşmaları). Kaynak yalnızca kullanıcı mesajındaki <line> etiketinde belirtilir; sistem istemi
+# her kaynak için aynıdır (önek önbelleği korunur).
+SOURCES = ("ocr", "asr")
+
+
+def _check_source(source: str) -> str:
+    if source not in SOURCES:
+        raise ValueError(f"bilinmeyen satır kaynağı: {source!r} (geçerli: {', '.join(SOURCES)})")
+    return source
+
+
+def _user_message(context: str | None, line: str, terms: dict[str, str] | None = None,
+                  source: str = "ocr") -> str:
     block = ""
     if terms:
         block = "<glossary>\n" + "\n".join(f"{src} = {dst}" for src, dst in terms.items()) + "\n</glossary>\n"
-    return block + (f"<context>{context}</context>\n" if context else "") + f"<line>{line}</line>"
+    tag = "<line>" if _check_source(source) == "ocr" else f'<line source="{source}">'
+    return block + (f"<context>{context}</context>\n" if context else "") + f"{tag}{line}</line>"
 
 _LABEL = re.compile(r"^(?:türkçe|turkish|çeviri|translation)\s*:\s*", re.IGNORECASE)
-_TAGS = re.compile(r"</?(?:line|context|glossary)>")
+_TAGS = re.compile(r"</?(?:line|context|glossary)(?:\s[^>]*)?>")
+# Düşünen modellerin (qwen3, deepseek-r1...) akıl yürütme bloğu: think:false gönderilir ama eski
+# Ollama ya da şablon yine de içeriğe yazabilir. Kapanmamış blok (num_predict kesti) tamamen atılır.
+_THINK = re.compile(r"<think>.*?(?:</think>|$)", re.IGNORECASE | re.DOTALL)
+_THINK_END = re.compile(r"^.*</think>", re.IGNORECASE | re.DOTALL)
 # Modelin çevirinin sonuna eklediği açıklama: "... (Not: "nigga" kelimesi ...)"
 _NOTE = re.compile(r"\s*\(\s*(?:not|note|açıklama|explanation)\s*:.*$", re.IGNORECASE | re.DOTALL)
 _NOTE_LINE = re.compile(r"^\s*(?:not|note|açıklama|explanation)\s*:", re.IGNORECASE)
@@ -126,6 +145,8 @@ def is_meta_reply(text: str) -> bool:
 
 def clean_output(text: str) -> str:
     """Küçük modellerin eklediği etiket/tırnak/ek açıklamaları temizler; yalnızca ilk paragraf."""
+    # Şablon <think>'i istemde açtıysa çıktı "akıl yürütme...</think>çeviri" biçimindedir.
+    text = _THINK_END.sub("", _THINK.sub("", text))
     text = _TAGS.sub("", text).strip()
     text = text.split("\n\n", 1)[0].strip()
     lines = [line.strip() for line in text.splitlines() if line.strip()]
@@ -197,8 +218,13 @@ class OllamaBackend:
         if self._matcher:
             self._examples += EXAMPLES_GLOSSARY
         self.instructions_active = uncensored
-        # "clean-3": clean_output değişti (<glossary> etiketi de temizlenir).
-        blob = json.dumps([self._system, self._examples, "clean-3"], ensure_ascii=False).encode("utf-8")
+        # Düşünen modeller (qwen3, deepseek-r1, gpt-oss...) için "think": false: hemen yanıt versin.
+        # Parametreyi reddeden Ollama/model (HTTP 400, hata "think" içerir) için bir kez parametresiz
+        # yeniden denenir ve bu model için bir daha gönderilmez (nesne tek modele aittir).
+        self._send_think = True
+        # "clean-4": istem kaynak kuralı (OCR/konuşma tanıma) ve clean_output (<think>, etiket
+        # öznitelikleri) değişti.
+        blob = json.dumps([self._system, self._examples, "clean-4"], ensure_ascii=False).encode("utf-8")
         self._fingerprint = hashlib.sha256(blob).hexdigest()[:10]
 
     def cache_namespace(self) -> str:
@@ -209,6 +235,11 @@ class OllamaBackend:
         """Bu satırın istemine eklenen sözlük terimlerinin özeti ("" = terim yok). CachedTranslator
         anahtara ekler: yalnızca bu satıra uygulanan terimler değişince eski çeviri kullanılmaz."""
         return self._matcher.fingerprint(text)
+
+    def cache_source(self, source: str) -> str:
+        """Satır kaynağının istemdeki izi ("" = varsayılan OCR, istem değişmez). CachedTranslator bu
+        yöntemi olan arka uca `source` geçirir ve boş değilse anahtara ekler."""
+        return "" if _check_source(source) == "ocr" else source
 
     # --- Ollama yönetimi -------------------------------------------------------------------
 
@@ -327,35 +358,49 @@ class OllamaBackend:
         }
         if self._num_gpu is not None:
             body["options"]["num_gpu"] = self._num_gpu
-        with self._http.post(f"{self._url}/api/chat", timeout=timeout, json=body,
-                             stream=cancel is not None) as r:
-            if r.status_code == 404:
-                raise OllamaUnavailable(f"Ollama'da '{self.model}' modeli yok (ollama pull {self.model})")
-            if r.status_code >= 400:
+        while True:
+            if self._send_think:
+                body["think"] = False
+            else:
+                body.pop("think", None)
+            with self._http.post(f"{self._url}/api/chat", timeout=timeout, json=body,
+                                 stream=cancel is not None) as r:
+                if r.status_code < 400:
+                    return self._read_reply(r, cancel)
+                if r.status_code == 404:
+                    raise OllamaUnavailable(f"Ollama'da '{self.model}' modeli yok (ollama pull {self.model})")
                 try:
-                    detail = r.json().get("error", r.text)
+                    detail = str(r.json().get("error", r.text))
                 except ValueError:
                     detail = r.text
-                hint = (" — ekran kartı belleği yetmiyor olabilir; daha küçük bir model deneyin"
-                        if "memory" in detail.lower() or "cuda" in detail.lower() else "")
-                raise OllamaUnavailable(f"Ollama hatası ({r.status_code}): {detail.strip()[:300]}{hint}")
-            if cancel is None:
-                return r.json().get("message", {}).get("content", "")
-            parts: list[str] = []
-            for raw in r.iter_lines():
-                if cancel.is_set():
-                    raise Cancelled("önceden çeviri iptal edildi")  # `with` bağlantıyı kapatır
-                if not raw:
-                    continue
-                event = json.loads(raw)
-                if "error" in event:
-                    raise OllamaUnavailable(f"Ollama hatası: {str(event['error']).strip()[:300]}")
-                parts.append(event.get("message", {}).get("content", ""))
-                if event.get("done"):
-                    break
-            return "".join(parts)
+            if r.status_code == 400 and "think" in body and "think" in detail.lower():
+                self._send_think = False  # bu model/sunucu desteklemiyor: bir daha gönderme
+                continue
+            hint = (" — ekran kartı belleği yetmiyor olabilir; daha küçük bir model deneyin"
+                    if "memory" in detail.lower() or "cuda" in detail.lower() else "")
+            raise OllamaUnavailable(f"Ollama hatası ({r.status_code}): {detail.strip()[:300]}{hint}")
 
-    def translate(self, text: str, context: str | None, cancel: threading.Event | None = None) -> str:
+    @staticmethod
+    def _read_reply(r, cancel: threading.Event | None) -> str:
+        """Yanıt gövdesi: tek JSON ya da (iptal edilebilir istek) akış satırları."""
+        if cancel is None:
+            return r.json().get("message", {}).get("content", "")
+        parts: list[str] = []
+        for raw in r.iter_lines():
+            if cancel.is_set():
+                raise Cancelled("önceden çeviri iptal edildi")  # `with` bağlantıyı kapatır
+            if not raw:
+                continue
+            event = json.loads(raw)
+            if "error" in event:
+                raise OllamaUnavailable(f"Ollama hatası: {str(event['error']).strip()[:300]}")
+            parts.append(event.get("message", {}).get("content", ""))
+            if event.get("done"):
+                break
+        return "".join(parts)
+
+    def translate(self, text: str, context: str | None, cancel: threading.Event | None = None,
+                  source: str = "ocr") -> str:
         # Bağlam: her zaman (use_context) ya da yalnızca satır öncekinin devamıysa ("or lawyer she
         # fucking with." gibi yarım cümleler bağlamsız yanlış çevriliyordu).
         history = getattr(context, "history", ())
@@ -366,7 +411,8 @@ class OllamaBackend:
         # Çıktı sınırı: Türkçe satır İngilizceden çok uzun olmaz; model açıklamaya başlarsa erken kesilir.
         limit = min(120, 24 + 4 * len(text.split()))
         # Sözlük terimleri yalnızca yeni satırın mesajında (geçmiş turlar değişmez, önek önbelleği bozulmaz).
-        user = _user_message(context, text, self._matcher.matched(text))
+        # Kaynak (OCR/konuşma tanıma) da yalnızca bu mesajda; sistem istemi her satırda aynı.
+        user = _user_message(context, text, self._matcher.matched(text), source)
         out = clean_output(self._chat(user, timeout=self._timeout, num_predict=limit,
                                       history=history, cancel=cancel))
         if not out:

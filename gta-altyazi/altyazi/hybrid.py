@@ -22,11 +22,14 @@ class Backend(Protocol):
     def translate(self, text: str, context: str | None) -> str: ...
 
 
-class FinalTranslator(Backend, Protocol):
-    def cached(self, text: str) -> str | None: ...
+class FinalTranslator(Protocol):
+    # `source`: satırın kaynağı ("ocr" ekrandaki altyazı, "asr" konuşma tanıma). İstemi değiştiren
+    # arka uç (yerel LLM) kullanır ve anahtara ekler; diğerleri yok sayar (bkz. CachedTranslator).
+    def translate(self, text: str, context: str | None, source: str = "ocr") -> str: ...
+    def cached(self, text: str, source: str = "ocr") -> str | None: ...
     # Önceden çeviri için (CachedTranslator); yoksa prefetch yalnızca taslağı hazırlar.
-    # def key(self, text: str) -> str: ...
-    # def translate_uncommitted(self, text: str, context, cancel) -> tuple[str, str]: ...
+    # def key(self, text: str, source: str = "ocr") -> str: ...
+    # def translate_uncommitted(self, text: str, context, cancel, source) -> tuple[str, str]: ...
     # def commit(self, key: str, translated: str) -> None: ...
 
 
@@ -47,10 +50,12 @@ def _context_sig(context: Any) -> tuple:
 class _Speculation:
     """Bir bölgenin doğrulanmadan başlatılmış son çeviri isteği. Durum `_spec_lock` altında değişir."""
 
-    __slots__ = ("key", "context_fn", "context", "context_sig", "started", "adopted", "future", "cancel")
+    __slots__ = ("key", "source", "context_fn", "context", "context_sig", "started", "adopted", "future",
+                 "cancel")
 
-    def __init__(self, key: str, context_fn: Callable[[], Any]):
+    def __init__(self, key: str, source: str, context_fn: Callable[[], Any]):
         self.key = key
+        self.source = source
         self.context_fn = context_fn
         self.context: Any = None
         self.context_sig: tuple | None = None  # istek başlayınca belli olur
@@ -126,24 +131,26 @@ class HybridTranslator:
 
     # --- önceden çeviri ------------------------------------------------------------------------
 
-    def prefetch(self, text: str, context_fn: Callable[[], Any], draft: bool = False) -> bool:
+    def prefetch(self, text: str, context_fn: Callable[[], Any], draft: bool = False,
+                 source: str = "ocr") -> bool:
         """Henüz doğrulanmamış (ama büyük olasılıkla doğru) okumanın çevirisini şimdiden başlatır.
 
         `context_fn` istek başlarken çağrılır (önceki satırın çevirisi kuyrukta önde bitince sohbet
         geçmişi güncel olsun); `submit` istek başlamadan gelirse onun bağlamı kullanılır. Yenisi
         eskisinin yerine geçer: başlamamış eski istek hiç gönderilmez, sürmekte olanın sonucu atılır.
-        `draft`: yerel taslağı da hazırla (işlemciyi OCR ile paylaşmıyorsa). Yeni son çeviri
-        isteği başlatıldıysa True."""
+        `draft`: yerel taslağı da hazırla (işlemciyi OCR ile paylaşmıyorsa). `source`: satır kaynağı
+        ("ocr"/"asr"; anahtarın parçası, `submit` ile aynı verilmeli). Yeni son çeviri isteği
+        başlatıldıysa True."""
         started = False
         if (self.final is not None and hasattr(self.final, "translate_uncommitted")
-                and self._use_final(text) and self.final.cached(text) is None):
-            key = self.final.key(text)
+                and self._use_final(text) and self.final.cached(text, source=source) is None):
+            key = self.final.key(text, source=source)
             with self._spec_lock:
                 current = self._spec
                 if current is None or current.key != key or current.failed():
                     if current is not None:
                         current.drop()
-                    spec = _Speculation(key, context_fn)
+                    spec = _Speculation(key, source, context_fn)
                     self._spec = spec
                     started = True
             if started:
@@ -175,7 +182,8 @@ class HybridTranslator:
             spec.started = True
             spec.future.set_running_or_notify_cancel()
         try:
-            result = self.final.translate_uncommitted(text, spec.context, cancel=spec.cancel)
+            result = self.final.translate_uncommitted(text, spec.context, cancel=spec.cancel,
+                                                      source=spec.source)
         except Exception as exc:
             spec.future.set_exception(exc)
         else:
@@ -201,7 +209,7 @@ class HybridTranslator:
                 if self._draft_spec == text:
                     self._draft_spec = None
 
-    def _take_spec(self, text: str, context: Any, use_final: bool) -> _Speculation | None:
+    def _take_spec(self, text: str, context: Any, use_final: bool, source: str) -> _Speculation | None:
         """Doğrulanan satır önceden çeviriyle aynı istekse onu sahiplenir; her durumda bekleyen
         aday temizlenir (farklı satırın sonucu bu satırda asla kullanılmaz)."""
         with self._spec_lock:
@@ -210,7 +218,7 @@ class HybridTranslator:
                 self._draft_spec = None
             if spec is None:
                 return None
-            if not use_final or spec.key != self.final.key(text):
+            if not use_final or spec.key != self.final.key(text, source=source):
                 spec.drop()
                 return None
             if spec.started:
@@ -226,11 +234,13 @@ class HybridTranslator:
     # --- çeviri --------------------------------------------------------------------------------
 
     def submit(self, text: str, context: str | None, is_current: Callable[[], bool],
-               on_result: ResultFn, on_error: ErrorFn) -> None:
+               on_result: ResultFn, on_error: ErrorFn, source: str = "ocr") -> None:
+        """`source`: satırın kaynağı ("ocr" ekrandaki altyazı, "asr" konuşma tanıma). Yalnızca son
+        çevirmene geçer; yerel taslak çevirmen kaynağı kullanmaz."""
         use_final = self._use_final(text)
-        spec = self._take_spec(text, context, use_final)
+        spec = self._take_spec(text, context, use_final, source)
         if use_final:
-            hit = self.final.cached(text)
+            hit = self.final.cached(text, source=source)
             if hit is not None:  # önbellek: kaliteli çeviri anında, taslağa gerek yok
                 on_result(FINAL, hit, 0.0)
                 return
@@ -290,7 +300,7 @@ class HybridTranslator:
                 return
             started = time.perf_counter()
             try:
-                translated = self.final.translate(text, context)
+                translated = self.final.translate(text, context, source=source)
             except Exception as exc:
                 fail_final(exc)
                 return
