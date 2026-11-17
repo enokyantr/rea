@@ -350,6 +350,36 @@ def all_words_known(text: str) -> bool:
     return True
 
 
+# Türkçe ekran yazıları (konsol/oyun arayüzü Türkçeyse bölgeye taşan bildirimler, menüler): OCR
+# Türkçe harfleri çoğunlukla düz okur ("İpuçları" -> "Ipuclari"), bu yüzden düzleştirilmiş biçimler.
+# İngilizcede de sık geçen kısa kelimeler (et, sec, bu...) alınmaz: İngilizce satır yanlışlıkla atılmasın.
+_TURKISH_WORDS = {
+    "ve", "bir", "icin", "için", "ile", "veya", "yeni", "oyun", "oyunu", "ipucu", "ipuclari", "ipuçları",
+    "kullanim", "kullanım", "kolayligi", "kolaylığı", "ayarlar", "ayarlari", "kupalar", "aksesuarlar",
+    "takip", "edin", "devam", "kaydet", "iptal", "tamam", "evet", "hayir", "hayır", "baslat", "başlat",
+    "yardimi", "yardımı", "bildirim", "bildirimler", "arkadas", "arkadaş", "mesaj", "simdi", "şimdi",
+    "daha", "sonra", "olarak", "gibi", "kadar", "degil", "değil", "var", "yok", "kartta", "seviye",
+    # programın kendi menüsü (menü okuma bölgesinin üstündeyken karartılamadıysa)
+    "islemci", "işlemci", "ekran", "karti", "kartı", "bellek", "belle", "hedef", "pencere", "pence",
+    "motorlar", "ceviri", "çeviri", "qeviri", "taslak", "cevirmen", "çevirmen", "yerel", "hiz", "hız",
+}
+_TURKISH_SUFFIX = re.compile(r"(?:lar|ler)(?:i|ı|in|ın|ini|ını|da|de|dan|den)?$|(?:iniz|ınız|nizi|nızı|miz|mız)$")
+
+
+def looks_turkish(text: str) -> bool:
+    """Satır İngilizce değil Türkçe mi (konsolun Türkçe bildirimi/menüsü)? En az iki Türkçe işaret
+    (sık kelime ya da -ları/-leri/-nizi gibi ek) ve harflerin çoğu İngilizce kelime değil
+    (dört ve üstü işarette yarısı İngilizceye benzeyebilir)."""
+    tokens = [t.lower() for t in _TOKEN.findall(text)]
+    if len(tokens) < 2:
+        return False
+    hits = sum(1 for t in tokens if t in _TURKISH_WORDS or (len(t) >= 6 and _TURKISH_SUFFIX.search(t)))
+    if hits < 2:
+        return False
+    # Bozuk okunmuş Türkçe bazen İngilizce kelimeye benzer ("sistem" -> "sister"): işaret çoksa gevşek.
+    return known_fraction(text) < (0.6 if hits >= 4 else 0.35)
+
+
 def known_fraction(text: str) -> float:
     """Harflerin ne kadarı sözlükteki gerçek İngilizce kelimelerde (isimler sayılmaz). Sözlük yoksa 1."""
     if not _word_freq():

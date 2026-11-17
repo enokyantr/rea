@@ -74,3 +74,14 @@ def test_hand_edited_single_string_is_one_phrase(tmp_path):
     path = tmp_path / "config.json"
     path.write_text(json.dumps({"config_version": 2, "ignore_phrases": "Press * to *"}), encoding="utf-8")
     assert config_mod.load(path).ignore_phrases == ["Press * to *"]
+
+
+def test_turkish_screen_text_is_not_translated_but_english_with_names_is():
+    from altyazi import textproc
+
+    for line in ("Ipuclari kartta llerlemenizi takipedin Yeni ipucu Var Oyun Yardimi Kupalar Kullanim Kolayli",
+                 "Hedef pence re: chiaki-ng Yuk: sister islemci %26, program %6 ekran kart %14"):
+        assert textproc.looks_turkish(line), line
+    for line in ("Geralt of Rivia. Witcher with tenure.", "Novigrad, Oxenfurt, Velen.", "Q Ara",
+                 "Ve Boobie Ike said Var Var.", "Leaders, ladders, readers and traders.", "Gather Ingredients"):
+        assert not textproc.looks_turkish(line), line

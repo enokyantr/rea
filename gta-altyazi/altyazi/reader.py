@@ -126,6 +126,9 @@ def read_text(gray: np.ndarray, recognize: Callable[[np.ndarray], list[str]], cf
             result.text_box = (left + box[0], top + box[1], left + box[2], top + box[3])
     # Yoksayılan ifadeler: tüm bölgeler için tek yer; çeviriye, ekrana ve dublaja hiç ulaşmaz.
     kept = textproc.ignore_phrases(result.text, cfg.ignore_phrases, cfg.min_text_chars)
+    # Türkçe ekran yazısı (konsol bildirimi/menüsü bölgeye taştı): zaten Türkçe, çevrilmez.
+    if kept and textproc.looks_turkish(kept):
+        kept = ""
     if kept != result.text:
         result.ignored = result.text
         result.text = kept
