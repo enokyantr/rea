@@ -66,3 +66,32 @@ def test_retry_threshold_follows_config():
     cfg = Config(ocr_retry_confidence=0.98)  # "düşük kalite": 0.97 bile yeniden denenir
     reader.read_text(_gray(), eng.recognize, cfg, True, eng)
     assert eng.calls > 2
+
+
+from altyazi.geometry import ACTIVE, choose_target, window_choices  # noqa: E402
+
+
+def test_chosen_game_title_beats_defaults_and_active_window_matches_foreground():
+    windows = [("PS Remote Play", Rect(0, 0, 1920, 1080)), ("Cyberpunk 2077", Rect(0, 0, 1280, 720)),
+               ("Discord", Rect(0, 0, 1000, 700))]
+    titles = choose_target(["PS Remote Play", "Chiaki"], "Cyberpunk 2077")
+    assert titles == ["Cyberpunk 2077", "PS Remote Play", "Chiaki"]
+    assert pick_window(titles, windows)[0] == "Cyberpunk 2077"            # küçük olsa da seçilen önce
+    assert pick_window(titles, windows[:1])[0] == "PS Remote Play"        # oyun kapalı: varsayılan
+    active = choose_target(titles, ACTIVE)
+    assert active[0] == ACTIVE and active[-2:] == ["PS Remote Play", "Chiaki"]
+    assert pick_window(active, windows, active_title="Discord")[0] == "Discord"
+    assert pick_window(active, windows, active_title=None)[0] == "Cyberpunk 2077"  # öndeki bilinmiyor
+    # Belirli oyun seçilince "@aktif" yedek olarak kalmaz; boş seçim varsayılanlara döner.
+    assert ACTIVE not in choose_target(active, "Elden Ring")
+    assert choose_target(active, "") == ["PS Remote Play", "Chiaki"]
+    many = ["PS Remote Play", "Chiaki"]
+    for i in range(20):
+        many = choose_target(many, f"Oyun {i}")
+    assert len(many) <= 8 and many[0] == "Oyun 19" and many[-2:] == ["PS Remote Play", "Chiaki"]
+
+
+def test_window_choices_skip_small_and_duplicate_windows():
+    windows = [("Discord", Rect(0, 0, 1000, 700)), ("Araç", Rect(0, 0, 200, 100)),
+               ("Cyberpunk 2077", Rect(0, 0, 2560, 1440)), ("discord", Rect(0, 0, 400, 300)), ("", Rect(0, 0, 999, 999))]
+    assert window_choices(windows) == ["Cyberpunk 2077", "Discord"]

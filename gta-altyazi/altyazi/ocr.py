@@ -162,11 +162,12 @@ def group_lines(boxes) -> list[str]:
     return [" ".join(i[3] for i in sorted(line, key=lambda i: i[2]) if i[3]) for line in lines]
 
 
-def create(cfg):
-    """`cfg.ocr_engine`: "auto" (RapidOCR, yoksa Windows OCR) | "rapid" | "windows"."""
+def create(cfg, device: str | None = None):
+    """`cfg.ocr_engine`: "auto" (RapidOCR, yoksa Windows OCR) | "rapid" | "windows". `device`: RapidOCR'ın
+    yeri ("auto" | "cpu"); verilmezse `cfg.ocr_device` (oyun modu bunu perf.game_policy ile değiştirir)."""
     if cfg.ocr_engine in ("auto", "rapid"):
         try:
-            return RapidOcr(gpu=cfg.ocr_device != "cpu")
+            return RapidOcr(gpu=(device or cfg.ocr_device) != "cpu")
         except OcrUnavailable:
             if cfg.ocr_engine == "rapid":
                 raise

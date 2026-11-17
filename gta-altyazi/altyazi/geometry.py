@@ -82,18 +82,66 @@ _BROWSERS = ("google chrome", "mozilla firefox", "microsoft edge", "microsoft\u2
              "vivaldi", "yandex")
 
 
-def pick_window(title_parts: list[str], windows: list[tuple[str, Rect]]) -> tuple[str, Rect] | None:
-    """Hedef pencere seçimi. Öncelik: tarayıcı sekmesi olmayan, başlığı verilen ifadeyle BAŞLAYAN
-    ("chiaki-ng | ...", "PS Remote Play") > başlığında geçen > tarayıcı sekmesi ("chiaki-ng - GitHub -
-    Google Chrome"). Aynı sınıfta en büyük pencere."""
+# window_titles içinde "öndeki pencere" anlamına gelen işaret (bu programın pencereleri hariç).
+ACTIVE = "@aktif"
+DEFAULT_TITLES = ("PS Remote Play", "Chiaki")
+MAX_TITLES = 8
+
+
+def pick_window(title_parts: list[str], windows: list[tuple[str, Rect]],
+                active_title: str | None = None) -> tuple[str, Rect] | None:
+    """Hedef pencere seçimi. Öncelik: tarayıcı sekmesi olmayan > listede önce gelen ifade (menüden
+    seçilen oyun varsayılanların önüne eklenir) > başlığı ifadeyle BAŞLAYAN ("chiaki-ng | ...",
+    "PS Remote Play") > en büyük pencere. Tarayıcı sekmesi ("chiaki-ng - GitHub - Google Chrome") son
+    seçenek. `ACTIVE` ifadesi başlığı `active_title` olan pencereyle (öndeki pencere) eşleşir."""
     needles = [p.casefold() for p in title_parts if p]
+    active = active_title.casefold().strip() if active_title else None
     best, best_key = None, None
     for title, rect in windows:
         folded = title.casefold().strip()
-        if not any(n in folded for n in needles):
+        match = None
+        for idx, needle in enumerate(needles):
+            if needle == ACTIVE:
+                if active is not None and folded == active:
+                    match = (idx, True)
+                    break
+            elif needle in folded:
+                match = (idx, folded.startswith(needle))
+                break
+        if match is None:
             continue
         browser = any(b in folded for b in _BROWSERS)
-        key = (not browser, any(folded.startswith(n) for n in needles), rect.width * rect.height)
+        key = (not browser, -match[0], match[1], rect.width * rect.height)
         if best_key is None or key > best_key:
             best, best_key = (title, rect), key
     return best
+
+
+def choose_target(current: list[str], choice: str) -> list[str]:
+    """Menüde seçilen hedefi `window_titles` listesine yazar: seçilen başlık (ya da `ACTIVE`) başa gelir,
+    daha önce seçilmiş oyunlar ve en sonda varsayılanlar (Remote Play/chiaki) yedek olarak kalır.
+    `choice` boşsa yalnızca varsayılanlar."""
+    choice = choice.strip()
+    defaults = list(DEFAULT_TITLES)
+    if not choice:
+        return defaults
+    folded = {d.casefold() for d in defaults} | {choice.casefold(), ACTIVE}
+    # "@aktif" yalnızca seçildiğinde başta durur: belirli bir oyun seçilince yedek olarak kalırsa
+    # oyun kapalıyken öndeki herhangi bir pencere (Discord...) okunurdu.
+    previous = [t for t in current if t.strip() and t.casefold() not in folded]
+    keep = MAX_TITLES - 1 - len(defaults)
+    return [choice] + previous[:keep] + [d for d in defaults if d.casefold() != choice.casefold()]
+
+
+def window_choices(windows: list[tuple[str, Rect]], min_width: int = 320, min_height: int = 200) -> list[str]:
+    """Hedef seçimi için pencere başlıkları: küçük araç pencereleri elenir, aynı başlık bir kez,
+    büyük pencere önce (oyun genelde en büyüğüdür)."""
+    seen: set[str] = set()
+    out = []
+    for title, rect in sorted(windows, key=lambda w: -w[1].width * w[1].height):
+        title = title.strip()
+        if not title or rect.width < min_width or rect.height < min_height or title.casefold() in seen:
+            continue
+        seen.add(title.casefold())
+        out.append(title)
+    return out

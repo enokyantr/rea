@@ -98,6 +98,18 @@ def main() -> int:
         print(f"final_translator geçersiz: {cfg.final_translator!r} (ollama | deepl)")
         return 2
 
+    # Oyun aynı bilgisayardaysa (Performans: oyun) dil modeli ve OCR ekran kartını oyunla paylaşmasın.
+    from .perf import game_policy, vram_free_mb
+
+    free_mb = None
+    if cfg.final_translator == "ollama" and mode in ("hybrid", "final"):
+        free_mb = vram_free_mb()
+        if free_mb is not None:  # önceki oturumdan yüklü kalan kendi modelimiz "dolu" sayılmasın
+            free_mb += sum(size for _name, size in _ollama_resident(cfg)) / 2**20
+    policy = game_policy(cfg, free_mb)
+    if policy.note:
+        app.log(policy.note)
+
     local = None
     if mode in ("hybrid", "local") or args.self_test or args.mt_bench:
         model_dir = Path(cfg.local_model_dir)
@@ -107,13 +119,15 @@ def main() -> int:
             from .local_mt import LocalBackend
 
             device = cfg.local_device
-            if device == "auto" and cfg.final_translator == "ollama" and mode != "local":
+            if device == "auto" and ((cfg.final_translator == "ollama" and mode != "local")
+                                     or cfg.performance_mode == "oyun"):
                 # RTX 4060 Ti 8 GB ölçümü: taslak model GPU'dayken Ollama satırları 1,9-6,6 sn sürdü
                 # (GPU paylaşımı); taslak işlemcideyken 0,28-0,43 sn. Taslak işlemcide ~0,1 sn.
+                # Oyun modu: ekran kartı belleği oyuna kalsın.
                 device = "cpu"
-            # Yayın modu: taslak çeviri 2 çekirdekle (Discord/OBS kodlaması ve oyun işlemciye kalsın).
+            # Yayın/oyun modu: taslak çeviri 2 çekirdekle (yayın kodlaması ve oyun işlemciye kalsın).
             local = LocalBackend(model_dir, device, cfg.local_beam_size,
-                                 threads=2 if cfg.performance_mode == "yayin" else 4)
+                                 threads=2 if cfg.performance_mode in ("yayin", "oyun") else 4)
             app.log(local.describe())
         except Exception as exc:
             if args.mt_bench or (mode == "local" and not args.self_test):
@@ -129,7 +143,7 @@ def main() -> int:
     if args.llm_bench:
         from . import bench
 
-        backend = _final_backend(cfg, args, *_glossary(cfg, args), interactive=True)
+        backend = _final_backend(cfg, args, *_glossary(cfg, args), interactive=True, num_gpu=policy.num_gpu)
         if backend is None:
             return 2
         if hasattr(backend, "_timeout"):
@@ -159,10 +173,19 @@ def main() -> int:
         except Exception as exc:  # hatalı sözlük satırı: kullanıcı düzeltsin
             print(exc)
             return 2
-        if args.dry_run:
+        llm_off = (policy.llm == "kapali" and cfg.final_translator == "ollama" and not args.dry_run)
+        if llm_off and (mode != "hybrid" or local is None):
+            app.log("Oyun modu: taslak çeviri yok, yerel dil modeli yine de yükleniyor (tek çevirmen o).")
+            llm_off = False
+        if llm_off:
+            backend = None
+            for name, _size in _ollama_resident(cfg):  # önceki oturumdan kalan model belleği bıraksın
+                if _ollama_unload(cfg, name):
+                    app.log(f"Ollama: '{name}' ekran kartı belleğinden boşaltıldı (oyun modu).")
+        elif args.dry_run:
             backend = DryRunBackend()
         else:
-            backend = _final_backend(cfg, args, entries, fp, interactive=True)
+            backend = _final_backend(cfg, args, entries, fp, interactive=True, num_gpu=policy.num_gpu)
             if backend is None and not (mode == "hybrid" and local is not None):
                 return 2
             if backend is None:
@@ -204,6 +227,12 @@ def main() -> int:
     if final is not None:
         model = getattr(getattr(final, "_backend", None), "model", "")
         info.append(("Son çevirmen", f"{cfg.final_translator} {model}".strip()))
+    if cfg.performance_mode == "oyun":
+        ocr_at = "işlemcide" if policy.ocr_device == "cpu" else "ekran kartında"
+        llm = ("kapalı (taslak son çeviri)" if final is None
+               else "işlemcide" if policy.num_gpu == 0 else "ekran kartında")
+        info.append(("Oyun modu", (f"dil modeli {llm} · " if cfg.final_translator == "ollama" else "")
+                     + f"OCR {ocr_at}"))
     restart = app.run_gui(cfg, args.config, make_translator, args.debug,
                           dump_dir=(args.config.parent / "dump") if args.dump else None, engine_info=info,
                           instance=instance)
@@ -229,8 +258,9 @@ def _make_deepl(cfg, key: str) -> DeepLBackend:
                         instructions=cfg.deepl_instructions if cfg.uncensored else None, log=app.log)
 
 
-def _final_backend(cfg, args, entries: dict[str, str], fp: str, interactive: bool):
-    """Taslağın yerine geçen son çevirmeni kurar. Başarısızsa None (etkileşimsiz modda hata fırlatır)."""
+def _final_backend(cfg, args, entries: dict[str, str], fp: str, interactive: bool, num_gpu: int | None = None):
+    """Taslağın yerine geçen son çevirmeni kurar. Başarısızsa None (etkileşimsiz modda hata fırlatır).
+    `num_gpu`: Ollama'da ekran kartına konan katman sayısı (0: tamamen işlemcide; None: Ollama seçer)."""
     from . import app
 
     if cfg.final_translator == "deepl":
@@ -243,9 +273,10 @@ def _final_backend(cfg, args, entries: dict[str, str], fp: str, interactive: boo
 
     from .llm import OllamaBackend, OllamaUnavailable
 
+    # num_gpu yalnızca oyun modunda (game_llm "cpu") verilir; None: Ollama'nın kendi seçimi (bugünkü davranış).
     backend = OllamaBackend(cfg.ollama_model, cfg.ollama_url, cfg.ollama_timeout_s, cfg.uncensored, entries,
                             num_ctx=cfg.ollama_num_ctx, use_context=cfg.ollama_use_context,
-                            context_for_continuation=cfg.ollama_context_continuation)
+                            context_for_continuation=cfg.ollama_context_continuation, num_gpu=num_gpu)
     try:
         backend.ensure_running(app.log)
         if not backend.has_model():
@@ -257,7 +288,8 @@ def _final_backend(cfg, args, entries: dict[str, str], fp: str, interactive: boo
                 return None
             backend.pull(lambda msg: print("\r" + msg.ljust(70), end="", flush=True))
             print()
-        app.log("Yerel LLM ekran kartına yükleniyor (ilk seferde 10-60 sn sürebilir)...")
+        app.log("Yerel LLM " + ("işlemciye" if num_gpu == 0 else "ekran kartına")
+                + " yükleniyor (ilk seferde 10-60 sn sürebilir)...")
         app.log(backend.check())
     except Exception as exc:
         if not interactive:
@@ -265,6 +297,37 @@ def _final_backend(cfg, args, entries: dict[str, str], fp: str, interactive: boo
         print(app.describe_error(exc))
         return None
     return backend
+
+
+def _ollama_resident(cfg) -> list[tuple[str, int]]:
+    """Ollama'da şu an yüklü olan bizim modelimiz: [(ad, ekran kartındaki bayt)]. Ollama kapalıysa boş."""
+    import json
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(cfg.ollama_url.rstrip("/") + "/api/ps", timeout=1.0) as resp:
+            models = json.load(resp).get("models") or []
+    except Exception:
+        return []
+    want = cfg.ollama_model if ":" in cfg.ollama_model else cfg.ollama_model + ":latest"
+    return [(m.get("name") or m.get("model", ""), int(m.get("size_vram") or 0)) for m in models
+            if want in (m.get("name"), m.get("model"))]
+
+
+def _ollama_unload(cfg, name: str) -> bool:
+    """Modeli Ollama'dan hemen boşaltır (keep_alive 0). Başarısızsa False."""
+    import json
+    import urllib.request
+
+    body = json.dumps({"model": name, "keep_alive": 0}).encode()
+    req = urllib.request.Request(cfg.ollama_url.rstrip("/") + "/api/generate", data=body,
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=5.0) as resp:
+            resp.read()
+        return True
+    except Exception:
+        return False
 
 
 def _deepl_backend(cfg, args):

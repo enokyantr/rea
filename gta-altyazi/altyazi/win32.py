@@ -8,7 +8,7 @@ import threading
 from ctypes import wintypes
 from typing import Callable
 
-from .geometry import Rect, pick_window
+from .geometry import ACTIVE, Rect, pick_window, window_choices as _window_choices
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 
@@ -89,8 +89,51 @@ def visible_windows() -> list[tuple[int, str, Rect]]:
     return found
 
 
+user32.GetForegroundWindow.restype = wintypes.HWND
+# Masaüstü ve görev çubuğu "öndeki pencere" sayılmaz (oyundan masaüstüne geçince hedef değişmesin).
+_SHELL_CLASSES = ("Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd")
+_last_active: dict[str, int | None] = {"hwnd": None}
+
+
+def _class_name(hwnd: int) -> str:
+    buf = ctypes.create_unicode_buffer(256)
+    user32.GetClassNameW(hwnd, buf, 256)
+    return buf.value
+
+
+def active_window() -> int | None:
+    """Öndeki pencere; öndeki bizim penceremizse (menü, overlay) ya da masaüstüyse en son öndeki
+    başka pencere (menüyü açınca hedef oyun penceresi kalsın)."""
+    hwnd = user32.GetForegroundWindow()
+    if hwnd and _window_pid(hwnd) != os.getpid() and _class_name(hwnd) not in _SHELL_CLASSES:
+        _last_active["hwnd"] = hwnd
+    return _last_active["hwnd"]
+
+
 def find_window(title_parts: list[str]) -> tuple[str, Rect] | None:
-    return pick_window(title_parts, [(title, rect) for _hwnd, title, rect in visible_windows()])
+    windows = visible_windows()
+    active_title = None
+    if any(p.casefold() == ACTIVE for p in title_parts):
+        hwnd = active_window()
+        active_title = next((title for h, title, _rect in windows if h == hwnd), None)
+    return pick_window(title_parts, [(title, rect) for _hwnd, title, rect in windows], active_title)
+
+
+def window_choices() -> list[str]:
+    """Menüdeki "Oyun penceresini seç" listesi: görünür pencere başlıkları (büyükten küçüğe)."""
+    return _window_choices([(title, rect) for hwnd, title, rect in visible_windows()
+                            if _class_name(hwnd) not in _SHELL_CLASSES and not _cloaked(hwnd)])
+
+
+def _cloaked(hwnd: int) -> bool:
+    """Görünür sayılan ama ekranda olmayan (arka plandaki UWP) pencereler."""
+    try:
+        value = wintypes.DWORD()
+        ctypes.windll.dwmapi.DwmGetWindowAttribute(wintypes.HWND(hwnd), 14, ctypes.byref(value),  # DWMWA_CLOAKED
+                                                   ctypes.sizeof(value))
+        return bool(value.value)
+    except (AttributeError, OSError):
+        return False
 
 
 

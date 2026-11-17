@@ -11,6 +11,7 @@ from tkinter import ttk
 from typing import Protocol
 
 from . import hotkeys as hk
+from .geometry import ACTIVE, DEFAULT_TITLES
 
 GREEN, RED, GRAY, ORANGE, ACCENT = "#3fb950", "#f85149", "#8b949e", "#d29922", "#58a6ff"
 FONT = "Segoe UI"
@@ -49,6 +50,8 @@ class Controller(Protocol):
     def set_detailed(self, on: bool) -> None: ...
     def save_log(self) -> str: ...
     def desktop_shortcut(self) -> str: ...
+    def window_choices(self) -> list[str]: ...
+    def set_target_window(self, choice: str) -> None: ...
 
 
 def _apply_theme(root: tk.Misc) -> bool:
@@ -317,20 +320,57 @@ class ControlPanel:
 
     # OCR --------------------------------------------------------------------------------------
 
+    # Hedef pencere seçimindeki özel satırlar -> window_titles başına yazılan değer.
+    TARGET_ACTIVE = "Öndeki pencere (oyuna geçince otomatik)"
+    TARGET_DEFAULT = "PS Remote Play / chiaki-ng (varsayılan)"
+
+    def _target_label(self) -> str:
+        titles = list(self.cfg.window_titles)
+        if titles and titles[0].casefold() == ACTIVE:
+            return self.TARGET_ACTIVE
+        if not titles or [t.casefold() for t in titles] == [d.casefold() for d in DEFAULT_TITLES]:
+            return self.TARGET_DEFAULT
+        return titles[0]
+
     def _tab_ocr(self, f: ttk.Frame) -> None:
+        card = self._card(f, "Oyun penceresi (hemen geçerli)")
+        self._label(card, 0, "Oyun penceresini seç")
+        var = tk.StringVar(value=self._target_label())
+
+        def refresh():
+            cb.configure(values=[self.TARGET_ACTIVE, self.TARGET_DEFAULT] + self.ctl.window_choices())
+
+        def commit(_=None):
+            label = var.get()
+            choice = ACTIVE if label == self.TARGET_ACTIVE else "" if label == self.TARGET_DEFAULT else label
+            self.ctl.set_target_window(choice)
+            var.set(self._target_label())
+            self.note_lbl.configure(text=f"Okunan pencere: {var.get()} (Durum > Motorlar > Hedef pencere)",
+                                    foreground=GREEN)
+
+        cb = ttk.Combobox(card, textvariable=var, width=48, state="readonly", postcommand=refresh)
+        cb.grid(row=0, column=1, sticky="w", padx=8)
+        cb.bind("<<ComboboxSelected>>", commit)
+        ttk.Label(card, text="Bu bilgisayardaki oyunu \"Kenarlıksız pencere (borderless windowed)\" modunda açın: "
+                             "özel tam ekran yakalanamaz.", style="Muted.TLabel").grid(
+            row=1, column=0, columnspan=3, sticky="w", pady=(2, 0))
         card = self._card(f, "Okuma")
         r = 0
         r = self._combo(card, r, "OCR motoru", "ocr_engine", ["auto", "windows"], restart=True,
                         hint="auto: RapidOCR (önerilen)")
         r = self._combo(card, r, "OCR nerede çalışsın", "ocr_device", ["auto", "cpu"], restart=True,
-                        hint="auto: ekran kartı · cpu: dil modeli yavaşlarsa")
+                        wrap=190, hint="auto: ekran kartı · cpu: dil modeli yavaşlarsa")
         r = self._scale(card, r, "Hızlı kabul güveni (yüksek = az hata, biraz geç)", "fast_accept_confidence",
                         0.80, 1.00)
         r = self._quality(card, r)
         r = self._check(card, r, "Yalnızca yazı değişince yeniden oku (önerilen)", "change_detection")
-        r = self._combo(card, r, "Performans", "performance_mode", ["auto", "yayin", "normal"],
-                        hint="auto: zorlanınca kendini kısar · yayin: Discord/OBS yayınında hep hafif "
-                             "(çekirdek sayısı yeniden başlatınca) · normal: kısmaz")
+        r = self._combo(card, r, "Performans", "performance_mode", ["auto", "yayin", "oyun", "normal"],
+                        restart=True, wrap=190,
+                        hint="oyun: oyun bu bilgisayarda · yayin: Discord/OBS · auto: zorlanınca kısar")
+        r = self._combo(card, r, "Oyun modunda yerel dil modeli", "game_llm", ["kapali", "gpu", "cpu"],
+                        restart=True, wrap=190, hint="kapali: taslak çeviri son çeviri (8 GB kartta önerilen)")
+        r = self._combo(card, r, "Oyun modunda OCR", "game_ocr_device", ["cpu", "auto"], restart=True, wrap=190,
+                        hint="cpu: ekran kartı oyuna kalır")
         r = self._spin(card, r, "Altyazı gidince Türkçe kaç ms sonra silinsin", "clear_after_ms", 200, 3000, 100,
                        restart=True)
 
@@ -611,10 +651,10 @@ class ControlPanel:
             self.note_lbl.configure(text="Bazı değişiklikler \"Kaydet ve yeniden başlat\" ile geçerli olur.",
                                     foreground=ORANGE)
 
-    def _label(self, f, r, text, hint=None):
+    def _label(self, f, r, text, hint=None, wrap=300):
         ttk.Label(f, text=text).grid(row=r, column=0, sticky="w", pady=4)
         if hint:
-            ttk.Label(f, text=hint, style="Muted.TLabel", wraplength=300, justify="left").grid(
+            ttk.Label(f, text=hint, style="Muted.TLabel", wraplength=wrap, justify="left").grid(
                 row=r, column=2, sticky="w", padx=10)
 
     def _spin(self, f, r, text, key, lo, hi, step, live=False, restart=False, hint=None):
@@ -671,8 +711,8 @@ class ControlPanel:
         setattr(self, f"_var_{key}", var)
         return r + 1
 
-    def _combo(self, f, r, text, key, values, live=False, restart=False, hint=None, dub=False):
-        self._label(f, r, text, hint)
+    def _combo(self, f, r, text, key, values, live=False, restart=False, hint=None, dub=False, wrap=300):
+        self._label(f, r, text, hint, wrap)
         var = tk.StringVar(value=str(getattr(self.cfg, key)))
 
         def commit(_=None):

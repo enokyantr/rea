@@ -87,8 +87,9 @@ class Config:
     # İsim/terim sözlüğü (İngilizce = Türkçe). Boş bırakılırsa kullanılmaz.
     glossary_file: str = "sozluk.txt"
 
-    # Altyazının okunacağı pencere (başlığında bu ifadelerden biri geçen ilk görünür pencere).
-    # Bulunamazsa ana ekranın tamamı esas alınır.
+    # Altyazının okunacağı pencere (başlığında bu ifadelerden biri geçen görünür pencere; listede önce
+    # gelen ifade öncelikli). "@aktif": öndeki pencere (bu programın pencereleri hariç). Menü >
+    # Durum > "Oyun penceresini seç" ile değiştirilir. Bulunamazsa ana ekranın tamamı esas alınır.
     window_titles: list[str] = field(default_factory=lambda: ["PS Remote Play", "Chiaki"])
     # Oyun görüntüsünün en-boy oranı: pencere bu orana uymuyorsa (Remote Play/chiaki-ng görüntüyü
     # siyah bantlarla ortalar) bölgeler bantsız görüntüye göre hesaplanır. 0: kapalı (chiaki-ng'de
@@ -149,8 +150,15 @@ class Config:
     # Önceden çeviri: OCR ilk okumadan eminse son çeviri doğrulama beklenmeden başlar (~150 ms kazanç).
     speculative_translation: bool = True
     # Performans: "auto" (bilgisayar zorlanınca kendini kısar), "yayin" (Discord/OBS yayını: hep hafif;
-    # taslak çeviri 2 çekirdek, sokak dinlemede hafif model), "normal" (hiç kısmaz).
+    # taslak çeviri 2 çekirdek, sokak dinlemede hafif model), "oyun" (oyun bu bilgisayarda: hep hafif,
+    # ekran kartı doluysa yoğun kısma; aşağıdaki game_* ayarları), "normal" (hiç kısmaz).
     performance_mode: str = "auto"
+    # Yalnızca "oyun" modunda. Yerel dil modeli (Ollama): "kapali" (yüklenmez, ekran kartı belleği oyuna
+    # kalır; taslak çeviri son çeviri olur — 8 GB kartta önerilen), "gpu" (bugünkü gibi ekran kartında;
+    # oyunla belleği paylaşır), "cpu" (işlemcide: belleği boşaltır ama satır başına birkaç sn, işlemciyi yorar).
+    game_llm: str = "kapali"
+    # Yalnızca "oyun" modunda. RapidOCR: "cpu" (ekran kartı oyuna kalır) | "auto" (ocr_device ayarı geçerli).
+    game_ocr_device: str = "cpu"
     # Altyazı ekrandayken yalnızca yazının alanı değişince yeniden oku (ekran kartı/işlemci dil
     # modeline ve çeviriye kalır). Yine de en geç bu kadar ms'de bir yeniden okunur.
     change_detection: bool = True

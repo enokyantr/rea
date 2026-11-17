@@ -13,10 +13,11 @@ import numpy as np
 from . import config as config_mod
 from . import contrast, imageproc, reader, textproc, win32
 from .config import EXTRA_REGION_KEYS, EXTRA_REGION_LABELS, Config, Region
-from .geometry import Rect, fit_aspect, intersect, region_to_screen, screen_to_region, union
+from .geometry import Rect, choose_target, fit_aspect, intersect, region_to_screen, screen_to_region, union
 from . import ocr as ocr_mod
 from .ocr import OcrUnavailable, WindowsOcr
 from .hybrid import DRAFT, FINAL, HybridTranslator
+from .fullscreen import HINT as FULLSCREEN_HINT, FlatCaptureWatch, is_flat
 
 # Görüntü aynı kalsa bile bu kadar karede bir OCR tekrarlanır; altyazı belirirken (fade-in)
 # yapılmış eksik bir okumada takılı kalmamak için.
@@ -98,6 +99,10 @@ class Pipeline(threading.Thread):
         self.last_read_at = 0.0
         self.engine_name = ""
         self.last_visible_at = 0.0  # ana altyazı en son ne zaman ekrandaydı (sokak dinleme için)
+        # RapidOCR'ın yeri (oyun modu işlemciye alabilir; None: cfg.ocr_device). Menü için hedef pencere.
+        self.ocr_device: str | None = None
+        self.window_title: str | None = None
+        self.fullscreen_hint = False  # özel tam ekran şüphesi (bir kez uyarıldı)
 
     def _on_show(self, event: textproc.Show) -> None:
         self.seq += 1
@@ -185,6 +190,23 @@ class Pipeline(threading.Thread):
         lines = [f"{n}\t{q:.0f}\t{t}" for n, t, q in result.candidates] + [f"seçilen\t{result.variant}\t{result.text}"]
         stem.with_suffix(".txt").write_text("\n".join(lines), encoding="utf-8")
 
+    def _check_fullscreen(self, watch: FlatCaptureWatch, sct, frame: np.ndarray, found: bool, tick: float) -> None:
+        """Hedef pencere varken yakalanan görüntü sürekli tek renkse (özel tam ekran) bir kez uyar.
+        Pencerenin ortası yalnızca okuma bölgesi tek renkken yakalanır (saniyede en fazla bir küçük kare)."""
+        flat = False
+        if found and is_flat(frame):
+            b = self.base
+            try:
+                center = np.asarray(sct.grab({"left": b.left + b.width // 4, "top": b.top + b.height * 3 // 8,
+                                              "width": max(1, b.width // 2), "height": max(1, b.height // 4)}))
+                flat = is_flat(center)
+            except Exception:
+                flat = False
+        if watch.feed(flat, found, tick):
+            self.fullscreen_hint = True
+            log(FULLSCREEN_HINT)
+            self.ui.put(("error", self.region_name, FULLSCREEN_HINT))
+
     def run(self) -> None:
         import mss
 
@@ -195,7 +217,7 @@ class Pipeline(threading.Thread):
         if self.stopped.is_set():
             return
         try:
-            ocr = ocr_mod.create(self.cfg)
+            ocr = ocr_mod.create(self.cfg, self.ocr_device)
         except OcrUnavailable as exc:
             self.ui.put(("fatal", str(exc)))
             return
@@ -222,6 +244,8 @@ class Pipeline(threading.Thread):
         last_region: Rect | None = None
         last_base_check = 0.0
         last_window_title: str | None = None
+        flat_watch = FlatCaptureWatch() if self.region_name == MAIN else None
+        last_flat_check = 0.0
         screen = win32.virtual_screen()
         interval = cfg.capture_interval_ms / 1000
         confirm_delay = min(interval, cfg.confirm_delay_ms / 1000)
@@ -270,7 +294,7 @@ class Pipeline(threading.Thread):
                     title = found[0] if found else None
                     if title != last_window_title and self.region_name == MAIN:
                         log(f"Hedef pencere: {title}" if title else "Hedef pencere bulunamadı, ana ekran kullanılıyor")
-                    last_window_title = title
+                    last_window_title = self.window_title = title
                     self.base = fit_aspect(found[1], cfg.video_aspect) if found else win32.primary_screen()
 
                 region = region_to_screen(spec, self.base)
@@ -292,6 +316,10 @@ class Pipeline(threading.Thread):
                     log(f"Ekran yakalanamadı: {exc}")
                     time.sleep(0.5)
                     continue
+
+                if flat_watch is not None and tick - last_flat_check >= 1.0:
+                    last_flat_check = tick
+                    self._check_fullscreen(flat_watch, sct, frame, last_window_title is not None, tick)
 
                 def crop(r: Rect) -> np.ndarray | None:
                     part = intersect(r, zone)
@@ -464,11 +492,14 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
     overlays[STREET] = Overlay(root, cfg, "adaptive")
     pipelines[STREET] = StreetListener(cfg, STREET, lambda: tts["recorder"], make_translator(), ui,
                                        lambda a, b: street_blocked(a, b), log)
-    from .perf import LoadMonitor
+    from .perf import LoadMonitor, game_policy
 
     load = LoadMonitor(cfg, log)
+    ocr_device = game_policy(cfg).ocr_device  # oyun modu: OCR işlemcide (ekran kartı oyuna kalır)
     for p in pipelines.values():
         p.load = load
+        if isinstance(p, Pipeline):
+            p.ocr_device = ocr_device
     history = HistoryPanel(root, cfg)
     entries: list[dict] = []  # son satırlar: {"key": (bölge, seq), "label", "en", "tr"}
     state = {"welcome": True, "picking": False, "paused": False, "restart": False, "save_pending": False}
@@ -701,6 +732,13 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
             cfg.set_extra(name, Region(**vars(preset)))
             cfg.extra(name).enabled = True
         log(f"{REGION_LABELS[name]} bölgesi hazır konuma alındı")
+        save_soon()
+
+    def set_target_window(choice: str) -> None:
+        """Menüden seçilen oyun penceresi (boş: varsayılanlar, ACTIVE: öndeki pencere). Okuma döngüleri
+        hedefi saniyede bir yeniden aradığı için hemen geçerli olur."""
+        cfg.window_titles = choose_target(list(cfg.window_titles), choice)
+        log("Hedef pencere ayarı: " + ", ".join(cfg.window_titles))
         save_soon()
 
     def toggle_original() -> None:
@@ -951,8 +989,12 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
             return rows
 
         def engine_rows(self) -> list[tuple[str, str]]:
-            rows = [("Yük", load.describe()),
-                    ("OCR", pipelines[MAIN].engine_name or "henüz başlatılmadı")]
+            main = pipelines[MAIN]
+            target = main.window_title or "bulunamadı (ana ekran okunuyor)"
+            if main.fullscreen_hint:
+                target += " · görüntü siyah: oyunda kenarlıksız pencere seçin"
+            rows = [("Hedef pencere", target), ("Yük", load.describe()),
+                    ("OCR", main.engine_name or "henüz başlatılmadı")]
             rows += list(engine_info or [])
             speaker = tts["speaker"]
             rows.append(("Dublaj", f"açık ({speaker.voice_in_use})" if speaker else "kapalı"))
@@ -965,6 +1007,12 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
 
         def last_line(self) -> tuple[str, str, str]:
             return last_line["en"], last_line["tr"], last_line["info"]
+
+        def window_choices(self) -> list[str]:
+            return win32.window_choices()
+
+        def set_target_window(self, choice: str) -> None:
+            set_target_window(choice)
 
         def set_region_enabled(self, name: str, enabled: bool) -> None:
             set_region_enabled(name, enabled)

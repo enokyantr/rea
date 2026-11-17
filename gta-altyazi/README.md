@@ -189,6 +189,35 @@ yalnızca küfür/argo satırlarında kullanılır.
   ayrı bir pencerede). Menüyü yayından önce Ctrl+Alt+M ile gizleyin ya da ikinci ekrana taşıyın.
 - Sesli paylaşımda dublaj da arkadaşlarınıza gider.
 
+### PC oyunlarında (oyun aynı bilgisayarda)
+
+Program yalnızca Remote Play/chiaki-ng ile değil, bu bilgisayarda çalışan her oyunla kullanılabilir:
+
+- **Oyunu "Kenarlıksız pencere (borderless windowed)" modunda açın** (oyunun görüntü ayarları).
+  Özel tam ekranda (exclusive fullscreen) Windows ekran yakalamasına siyah görüntü verir ve Türkçe
+  yazı oyunun üstünde görünmez. Program hedef pencere açıkken görüntü ~8 sn boyunca hep siyah/tek
+  renk kalırsa bunu bir kez kayda ve menüye (Durum > Motorlar > Hedef pencere) yazar.
+- Menü > **OCR ve hız > Oyun penceresini seç**: açık pencerelerden oyunu seçin (hemen geçerli; seçilen
+  başlık `window_titles` listesinin başına yazılır, Remote Play/chiaki-ng yedek olarak kalır).
+  **"Öndeki pencere"** seçeneği o an öndeki pencereyi okur (menü ve programın kendi pencereleri hariç;
+  menüyü açınca son öndeki pencere kalır). **"PS Remote Play / chiaki-ng (varsayılan)"** eski hâline döner.
+  Okunan pencere: Durum > Motorlar > Hedef pencere.
+- Menü > OCR ve hız > Performans: **oyun** ve "Kaydet ve yeniden başlat":
+  - Hep en az hafif kısma; ekran kartı 3 sn %90+ doluysa ya da boş belleği 700 MB'ın altına düşerse
+    yoğun kısma (ekran 100 ms'de bir, iki OCR arası en az 250 ms, sokak dinleme durur). Altyazı ekranda
+    1-2 sn kaldığı için yeterli; gecikme ayarlardan hesapla en fazla ~0,1-0,35 sn artar (ölçülmedi). Ekran kartı ölçümü için `nvidia-ml-py`
+    gerekir (`guncelle.bat` kurar); yoksa yalnızca işlemciye bakılır. Ölçümler: Durum > Motorlar > Yük.
+  - **Yerel dil modeli: kapali** (varsayılan): 8B dil modeli (~5-6 GB) yüklenmez, önceki oturumdan
+    Ollama'da yüklü kaldıysa boşaltılır; 8 GB kartta oyunla aynı anda sığmaz (oyun takılır ya da model
+    yavaşlar). Taslak çeviri (işlemcide, ~0,1 sn) son çeviri olur: küfür/argo çevirisi daha zayıf.
+    `gpu`: eskisi gibi ekran kartında (12 GB+ kart ya da hafif oyun). `cpu`: model işlemcide
+    (bellek boşalır ama satır başına birkaç saniye ve işlemci yükü; ağır oyunda önerilmez).
+  - **OCR: cpu** (varsayılan): RapidOCR ekran kartı yerine işlemcide çalışır (oyun ekran kartını
+    doldururken DirectML okumaları oyunun karelerini beklemesin ve oyundan pay almasın); `auto`: OCR nerede çalışsın ayarı geçerli.
+  - Taslak çeviri her zaman işlemcide, 2 çekirdekle.
+- Başka bir modda (auto/yayin/normal) başlatırken ekran kartında dil modeline yetecek boş bellek
+  yoksa kayda "Performans: oyun" önerisi yazılır; davranış değişmez.
+
 ### Oyun günü: sorun çıkarsa
 
 - **`guvenli_baslat.bat`**: yalnızca altyazı açılır; dublaj, sokak konuşmaları ve önceden çeviri
