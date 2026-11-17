@@ -58,3 +58,11 @@ def test_confident_read_is_not_retried():
     eng.calls = 1  # ilk çağrı "emin" dalına düşsün
     result = reader.read_text(_gray(), eng.recognize, Config(), True, eng)
     assert eng.calls == 2 and result.variant == "ham"
+
+
+def test_retry_threshold_follows_config():
+    eng = Engine()
+    eng.calls = 1  # ham okuma güveni 0.97
+    cfg = Config(ocr_retry_confidence=0.98)  # "düşük kalite": 0.97 bile yeniden denenir
+    reader.read_text(_gray(), eng.recognize, cfg, True, eng)
+    assert eng.calls > 2

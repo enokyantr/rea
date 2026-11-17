@@ -203,7 +203,9 @@ OCR doğruluğunu en çok akış kalitesi belirler (benzetim, 120 satır: 1080p'
 - Codec **H.265 (HEVC)** ve donanım çözücü (ekran kartı): aynı bit hızında daha net yazı.
 - Mümkünse PS5'i kabloyla (Ethernet) bağlayın; Wi-Fi'de 5 GHz.
 
-Akış yine de bulanık/bloklu kalıyorsa menü → **OCR ve hız → Akış kalitesi: Düşük** seçin. Okuma
+Akış yine de bulanık/bloklu kalıyorsa menü → **OCR ve hız → Akış kalitesi: Düşük** seçin
+(daha soluk yazı da aranır ve emin olunmayan okumalar daha sık yeniden denenir: benzetimde 720p'de
+tam doğru satır 55 -> 68/120, okuma başına ~+70 ms). Okuma
 emin değilken program görüntünün keskinleştirilmiş ve kumlanması süzülmüş hâllerini de okuyup en
 iyisini seçer (bu her zaman açık; iyi görüntüde ek iş yapılmaz).
 

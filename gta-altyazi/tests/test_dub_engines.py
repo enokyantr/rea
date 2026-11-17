@@ -364,7 +364,7 @@ def test_same_character_with_other_emotion_waits_for_right_tone_only_briefly():
 
 def test_edge_fast_stops_downloading_a_discarded_stream():
     import asyncio
-    import aiohttp
+    aiohttp = pytest.importorskip("aiohttp")  # edge-tts ile kurulur; yoksa test atlanır
     from altyazi.edge_fast import EdgeFast
     from altyazi.tts import _EdgeStream
 

@@ -334,7 +334,8 @@ class ControlPanel:
         r = self._spin(card, r, "Altyazı gidince Türkçe kaç ms sonra silinsin", "clear_after_ms", 200, 3000, 100,
                        restart=True)
 
-    QUALITY = {"Normal (1080p, iyi bağlantı)": 190, "Düşük (chiaki-ng / 720p ve altı)": 170}
+    # ad -> (parlak yazı eşiği, ek okuma güven eşiği). Düşük: doğruluk öncelikli (okuma başına ~+70 ms).
+    QUALITY = {"Normal (1080p, iyi bağlantı)": (190, 0.90), "Düşük (chiaki-ng / 720p ve altı)": (170, 0.95)}
 
     def _quality(self, f, r):
         """Akış kalitesi: düşükte sıkıştırılmış/bulanık yazı daha düşük parlaklıkta da aranır
@@ -344,7 +345,7 @@ class ControlPanel:
         var = tk.StringVar(value=names[1] if self.cfg.bright_threshold <= 175 else names[0])
 
         def commit(_=None):
-            self.cfg.bright_threshold = self.QUALITY[var.get()]
+            self.cfg.bright_threshold, self.cfg.ocr_retry_confidence = self.QUALITY[var.get()]
             self._changed(False, False)
 
         cb = ttk.Combobox(f, textvariable=var, values=names, width=30, state="readonly")

@@ -97,7 +97,7 @@ def read_text(gray: np.ndarray, recognize: Callable[[np.ndarray], list[str]], cf
         # Uzun ve temiz okuma kazanır; kısmi okuma ("Go to") tam okumayı yenemez.
         if best_score is None or score > best_score:
             best_score, result.text, result.variant, best_engine_state = score, text, name, state
-        if raw and name == "ham" and state is not None and state[0] is not None and state[0] < LOW_CONFIDENCE:
+        if raw and name == "ham" and state is not None and state[0] is not None and state[0] < getattr(cfg, "ocr_retry_confidence", LOW_CONFIDENCE):
             # Düşük kaliteli akış (chiaki-ng / zayıf bağlantı): motor emin değil. Bulanık yazıda
             # keskinleştirme, bloklu/kumlu yazıda medyan süzgeci okumayı belirgin düzeltiyor.
             options += [("keskin", lambda: imageproc.sharpen(gray)), ("medyan", lambda: imageproc.median3(gray))]
@@ -116,7 +116,8 @@ def read_text(gray: np.ndarray, recognize: Callable[[np.ndarray], list[str]], cf
     return result
 
 
-# RapidOCR'ın en düşük kutu güveni bunun altındaysa görüntünün süzülmüş hâlleri de okunur.
+# RapidOCR'ın en düşük kutu güveni bunun altındaysa görüntünün süzülmüş hâlleri de okunur
+# (varsayılan; config.ocr_retry_confidence ile değişir).
 LOW_CONFIDENCE = 0.90
 
 

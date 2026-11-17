@@ -142,6 +142,10 @@ class Config:
     # RapidOCR okumadan bu kadar eminse (0..1) doğrulama okuması beklenmeden gösterilir.
     # 1.0 = her zaman doğrula (eski davranış, ~100-350 ms daha geç).
     fast_accept_confidence: float = 0.93
+    # RapidOCR okumadan bu kadar emin değilse görüntünün keskinleştirilmiş ve medyan süzgeçli hâlleri
+    # de okunur, en iyisi seçilir. Benzetim (120 satır, işlemci): 0.90 -> 0.95 tam doğru satır 1080p'de
+    # 89 -> 100, 720p'de 55 -> 68; okuma başına +60-80 ms. Menüdeki "Akış kalitesi: Düşük" 0.95 yapar.
+    ocr_retry_confidence: float = 0.90
     # Performans: "auto" (bilgisayar zorlanınca kendini kısar), "yayin" (Discord/OBS yayını: hep hafif;
     # taslak çeviri 2 çekirdek, sokak dinlemede hafif model), "normal" (hiç kısmaz).
     performance_mode: str = "auto"
