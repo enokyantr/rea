@@ -7,6 +7,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import threading
 
 import requests
 
@@ -125,6 +126,10 @@ class OllamaUnavailable(RuntimeError):
     pass
 
 
+class Cancelled(RuntimeError):
+    """Önceden çeviri isteği artık gerekmiyor (yanlış okuma/yeni satır): üretim yarıda kesildi."""
+
+
 def _find_ollama() -> str | None:
     import os
     import shutil
@@ -144,6 +149,8 @@ class OllamaBackend:
     """Ollama'daki bir modelle çeviri. `translate` iş parçacığı güvenlidir (HTTP isteği)."""
 
     name = "Yerel LLM"
+    # translate(..., cancel=Event) destekler: önceden çeviri boşa çıkınca ekran kartı hemen boşalır.
+    cancellable = True
 
     def __init__(self, model: str, url: str = "http://127.0.0.1:11434", timeout_s: float = 10.0,
                  uncensored: bool = True, glossary: dict[str, str] | None = None, keep_alive: str = "60m",
@@ -266,7 +273,10 @@ class OllamaBackend:
 
     # --- çeviri ------------------------------------------------------------------------------
 
-    def _chat(self, user: str, timeout: float, num_predict: int = 120, history=()) -> str:
+    def _chat(self, user: str, timeout: float, num_predict: int = 120, history=(),
+              cancel: threading.Event | None = None) -> str:
+        # İstem sırası sabit önek + değişen kuyruk: sistem talimatı ve örnekler her istekte birebir aynı
+        # (Ollama bu öneki önbellekten kullanır), sohbet geçmişi ve yeni satır en sonda.
         messages = [{"role": "system", "content": self._system}]
         for context, src, dst in self._examples:
             messages.append({"role": "user", "content": _user_message(context, src)})
@@ -277,26 +287,43 @@ class OllamaBackend:
             messages.append({"role": "user", "content": _user_message(None, src)})
             messages.append({"role": "assistant", "content": dst})
         messages.append({"role": "user", "content": user})
-        r = self._http.post(f"{self._url}/api/chat", timeout=timeout, json={
+        body = {
             "model": self.model,
             "messages": messages,
-            "stream": False,
+            # İptal edilebilir istek akış olarak alınır: bağlantı kapatılınca Ollama üretimi durdurur.
+            "stream": cancel is not None,
             "keep_alive": self._keep_alive,  # model GPU'da kalsın, her satırda yeniden yüklenmesin
             "options": {"temperature": 0.1, "num_predict": num_predict, "num_ctx": self._num_ctx},
-        })
-        if r.status_code == 404:
-            raise OllamaUnavailable(f"Ollama'da '{self.model}' modeli yok (ollama pull {self.model})")
-        if r.status_code >= 400:
-            try:
-                detail = r.json().get("error", r.text)
-            except ValueError:
-                detail = r.text
-            hint = (" — ekran kartı belleği yetmiyor olabilir; daha küçük bir model deneyin"
-                    if "memory" in detail.lower() or "cuda" in detail.lower() else "")
-            raise OllamaUnavailable(f"Ollama hatası ({r.status_code}): {detail.strip()[:300]}{hint}")
-        return r.json().get("message", {}).get("content", "")
+        }
+        with self._http.post(f"{self._url}/api/chat", timeout=timeout, json=body,
+                             stream=cancel is not None) as r:
+            if r.status_code == 404:
+                raise OllamaUnavailable(f"Ollama'da '{self.model}' modeli yok (ollama pull {self.model})")
+            if r.status_code >= 400:
+                try:
+                    detail = r.json().get("error", r.text)
+                except ValueError:
+                    detail = r.text
+                hint = (" — ekran kartı belleği yetmiyor olabilir; daha küçük bir model deneyin"
+                        if "memory" in detail.lower() or "cuda" in detail.lower() else "")
+                raise OllamaUnavailable(f"Ollama hatası ({r.status_code}): {detail.strip()[:300]}{hint}")
+            if cancel is None:
+                return r.json().get("message", {}).get("content", "")
+            parts: list[str] = []
+            for raw in r.iter_lines():
+                if cancel.is_set():
+                    raise Cancelled("önceden çeviri iptal edildi")  # `with` bağlantıyı kapatır
+                if not raw:
+                    continue
+                event = json.loads(raw)
+                if "error" in event:
+                    raise OllamaUnavailable(f"Ollama hatası: {str(event['error']).strip()[:300]}")
+                parts.append(event.get("message", {}).get("content", ""))
+                if event.get("done"):
+                    break
+            return "".join(parts)
 
-    def translate(self, text: str, context: str | None) -> str:
+    def translate(self, text: str, context: str | None, cancel: threading.Event | None = None) -> str:
         # Bağlam: her zaman (use_context) ya da yalnızca satır öncekinin devamıysa ("or lawyer she
         # fucking with." gibi yarım cümleler bağlamsız yanlış çevriliyordu).
         history = getattr(context, "history", ())
@@ -307,7 +334,7 @@ class OllamaBackend:
         # Çıktı sınırı: Türkçe satır İngilizceden çok uzun olmaz; model açıklamaya başlarsa erken kesilir.
         limit = min(120, 24 + 4 * len(text.split()))
         out = clean_output(self._chat(_user_message(context, text), timeout=self._timeout, num_predict=limit,
-                                      history=history))
+                                      history=history, cancel=cancel))
         if not out:
             raise RuntimeError("Yerel LLM boş yanıt verdi")
         if is_meta_reply(out):  # hata sayılır: taslak çeviri ekranda kalır, önbelleğe girmez

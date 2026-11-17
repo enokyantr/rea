@@ -27,6 +27,9 @@ DRAFT_YIELD_S = 0.4
 DIALOGUE_GAP_S = 45.0
 # Yazı kutusu haritasında bu oranda hücre değişirse satır değişmiş sayılır (sıkıştırma gürültüsü ~%1).
 BOX_TOLERANCE = 0.03
+# Önceden çeviri: doğrulama okuması beklenmeden, OCR bu kadar eminse ve tüm kelimeler sözlükteyse
+# son çeviri (LLM) ilk okumada başlatılır. Doğrulanan satır farklı çıkarsa sonuç kullanılmaz.
+PREFETCH_CONFIDENCE = 0.85
 
 
 def log(msg: str) -> None:
@@ -141,14 +144,25 @@ class Pipeline(threading.Thread):
             self._dialogue.append((english, turkish, time.monotonic()))
         del self._dialogue[:-max(1, self.cfg.dialogue_lines)]
 
-    def _dialogue_context(self, now: float) -> textproc.Dialogue | None:
-        """Son satırlar; DIALOGUE_GAP_S'den uzun sessizlik yeni sahne sayılır, geçmiş sıfırlanır."""
-        if self._dialogue and now - self._dialogue[-1][2] > DIALOGUE_GAP_S:
-            self._dialogue.clear()
-        if not self.cfg.context_translation or not self._dialogue:
+    def _dialogue_context(self, now: float, clear: bool = True) -> textproc.Dialogue | None:
+        """Son satırlar; DIALOGUE_GAP_S'den uzun sessizlik yeni sahne sayılır, geçmiş sıfırlanır.
+        `clear=False`: geçmişe dokunmadan aynı bağlamı üretir (önceden çeviri, çeviri iş parçacığında)."""
+        dialogue = list(self._dialogue)
+        if dialogue and now - dialogue[-1][2] > DIALOGUE_GAP_S:
+            dialogue = []
+            if clear:
+                self._dialogue.clear()
+        if not self.cfg.context_translation or not dialogue:
             return textproc.Dialogue(self._previous_source) if self._previous_source else None
-        history = [(en, tr) for en, tr, _ in self._dialogue]
+        history = [(en, tr) for en, tr, _ in dialogue]
         return textproc.Dialogue(self._previous_source or history[-1][0], history)
+
+    def _prefetch(self, text: str, first_seen: float, draft: bool) -> None:
+        """Doğrulanmamış ama güvenilir okumanın çevirisini şimdiden başlat (bkz. HybridTranslator.prefetch).
+        Bağlam, `_on_show`'daki gibi üretilir; istem ve önbellek anahtarı birebir aynı olsun."""
+        if self.translator.prefetch(text, lambda: self._dialogue_context(first_seen, clear=False),
+                                    draft=draft) and self.debug:
+            log(f"{self._tag}önceden çeviri: {text!r}")
 
     def _read_text(self, ocr, gray: np.ndarray) -> reader.ReadResult:
         result = reader.read_text(gray, ocr.recognize, self.cfg, ocr.raw_input, ocr)
@@ -216,6 +230,7 @@ class Pipeline(threading.Thread):
                 if self.reset.is_set():
                     self.reset.clear()
                     self.seq += 1  # bekleyen/gelmekte olan çeviriler geçersiz
+                    self.translator.cancel_prefetch()
                     stab.reset()
                     last_sig, last_text, reused, last_box = None, "", 0, None
                 if self._retry.is_set() and tick >= self._retry_not_before:
@@ -240,6 +255,7 @@ class Pipeline(threading.Thread):
                     if last_region is not None:
                         last_region = None
                         self.seq += 1
+                        self.translator.cancel_prefetch()
                         stab.reset()
                         self.ui.put(("region", self.region_name, None))
                     time.sleep(0.2)
@@ -320,7 +336,7 @@ class Pipeline(threading.Thread):
                     text = last_text
                     if text:
                         self.last_visible_at = tick
-                    confident = False  # yeni okuma değil: hızlı kabul sayılmaz
+                    confident = speculate = False  # yeni okuma değil: hızlı kabul sayılmaz
                     reused += 1
                 else:
                     reused = 0
@@ -330,8 +346,11 @@ class Pipeline(threading.Thread):
                     text = result.text
                     if text:
                         self.last_visible_at = tick
-                    confident = (bool(text) and (result.confidence or 0.0) >= cfg.fast_accept_confidence
-                                 and textproc.all_words_known(text))
+                    conf = result.confidence or 0.0
+                    known = (bool(text) and conf >= min(cfg.fast_accept_confidence, PREFETCH_CONFIDENCE)
+                             and textproc.all_words_known(text))
+                    confident = known and conf >= cfg.fast_accept_confidence
+                    speculate = known and conf >= PREFETCH_CONFIDENCE
                     if result.center_x is not None and text:
                         self._center_x = round(origin.left + result.center_x)
                     if self.debug and text != last_text:
@@ -350,7 +369,13 @@ class Pipeline(threading.Thread):
                     self._on_show(event)
                 elif isinstance(event, textproc.Clear):
                     self.seq += 1
+                    self.translator.cancel_prefetch()
                     self.ui.put(("clear", self.region_name))
+                elif (speculate and stab.pending
+                      and (stab.shown is None or not textproc.same_line(text, stab.shown, cfg.similarity))):
+                    # Yeni satır doğrulanmayı bekliyor: çeviriyi şimdiden başlat. Taslak yalnızca OCR
+                    # ekran kartındaysa (işlemcide OCR, taslak sürerken bekletiliyor).
+                    self._prefetch(text, tick, draft=ocr_on_gpu)
 
                 # Doğrulanmayı bekleyen satır varsa hemen tekrar oku; yoksa normal kare aralığı.
                 interval = self.load.capture_interval_s

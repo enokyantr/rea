@@ -162,9 +162,9 @@ class CachedTranslator:
                     except (ValueError, KeyError, TypeError):
                         continue  # bozuk satırı atla, kalan önbellek kullanılabilir
 
-    def _key(self, text: str, namespace: str | None = None) -> str:
+    def key(self, text: str, namespace: str | None = None) -> str:
         """Anahtar, arka ucun o anki ayarlarını (sözlük, sansürsüz talimat) içerir; ayar değişince
-        eski çeviriler kullanılmaz."""
+        eski çeviriler kullanılmaz. Önceden çeviri (hybrid.prefetch) de aynı anahtarla eşleştirir."""
         if namespace is None:
             namespace = getattr(self._backend, "cache_namespace", lambda: "")()
         key = " ".join(text.split()).casefold()
@@ -172,23 +172,38 @@ class CachedTranslator:
 
     def cached(self, text: str) -> str | None:
         with self._lock:
-            return self._cache.get(self._key(text))
+            return self._cache.get(self.key(text))
 
-    def translate(self, text: str, context: str | None = None) -> str:
-        key = self._key(text)
+    def translate_uncommitted(self, text: str, context: str | None = None,
+                              cancel: threading.Event | None = None) -> tuple[str, str]:
+        """Çevirir ama önbelleğe yazmaz: (anahtar, çeviri). Önceden yapılan (spekülatif) çeviri
+        yalnızca gerçekten kullanılırsa `commit` ile kaydedilir; yanlış okumalar önbelleği kirletmez.
+        `cancel`: arka uç destekliyorsa (`cancellable`) kurulunca istek yarıda kesilir."""
+        key = self.key(text)
         with self._lock:
             hit = self._cache.get(key)
         if hit is not None:
-            return hit
-        translated = self._backend.translate(text, context)
+            return key, hit
+        if cancel is not None and getattr(self._backend, "cancellable", False):
+            translated = self._backend.translate(text, context, cancel=cancel)
+        else:
+            translated = self._backend.translate(text, context)
         # Çeviri sırasında ayar geri çekilmiş olabilir (ör. talimat reddedildi): çevirinin
         # gerçekte hangi ayarla yapıldığını kaydet.
-        key = self._key(text)
+        return self.key(text), translated
+
+    def commit(self, key: str, translated: str) -> None:
         with self._lock:
+            if self._cache.get(key) == translated:
+                return  # zaten kayıtlı: dosyaya tekrar yazma
             self._cache[key] = translated
             if self._cache_path is not None:
                 with self._cache_path.open("a", encoding="utf-8") as fh:
                     fh.write(json.dumps({"src": key, "tr": translated}, ensure_ascii=False) + "\n")
+
+    def translate(self, text: str, context: str | None = None) -> str:
+        key, translated = self.translate_uncommitted(text, context)
+        self.commit(key, translated)
         return translated
 
     def __len__(self) -> int:
