@@ -1,0 +1,519 @@
+# Genel oyun terimleri sözlüğü (İngilizce = Türkçe)
+#
+# Amaç: Aksiyon, RPG, nişancı ve açık dünya oyunlarının altyazılarında geçen yerleşik oyun
+# terimlerinin Türk oyuncuların alıştığı karşılıklarla ve her satırda aynı biçimde çevrilmesi.
+#
+# Nasıl çalışır:
+# - Her satır:  İngilizce terim = Türkçe karşılık. "#" ile başlayan satırlar yorumdur.
+# - Bir terim yalnızca çevrilen altyazı satırında o terim (tam kelime/ifade olarak) geçtiğinde
+#   uygulanır; geçmeyen terimlerin çeviriye etkisi yoktur.
+# - Kullanıcının kendi sozluk.txt dosyasındaki aynı terim buradaki karşılığın önüne geçer.
+#   Bir karşılığı beğenmezseniz sozluk.txt'ye kendi satırınızı yazmanız yeterlidir.
+# - Gündelik konuşmada birden çok anlamı olan tek kelimeler (ör. "level", "boss", "drop",
+#   "kill", "map", "run", "score", "health", "lobby", "reload", "dodge", "overtime") bilerek
+#   eklenmedi; bunlar yalnızca anlamı netleştiren kalıpların içinde yer alır.
+# - "HP" (beygir gücü), "MP" (askerî inzibat), "OP" (operasyon), "AI" bilerek eklenmedi:
+#   diyalogda oyun dışı anlamlarıyla da sık geçer.
+# - Türk oyuncuların İngilizcesiyle kullandığı kısaltmalar ve kalıplar (DLC, XP, NPC, PvP, HUD,
+#   "boss" içeren ifadeler, "co-op", "battle royale") olduğu gibi bırakıldı.
+# - Hakaret/argo karşılıkları bu dosyada yoktur.
+#
+# Kaynaklar ve lisanslar:
+# - SuperTuxKart Türkçe çevirisi (data/po/tr.po), GPL-3.0-or-later:
+#   https://github.com/supertuxkart/stk-code/blob/master/data/po/tr.po
+#   Karşılaştırma için kullanıldı. Şu karşılıklar bu çeviriyle aynıdır: multiplayer = çok oyunculu,
+#   capture the flag = bayrağı yakala, friend request = arkadaşlık isteği.
+# - Luanti (eski adıyla Minetest) Türkçe çevirisi (po/tr/luanti.po), LGPL-2.1-or-later:
+#   https://github.com/luanti-org/luanti/blob/master/po/tr/luanti.po
+#   Karşılaştırma için kullanıldı. Şu karşılıklar bu çeviriyle aynıdır: inventory = envanter,
+#   single-player = tek oyunculu, minimap = mini harita, mouse sensitivity = fare hassasiyeti,
+#   game paused = oyun duraklatıldı, join game = oyuna katıl.
+# - Xonotic Türkçe çevirisi (common.tr.po), GPL-3.0-or-later:
+#   https://github.com/xonotic/xonotic-data.pk3dir/blob/master/common.tr.po
+#   Karşılaştırma için kullanıldı. Şu karşılıklar bu çeviriyle aynıdır: checkpoint = kontrol
+#   noktası, friendly fire = dost ateşi, out of ammo = cephane kalmadı, sudden death = ani ölüm,
+#   kill-death ratio = öldürme-ölme oranı, warmup round = ısınma turu (Xonotic: "ısınma").
+# - Battle for Wesnoth Türkçe çevirisi (po/wesnoth/tr.po), GPL-2.0-or-later:
+#   https://github.com/wesnoth/wesnoth/blob/master/po/wesnoth/tr.po
+#   Karşılaştırma için kullanıldı. Aynı olan karşılık: game over = oyun bitti.
+# - Yukarıdaki dört projenin dosyalarından toplu kopyalama yapılmadı; yalnızca yukarıda sayılan
+#   kısa ve yaygın terim eşleşmeleri kaynak gösterilerek alındı. Diğer bütün satırlar bu dosya
+#   için ayrıca derlendi.
+# - Mobidictum "Oyuncular İçin Terimler Sözlüğü" ve "Oyun sektörü terimleri ve kısaltmaları
+#   sözlüğü" (lisans belirtilmemiş, tüm hakları saklı varsayıldı):
+#   https://mobidictum.com/tr/oyun-sektoru-terimleri-ve-kisaltmalari-sozlugu/
+#   Yalnızca yaygın kullanımı doğrulamak için bakıldı (cooldown, loot = ganimet); içerik kopyalanmadı.
+# - Microsoft Terminology Collection / Microsoft Language Portal (Microsoft kullanım koşulları):
+#   https://learn.microsoft.com/en-us/globalization/reference/microsoft-terminology
+#   Kısıtlayıcı koşullar nedeniyle hiçbir terim kopyalanmadı.
+# - Ticari oyunların Türkçe yerelleştirmeleri (Steam arayüzü, Riot, Epic, Mojang vb.) telifli
+#   olduğundan kopyalanmadı; yalnızca yerleşik terim tercihleri (ör. başarım, dereceli maç,
+#   savaş bileti, çalışma masası, lonca) için genel kullanım örneği olarak dikkate alındı.
+
+# --- Arayüz ve menüler ---
+main menu = ana menü
+pause menu = duraklatma menüsü
+game paused = oyun duraklatıldı
+options menu = seçenekler menüsü
+settings menu = ayarlar menüsü
+loading screen = yükleme ekranı
+title screen = başlangıç ekranı
+press any button = herhangi bir tuşa bas
+press any key = herhangi bir tuşa bas
+health bar = can barı
+stamina bar = dayanıklılık barı
+experience bar = deneyim barı
+progress bar = ilerleme çubuğu
+minimap = mini harita
+mini-map = mini harita
+HUD = HUD
+heads-up display = HUD
+crosshair = nişangah
+reticle = nişangah
+quest marker = görev işareti
+map marker = harita işareti
+objective marker = hedef işareti
+waypoint = yol noktası
+compass bar = pusula çubuğu
+weapon wheel = silah çarkı
+radial menu = dairesel menü
+dialogue wheel = diyalog çarkı
+dialogue option = diyalog seçeneği
+dialogue options = diyalog seçenekleri
+cutscene = ara sahne
+cutscenes = ara sahneler
+skip cutscene = ara sahneyi geç
+photo mode = fotoğraf modu
+field of view = görüş alanı
+frame rate = kare hızı
+mouse sensitivity = fare hassasiyeti
+aim sensitivity = nişan hassasiyeti
+invert Y-axis = Y eksenini ters çevir
+controller vibration = kumanda titreşimi
+key bindings = tuş atamaları
+keybindings = tuş atamaları
+difficulty level = zorluk seviyesi
+difficulty setting = zorluk ayarı
+easy mode = kolay mod
+normal mode = normal mod
+hard mode = zor mod
+story mode = hikâye modu
+game mode = oyun modu
+game modes = oyun modları
+tutorial level = eğitim bölümü
+tutorial mission = eğitim görevi
+quick time event = QTE
+quick-time event = QTE
+button prompt = tuş uyarısı
+
+# --- Kayıt ve ilerleme ---
+save point = kayıt noktası
+checkpoint = kontrol noktası
+checkpoint reached = kontrol noktasına ulaşıldı
+last checkpoint = son kontrol noktası
+autosave = otomatik kayıt
+auto-save = otomatik kayıt
+quicksave = hızlı kayıt
+quick save = hızlı kayıt
+quickload = hızlı yükleme
+quick load = hızlı yükleme
+save file = kayıt dosyası
+save slot = kayıt yuvası
+saved game = kayıtlı oyun
+load game = oyun yükle
+new game = yeni oyun
+new game plus = Yeni Oyun+
+New Game+ = Yeni Oyun+
+continue game = oyuna devam et
+game over = oyun bitti
+completion percentage = tamamlanma yüzdesi
+100% completion = %100 tamamlama
+achievement unlocked = başarım açıldı
+unlockable = açılabilir içerik
+unlockables = açılabilir içerikler
+end credits = jenerik
+post-credits scene = jenerik sonrası sahne
+point of no return = geri dönüşü olmayan nokta
+
+# --- Görevler ---
+main quest = ana görev
+main questline = ana görev serisi
+main story quest = ana hikâye görevi
+side quest = yan görev
+side quests = yan görevler
+sidequest = yan görev
+side mission = yan görev
+side missions = yan görevler
+main mission = ana görev
+story mission = hikâye görevi
+story missions = hikâye görevleri
+quest log = görev günlüğü
+quest giver = görev veren
+quest line = görev serisi
+questline = görev serisi
+quest item = görev eşyası
+quest reward = görev ödülü
+fetch quest = getir götür görevi
+escort mission = refakat görevi
+stealth mission = gizlilik görevi
+timed mission = süreli görev
+mission failed = görev başarısız
+mission passed = görev tamamlandı
+mission complete = görev tamamlandı
+mission completed = görev tamamlandı
+quest completed = görev tamamlandı
+quest complete = görev tamamlandı
+quest failed = görev başarısız
+mission objective = görev hedefi
+mission objectives = görev hedefleri
+new objective = yeni hedef
+objective updated = hedef güncellendi
+objective complete = hedef tamamlandı
+objective completed = hedef tamamlandı
+optional objective = isteğe bağlı hedef
+bonus objective = bonus hedef
+daily quest = günlük görev
+daily quests = günlük görevler
+daily challenge = günlük meydan okuma
+weekly challenge = haftalık meydan okuma
+side activity = yan aktivite
+side activities = yan aktiviteler
+random encounter = rastgele karşılaşma
+random event = rastgele olay
+
+# --- Açık dünya ve keşif ---
+open world = açık dünya
+open-world = açık dünya
+fast travel = hızlı seyahat
+fast-travel = hızlı seyahat
+fast travel point = hızlı seyahat noktası
+free roam = serbest dolaşım
+point of interest = ilgi noktası
+points of interest = ilgi noktaları
+fog of war = savaş sisi
+collectible = koleksiyon parçası
+collectibles = koleksiyon parçaları
+wanted level = aranma seviyesi
+safe house = güvenli ev
+safehouse = güvenli ev
+getaway car = kaçış aracı
+getaway driver = kaçış şoförü
+getaway vehicle = kaçış aracı
+stunt jump = akrobatik atlayış
+safe zone = güvenli bölge
+restricted area = yasak bölge
+spawn point = doğma noktası
+extraction point = tahliye noktası
+rally point = toplanma noktası
+dungeon = zindan
+day-night cycle = gece-gündüz döngüsü
+day and night cycle = gece-gündüz döngüsü
+dynamic weather = dinamik hava durumu
+draw distance = görüş mesafesi
+invisible wall = görünmez duvar
+
+# --- Savaş ---
+boss fight = boss savaşı
+boss battle = boss savaşı
+final boss = son boss
+mini-boss = mini boss
+miniboss = mini boss
+boss health bar = boss can barı
+headshot = kafadan vuruş
+headshots = kafadan vuruşlar
+critical hit = kritik vuruş
+critical hits = kritik vuruşlar
+critical damage = kritik hasar
+damage over time = zamana yayılan hasar
+area of effect = alan etkisi
+area-of-effect = alan etkili
+splash damage = alan hasarı
+melee attack = yakın dövüş saldırısı
+melee combat = yakın dövüş
+melee weapon = yakın dövüş silahı
+ranged attack = menzilli saldırı
+ranged weapon = menzilli silah
+heavy attack = ağır saldırı
+light attack = hafif saldırı
+charged attack = yüklü saldırı
+combo attack = kombo saldırı
+combo meter = kombo göstergesi
+parry = savuşturma
+perfect parry = kusursuz savuşturma
+dodge roll = kaçınma yuvarlanması
+stealth kill = gizli öldürme
+stealth takedown = gizli etkisiz hale getirme
+silent takedown = sessiz etkisiz hale getirme
+finishing move = bitirici hareket
+lock-on = hedefe kilitlenme
+lock on target = hedefe kilitlen
+aim down sights = nişangahtan nişan al
+iron sights = gez-arpacık
+hip fire = belden ateş
+hip-fire = belden ateş
+cover system = siper sistemi
+take cover = siper al
+friendly fire = dost ateşi
+hit marker = isabet göstergesi
+hitbox = hitbox
+hitboxes = hitbox'lar
+kill streak = öldürme serisi
+killstreak = öldürme serisi
+killing spree = öldürme serisi
+damage numbers = hasar sayıları
+damage multiplier = hasar çarpanı
+status effect = durum etkisi
+status effects = durum etkileri
+invincibility frames = dokunulmazlık kareleri
+i-frames = dokunulmazlık kareleri
+aggro = aggro
+enemy wave = düşman dalgası
+enemy waves = düşman dalgaları
+wave of enemies = düşman dalgası
+bullet time = bullet time
+health regeneration = can yenilenmesi
+health regen = can yenilenmesi
+health pack = sağlık paketi
+health packs = sağlık paketleri
+health kit = sağlık kiti
+medkit = ilk yardım çantası
+medkits = ilk yardım çantaları
+health potion = can iksiri
+healing potion = iyileştirme iksiri
+mana potion = mana iksiri
+stamina potion = dayanıklılık iksiri
+hit points = can puanı
+health points = can puanı
+out of ammo = cephane kalmadı
+ammo crate = cephane sandığı
+ammo box = cephane kutusu
+ammo count = cephane sayısı
+ammunition box = cephane kutusu
+ammo = cephane
+headshot multiplier = kafadan vuruş çarpanı
+one-hit kill = tek vuruşta öldürme
+instant kill = anında öldürme
+
+# --- Silahlar ve teçhizat ---
+assault rifle = saldırı tüfeği
+sniper rifle = keskin nişancı tüfeği
+submachine gun = hafif makineli tabanca
+light machine gun = hafif makineli tüfek
+grenade launcher = bombaatar
+rocket launcher = roketatar
+combat shotgun = savaş pompalısı
+pump shotgun = pompalı tüfek
+sawed-off shotgun = kesik namlulu pompalı
+body armor = vücut zırhı
+body armour = vücut zırhı
+armor piercing = zırh delici
+armor-piercing = zırh delici
+weapon upgrade = silah yükseltmesi
+weapon upgrades = silah yükseltmeleri
+weapon attachment = silah eklentisi
+weapon attachments = silah eklentileri
+extended magazine = uzatılmış şarjör
+extended mag = uzatılmış şarjör
+loadout = teçhizat
+loadouts = teçhizatlar
+gear score = ekipman puanı
+
+# --- Karakter gelişimi ---
+level up = seviye atlamak
+level-up = seviye atlama
+level cap = seviye sınırı
+max level = maksimum seviye
+maximum level = maksimum seviye
+character level = karakter seviyesi
+player level = oyuncu seviyesi
+experience points = deneyim puanı
+XP = XP
+EXP = XP
+XP boost = XP takviyesi
+double XP = çift XP
+skill tree = yetenek ağacı
+skill trees = yetenek ağaçları
+skill point = yetenek puanı
+skill points = yetenek puanları
+talent tree = yetenek ağacı
+talent points = yetenek puanları
+perk point = perk puanı
+perk points = perk puanları
+attribute points = nitelik puanları
+attribute point = nitelik puanı
+stat points = stat puanları
+special ability = özel yetenek
+ultimate ability = nihai yetenek
+passive ability = pasif yetenek
+active ability = aktif yetenek
+passive skill = pasif yetenek
+active skill = aktif yetenek
+ability cooldown = yetenek bekleme süresi
+cooldown = bekleme süresi
+cooldowns = bekleme süreleri
+cooldown timer = bekleme süresi sayacı
+respec = yetenek sıfırlama
+character creation = karakter oluşturma
+character creator = karakter oluşturucu
+character customization = karakter özelleştirme
+character class = karakter sınıfı
+character stats = karakter istatistikleri
+stamina = dayanıklılık
+mana = mana
+mana pool = mana havuzu
+mana cost = mana maliyeti
+health upgrade = can yükseltmesi
+stamina upgrade = dayanıklılık yükseltmesi
+companion quest = yoldaş görevi
+romance option = romantik ilişki seçeneği
+karma system = karma sistemi
+morality system = ahlak sistemi
+reputation level = itibar seviyesi
+skill check = yetenek sınaması
+
+# --- Envanter, eşyalar ve ekonomi ---
+inventory = envanter
+inventory full = envanter dolu
+inventory space = envanter alanı
+inventory slot = envanter yuvası
+inventory slots = envanter yuvaları
+inventory management = envanter yönetimi
+carry weight = taşıma kapasitesi
+carry capacity = taşıma kapasitesi
+over-encumbered = aşırı yüklü
+loot = ganimet
+looting = yağmalama
+loot box = ganimet kutusu
+loot boxes = ganimet kutuları
+loot drop = ganimet düşmesi
+loot table = ganimet tablosu
+drop rate = düşme oranı
+rare drop = nadir ganimet
+crafting = üretim
+crafting system = üretim sistemi
+crafting table = çalışma masası
+crafting bench = çalışma tezgâhı
+workbench = çalışma tezgâhı
+crafting materials = üretim malzemeleri
+crafting material = üretim malzemesi
+crafting recipe = üretim tarifi
+crafting recipes = üretim tarifleri
+crafting menu = üretim menüsü
+upgrade materials = yükseltme malzemeleri
+durability = sağlamlık
+item durability = eşya sağlamlığı
+rare item = nadir eşya
+epic item = destansı eşya
+legendary item = efsanevi eşya
+legendary weapon = efsanevi silah
+key item = anahtar eşya
+consumable = tüketilebilir eşya
+consumables = tüketilebilir eşyalar
+in-game currency = oyun içi para birimi
+premium currency = premium para birimi
+microtransaction = mikro ödeme
+microtransactions = mikro ödemeler
+in-game purchase = oyun içi satın alma
+in-game purchases = oyun içi satın alımlar
+season pass = sezon bileti
+battle pass = savaş bileti
+cosmetic item = kozmetik eşya
+cosmetic items = kozmetik eşyalar
+expansion pack = genişleme paketi
+early access = erken erişim
+pre-order bonus = ön sipariş bonusu
+patch notes = yama notları
+
+# --- Çok oyunculu ---
+multiplayer = çok oyunculu
+multiplayer mode = çok oyunculu mod
+skill-based matchmaking = yetenek bazlı eşleştirme
+matchmaking queue = eşleştirme sırası
+single-player = tek oyunculu
+singleplayer = tek oyunculu
+single player = tek oyunculu
+co-op = co-op
+co-op mode = co-op modu
+online co-op = çevrimiçi co-op
+local co-op = yerel co-op
+split-screen = bölünmüş ekran
+split screen = bölünmüş ekran
+ranked match = dereceli maç
+ranked matches = dereceli maçlar
+ranked mode = dereceli mod
+unranked match = derecesiz maç
+game lobby = oyun lobisi
+join game = oyuna katıl
+host game = oyun kur
+dedicated server = özel sunucu
+server browser = sunucu tarayıcısı
+cross-play = çapraz oyun
+crossplay = çapraz oyun
+cross-platform play = platformlar arası oyun
+voice chat = sesli sohbet
+text chat = yazılı sohbet
+team chat = takım sohbeti
+friend request = arkadaşlık isteği
+battle royale = battle royale
+deathmatch = ölüm maçı
+team deathmatch = takım ölüm maçı
+free-for-all = herkes tek
+capture the flag = bayrağı yakala
+king of the hill = tepenin kralı
+horde mode = horde modu
+respawn = yeniden doğma
+respawn timer = yeniden doğma sayacı
+respawn point = yeniden doğma noktası
+spawn camping = doğma noktası kampı
+spectator mode = izleyici modu
+kill-death ratio = öldürme-ölme oranı
+kill/death ratio = öldürme-ölme oranı
+kill cam = ölüm kamerası
+killcam = ölüm kamerası
+warmup round = ısınma turu
+sudden death = ani ölüm
+leaderboard = lider tablosu
+leaderboards = lider tabloları
+scoreboard = skor tablosu
+match history = maç geçmişi
+player versus player = oyuncuya karşı oyuncu
+player versus environment = oyuncuya karşı ortam
+input lag = giriş gecikmesi
+clan = klan
+guild = lonca
+guild member = lonca üyesi
+raid boss = raid boss
+healer = şifacı
+teammate = takım arkadaşı
+teammates = takım arkadaşları
+squadmate = manga arkadaşı
+squadmates = manga arkadaşları
+friendly NPC = dost NPC
+hostile NPC = düşman NPC
+anti-cheat = hile önleme
+
+# --- Kısaltmalar (Türk oyuncuların kullandığı biçimiyle bırakıldı) ---
+NPC = NPC
+NPCs = NPC'ler
+DLC = DLC
+DLCs = DLC'ler
+PvP = PvP
+PvE = PvE
+PvPvE = PvPvE
+RPG = RPG
+JRPG = JRPG
+ARPG = ARPG
+MMO = MMO
+MMORPG = MMORPG
+FPS = FPS
+TPS = TPS
+MOBA = MOBA
+AFK = AFK
+QTE = QTE
+DPS = DPS
+AoE = AoE
+K/D = K/D
+KDR = KDR
+MVP = MVP
+FOV = FOV
+NG+ = NG+
