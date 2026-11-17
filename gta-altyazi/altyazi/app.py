@@ -89,6 +89,7 @@ class Pipeline(threading.Thread):
         self._dialogue: list[tuple[str, str, float]] = []  # (İngilizce, Türkçe, zaman)
         self._retry_not_before = 0.0
         self._tag = "" if name == MAIN else f"[{EXTRA_REGION_LABELS.get(name, name)}] "
+        self._last_ignored = ""  # son yoksayılan okuma (aynısı her okumada tekrar loglanmasın)
         self.dump_dir: Path | None = None
         self._dumped = 0
         self._center_x: int | None = None
@@ -173,6 +174,9 @@ class Pipeline(threading.Thread):
 
     def _read_text(self, ocr, gray: np.ndarray) -> reader.ReadResult:
         result = reader.read_text(gray, ocr.recognize, self.cfg, ocr.raw_input, ocr)
+        if result.ignored and result.ignored != self._last_ignored:
+            log(f"{self._tag}yoksayıldı: {result.ignored!r}" + (f" → {result.text!r}" if result.text else ""))
+        self._last_ignored = result.ignored
         if self.debug and len(result.candidates) > 1:
             log(f"{self._tag}seçenekler: " + " | ".join(f"{n} {q:.0f} {t!r}" for n, t, q in result.candidates)
                 + f" → {result.variant}")
@@ -491,7 +495,9 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
 
     overlays[STREET] = Overlay(root, cfg, "adaptive")
     pipelines[STREET] = StreetListener(cfg, STREET, lambda: tts["recorder"], make_translator(), ui,
-                                       lambda a, b: street_blocked(a, b), log)
+                                       lambda a, b: street_blocked(a, b), log,
+                                       glossary_path=(cfg_path.parent / cfg.glossary_file) if cfg.glossary_file
+                                       else None)
     from .perf import LoadMonitor, game_policy
 
     load = LoadMonitor(cfg, log)

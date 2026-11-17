@@ -248,6 +248,13 @@ tam doğru satır 55 -> 68/120, okuma başına ~+70 ms). Okuma
 emin değilken program görüntünün keskinleştirilmiş ve kumlanması süzülmüş hâllerini de okuyup en
 iyisini seçer (bu her zaman açık; iyi görüntüde ek iş yapılmaz).
 
+### Yoksayılan ifadeler
+
+Menü → **Çeviri → Yoksayılan ifadeler**: her satıra bir ifade. Bu ifadeler hiç çevrilmez, gösterilmez
+ve seslendirilmez (oyunun sürekli çıkan ipuçları/HUD yazıları için). Büyük/küçük harf fark etmez;
+`*` herhangi bir metin demektir (`Press * to *`). Satırın tamamı eşleşirse satır atlanır; bir
+kısmı eşleşirse o kısım çıkarılır. Menü → Durum → **"Bu satırı yoksay"** son satırı listeye ekler.
+
 ### Oturum kaydı
 
 Görülen her satır İngilizce + Türkçe olarak `kayitlar/` klasörüne (oturum başına bir dosya) yazılır:

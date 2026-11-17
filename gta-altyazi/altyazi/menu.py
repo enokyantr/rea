@@ -256,8 +256,12 @@ class ControlPanel:
         card = self._card(f, "Son satır")
         self.last_lbl = ttk.Label(card, text="", justify="left", wraplength=840, font=(FONT, 11))
         self.last_lbl.pack(anchor="w")
-        self.last_info = ttk.Label(card, text="", style="Muted.TLabel")
-        self.last_info.pack(anchor="w")
+        row = ttk.Frame(card)
+        row.pack(fill="x")
+        self.last_info = ttk.Label(row, text="", style="Muted.TLabel")
+        self.last_info.pack(side="left", anchor="w")
+        self.ignore_last_btn = ttk.Button(row, text="Bu satırı yoksay", command=self._ignore_last)
+        self.ignore_last_btn.pack(side="right")
 
         card = self._card(f, "Motorlar")
         self.engine_lbl = ttk.Label(card, text="", justify="left")
@@ -290,7 +294,31 @@ class ControlPanel:
 
     # Çeviri -----------------------------------------------------------------------------------
 
+    def _scrollable(self, f: ttk.Frame) -> ttk.Frame:
+        """Pencereye sığmayan sekme içeriği için dikey kaydırılan çerçeve."""
+        canvas = tk.Canvas(f, highlightthickness=0, borderwidth=0)
+        if self.themed:
+            canvas.configure(background=DARK_BG)
+        bar = ttk.Scrollbar(f, orient="vertical", command=canvas.yview)
+        inner = ttk.Frame(canvas)
+        item = canvas.create_window(0, 0, window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=bar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        bar.pack(side="right", fill="y")
+        inner.bind("<Configure>", lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda e: canvas.itemconfigure(item, width=e.width))
+
+        def wheel(event):
+            if inner.winfo_height() > canvas.winfo_height():
+                canvas.yview_scroll(-1 if (event.delta > 0 or event.num == 4) else 1, "units")
+
+        # Tekerlek imleç bu sekmenin herhangi bir öğesinin üstündeyken de kaydırsın.
+        for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            inner.bind_all(seq, lambda e: wheel(e) if str(e.widget).startswith(str(canvas)) else None, add="+")
+        return inner
+
     def _tab_translation(self, f: ttk.Frame) -> None:
+        f = self._scrollable(f)
         card = self._card(f, "Son çevirmen (yeniden başlatınca)")
         r = 0
         r = self._combo(card, r, "Son çevirmen", "final_translator", ["ollama", "deepl"], restart=True,
@@ -306,6 +334,7 @@ class ControlPanel:
                         "ollama_context_continuation", restart=True)
         r = self._check(card, r, "Sansürsüz çeviri (küfür yumuşatılmaz)", "uncensored", restart=True)
         r = self._entry(card, r, "DeepL anahtarı", "deepl_auth_key", restart=True, secret=True)
+        self._ignore_card(f)
         card = self._card(f, "Sokak konuşmaları (altyazısız NPC'ler)")
         r = 0
         r = self._combo(card, r, "Konuşma tanıma modeli", "street_model", ["base.en", "small.en", "medium.en"],
@@ -317,6 +346,58 @@ class ControlPanel:
                                                                              sticky="w", pady=(4, 0))
         ttk.Button(f, text="Sözlüğü aç (isim/terim karşılıkları)",
                    command=lambda: self.ctl.open_folder("glossary")).pack(anchor="w")
+
+    def _ignore_card(self, f) -> None:
+        card = self._card(f, "Yoksayılan ifadeler (anında uygulanır)")
+        self.ignore_text = tk.Text(card, height=3, width=52, wrap="none", undo=True, font=(FONT, 10),
+                                   relief="flat", borderwidth=4)
+        if self.themed:
+            self.ignore_text.configure(background="#2b2b2b", foreground="#ffffff", insertbackground="#ffffff",
+                                       selectbackground=ACCENT, highlightthickness=1,
+                                       highlightbackground="#3d3d3d", highlightcolor=ACCENT)
+        self.ignore_text.grid(row=0, column=0, rowspan=2, sticky="nsew")
+        self._set_ignore_text()
+        self.ignore_text.bind("<FocusOut>", lambda _e: self._commit_ignore())
+        ttk.Label(card, text="Her satıra bir ifade: hiç çevrilmez, gösterilmez, seslendirilmez. Büyük/küçük harf "
+                             "önemsiz; * herhangi bir metin (ör. Press * to *). Satırın içinde geçerse yalnızca "
+                             "o kısım silinir.", style="Muted.TLabel", wraplength=330, justify="left").grid(
+            row=0, column=1, sticky="nw", padx=(12, 0))
+        ttk.Button(card, text="Uygula", command=self._commit_ignore).grid(row=1, column=1, sticky="sw",
+                                                                         padx=(12, 0))
+        card.columnconfigure(0, weight=1)
+
+    @staticmethod
+    def _parse_ignore(text: str) -> list[str]:
+        out: list[str] = []
+        for line in text.splitlines():
+            line = " ".join(line.split())
+            if line and line.casefold() not in (o.casefold() for o in out):
+                out.append(line)
+        return out
+
+    def _set_ignore_text(self) -> None:
+        self.ignore_text.delete("1.0", "end")
+        self.ignore_text.insert("1.0", "\n".join(self.cfg.ignore_phrases))
+        self.ignore_text.edit_modified(False)
+
+    def _commit_ignore(self) -> None:
+        phrases = self._parse_ignore(self.ignore_text.get("1.0", "end"))
+        if phrases != list(self.cfg.ignore_phrases):
+            # Okuma iş parçacıkları listeyi okur: yerinde değiştirmek yerine yenisiyle değiştirilir.
+            self.cfg.ignore_phrases = phrases
+            self._changed(False, False)
+            self.note_lbl.configure(text=f"Yoksayılan ifadeler: {len(phrases)}", foreground=GREEN)
+
+    def _ignore_last(self) -> None:
+        """Durum > Son satır: ekrandaki İngilizce satırı yoksayılanlara ekler."""
+        en = self.ctl.last_line()[0].strip()
+        if not en:
+            return
+        if en.casefold() not in (p.casefold() for p in self.cfg.ignore_phrases):
+            self.cfg.ignore_phrases = [*self.cfg.ignore_phrases, en]
+            self._changed(False, False)
+            self._set_ignore_text()
+        self.note_lbl.configure(text=f"Yoksayılıyor: {en}  (Çeviri > Yoksayılan ifadeler)", foreground=GREEN)
 
     # OCR --------------------------------------------------------------------------------------
 
@@ -777,6 +858,7 @@ class ControlPanel:
                 self.engine_lbl.configure(text="\n".join(f"{k}: {v}" for k, v in self.ctl.engine_rows()))
                 en, tr, info = self.ctl.last_line()
                 self.last_lbl.configure(text=f"{en}\n→ {tr}" if en else "Henüz satır yok.")
+                self.ignore_last_btn.state(["!disabled"] if en else ["disabled"])
                 self.last_info.configure(text=info)
                 self.dub_status_lbl.configure(text="\n".join(f"{k}: {v}" for k, v in self.ctl.dub_status()))
                 self._fill_characters()

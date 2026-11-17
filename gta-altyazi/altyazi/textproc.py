@@ -486,3 +486,57 @@ class Dialogue(str):
         obj = super().__new__(cls, previous)
         obj.history = tuple(history)
         return obj
+
+
+# --- Yoksayılan ifadeler ------------------------------------------------------------------------
+# Kullanıcının listesi (config.ignore_phrases): sürekli görünen oyun yönlendirmeleri ("Press [E] to
+# enter") çevrilmez, gösterilmez, seslendirilmez. Büyük/küçük harf ve boşluk farkı önemsizdir; `*`
+# cümle sonunu (. ! ?) aşmadan herhangi bir metne uyar. Satırın tamamına uyan ifade satırı siler;
+# satırın içindeki ifade satırdan çıkarılır, geriye anlamlı bir altyazı kalmazsa satır silinir.
+_IGNORE_EDGE = " \t,;:-–—|/"
+_SENTENCE_START = re.compile(r"(?:^|[.!?…][\"')\]]?)\s*$")
+
+
+def _ignore_pattern(phrase: str) -> re.Pattern | None:
+    phrase = re.sub(r"\*+", "*", " ".join(phrase.split()))
+    if not phrase.replace("*", "").strip():
+        return None  # boş ya da yalnızca "*": her şeyi silerdi
+    pieces = [p for p in re.split(r"(\*)", phrase) if p]
+    body = []
+    for i, piece in enumerate(pieces):
+        if piece == "*":
+            # Sondaki `*` cümle sonuna kadar (noktalaması dahil), aradaki en kısa metne uyar.
+            body.append(r"[^.!?]*[.!?]?" if i == len(pieces) - 1 else r"[^.!?]*?")
+            continue
+        words = r"\s+".join(re.escape(w) for w in piece.split())
+        lead = r"\s*" if piece[0] == " " else ""
+        trail = r"\s*" if piece[-1] == " " else ""
+        body.append(lead + words + trail)
+    # Kelime ortasında eşleşmesin ("Press E" -> "Pressed Eagle" değil). İfade kelimeyle bitiyorsa
+    # ardından gelen cümle sonu noktalaması da yakalanır (tek başına cümleyse onunla silinir).
+    head = r"(?<!\w)" if re.match(r"\w", phrase) else ""
+    tail = r"(?!\w)(?P<end>[.!?]+)?" if re.search(r"\w$", phrase) else ""
+    return re.compile(head + "".join(body) + tail, re.IGNORECASE)
+
+
+@lru_cache(maxsize=8)
+def _ignore_patterns(phrases: tuple[str, ...]) -> tuple[re.Pattern, ...]:
+    return tuple(p for p in map(_ignore_pattern, phrases) if p is not None)
+
+
+def ignore_phrases(text: str, phrases, min_chars: int = 3) -> str:
+    """`text`ten yoksayılan ifadeleri çıkarır; geriye altyazı kalmazsa "" döner. Değişmediyse aynen."""
+    if not text or not phrases:
+        return text
+    rest = text
+    for pattern in _ignore_patterns(tuple(str(p) for p in phrases)):
+        def cut(m: re.Match) -> str:
+            # Cümlenin ortasındaki ifade: soru/ünlem işareti cümleye aittir, kalır.
+            whole = _SENTENCE_START.search(m.string[:m.start()]) is not None
+            end = m.groupdict().get("end")
+            return " " if whole or not end else end
+        rest = pattern.sub(cut, rest)
+    if rest == text:
+        return text
+    rest = re.sub(r"\s+([,.!?;:])", r"\1", _SPACE.sub(" ", rest)).strip(_IGNORE_EDGE)
+    return rest if is_plausible(rest, min_chars) else ""

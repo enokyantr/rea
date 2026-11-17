@@ -77,6 +77,7 @@ jobs:
             --add-binary "$cublas/cublas64_12.dll;nvidia/cublas/bin" `
             --add-binary "$cublas/cublasLt64_12.dll;nvidia/cublas/bin" `
             --add-data "altyazi/data;altyazi/data" `
+            --collect-data faster_whisper `
             gta_altyazi.py
           Copy-Item -Recurse ../mt/main dist/GTA-Altyazi/model
           Copy-Item README.md dist/GTA-Altyazi/BENIOKU.md

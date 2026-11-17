@@ -147,3 +147,4 @@ def median3(gray: np.ndarray) -> np.ndarray:
     from PIL import Image, ImageFilter
 
     return np.asarray(Image.fromarray(gray).filter(ImageFilter.MedianFilter(3)))
+

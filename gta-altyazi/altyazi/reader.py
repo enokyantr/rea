@@ -32,6 +32,8 @@ class ReadResult:
     # Bulunan yazının kutusu (x0, y0, x1, y1), girdi görüntüsü koordinatlarında. Değişim tespiti
     # için: yalnızca bu alan değişince yeniden okunur.
     text_box: tuple[int, int, int, int] | None = None
+    # Yoksayılan ifade çıkarıldıysa okunan asıl metin (`text` kalan kısımdır, boş olabilir).
+    ignored: str = ""
 
 
 def variants(gray: np.ndarray, cfg, mode: str | None = None) -> list[tuple[str, np.ndarray]]:
@@ -111,8 +113,14 @@ def read_text(gray: np.ndarray, recognize: Callable[[np.ndarray], list[str]], cf
         result.confidence, span, box = best_engine_state
         if span is not None:
             result.center_x = left + (span[0] + span[1]) / 2
+        # Yoksayılan satırın da kutusu tutulur: değişim tespiti o yazı ekranda kaldıkça yeniden okumaz.
         if box is not None and result.text:
             result.text_box = (left + box[0], top + box[1], left + box[2], top + box[3])
+    # Yoksayılan ifadeler: tüm bölgeler için tek yer; çeviriye, ekrana ve dublaja hiç ulaşmaz.
+    kept = textproc.ignore_phrases(result.text, cfg.ignore_phrases, cfg.min_text_chars)
+    if kept != result.text:
+        result.ignored = result.text
+        result.text = kept
     return result
 
 

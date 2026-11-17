@@ -134,6 +134,10 @@ class Config:
     tophat_radius: int = 3
     min_text_chars: int = 3
 
+    # Yoksayılan ifadeler: hiç çevrilmez, gösterilmez, seslendirilmez (ör. "Press * to *"). Büyük/küçük
+    # harf önemsiz; `*` cümle içinde herhangi bir metin. Satırın içinde geçerse yalnızca o kısım silinir.
+    ignore_phrases: list[str] = field(default_factory=list)
+
     # Kararlılık: aynı metin art arda kaç kez okunursa çevrilsin.
     stable_reads: int = 2
     similarity: float = 0.88
@@ -285,6 +289,10 @@ def _from_dict(data: dict) -> Config:
                 for item in value
                 if isinstance(item, dict) and "name" in item and "region" in item
             ]
+        elif key == "ignore_phrases":
+            # Elle düzenlenmiş dosyada tek ifade dizi yerine metin olabilir (harf harf yoksayılmasın).
+            items = [value] if isinstance(value, str) else value if isinstance(value, list) else []
+            cfg.ignore_phrases = [str(p) for p in items if str(p).strip()]
         elif key == "hotkeys":
             cfg.hotkeys = merged_hotkeys(value if isinstance(value, dict) else {})
         else:
