@@ -70,7 +70,8 @@ def test_chat_request_has_rules_examples_context_and_keeps_model_loaded(fake):
     body = fake.chats[-1]
     msgs = body["messages"]
     assert msgs[0]["role"] == "system" and "Never soften" in msgs[0]["content"]
-    assert "Vice City = Vice City" in msgs[0]["content"]
+    assert "<glossary>" in msgs[0]["content"]  # kural sistemde, terimler yalnızca satırda geçerse
+    assert "Vice City = Vice City" not in msgs[0]["content"]
     assert any(m["role"] == "assistant" and "siktiğimin" in m["content"] for m in msgs)  # üslup örneği
     assert "never ADD swearing" in msgs[0]["content"]  # küfürsüz satıra küfür eklenmesin
     # Bağlamın çevrilmediğini gösteren örnek: bağlamlı kullanıcı mesajına yalnızca satırın çevirisi
@@ -218,3 +219,40 @@ def test_dialogue_history_is_sent_as_conversation_turns(fake):
     assert tail == ["<line>Who's that guy?</line>", "O adam kim?",
                     "<line>That's my cousin, Lamar.</line>", "Bu benim kuzenim, Lamar."]
     assert "<context>" not in messages[-1]["content"]
+
+
+def test_only_matched_glossary_terms_go_into_the_user_message_and_system_stays_identical(fake):
+    from altyazi.textproc import Dialogue
+
+    entries = {"Vice City": "Vice City", "boss": "patron", "safehouse": "sığınak",
+               **{f"term{i}": f"terim{i}" for i in range(400)}}
+    backend = OllamaBackend("aya-expanse:8b", fake.url, glossary=entries, use_context=False)
+    backend.translate("Hey boss, welcome to Vice City.", None)
+    backend.translate("Get in the car.", None)
+    history = [("Where's the safehouse?", "Sığınak nerede?")]
+    backend.translate("The Safehouse is close, boss.", Dialogue("Where's the safehouse?", history))
+    first, plain, third = (c["messages"] for c in fake.chats[-3:])
+    # Sistem istemi ve örnekler (önek) her satırda birebir aynı: Ollama önbelleği yeniden kullanır
+    assert first[:-1] == plain[:-1] == third[:-3]
+    assert "term1" not in first[0]["content"] and "boss = patron" not in first[0]["content"]
+    assert first[-1]["content"] == ("<glossary>\nboss = patron\nVice City = Vice City\n</glossary>\n"
+                                    "<line>Hey boss, welcome to Vice City.</line>")
+    assert plain[-1]["content"] == "<line>Get in the car.</line>"
+    # Geçmiş turları değişmez (terim eklenmez); terimler yalnızca yeni satırda
+    assert third[-3:-1] == [{"role": "user", "content": "<line>Where's the safehouse?</line>"},
+                            {"role": "assistant", "content": "Sığınak nerede?"}]
+    assert third[-1]["content"] == ("<glossary>\nsafehouse = sığınak\nboss = patron\n</glossary>\n"
+                                    "<line>The Safehouse is close, boss.</line>")
+
+
+def test_glossary_tag_is_cleaned_from_output():
+    assert clean_output("<glossary></glossary>Vice City'ye hoş geldin.") == "Vice City'ye hoş geldin."
+
+
+def test_num_gpu_is_sent_only_when_set(fake):
+    OllamaBackend("aya-expanse:8b", fake.url).translate("Hi", None)
+    assert "num_gpu" not in fake.chats[-1]["options"]
+    OllamaBackend("aya-expanse:8b", fake.url, num_gpu=12).translate("Hi", None)
+    assert fake.chats[-1]["options"]["num_gpu"] == 12
+    OllamaBackend("aya-expanse:8b", fake.url, num_gpu=0).translate("Hi", None)  # 0 = tamamen işlemci
+    assert fake.chats[-1]["options"]["num_gpu"] == 0

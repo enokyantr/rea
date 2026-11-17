@@ -178,9 +178,16 @@ _SLANG_WORDS = {"nigga", "niggas", "niggaz", "yee", "loc", "locs", "wassup", "y'
                 "tryna", "homie", "homies", "cuz", "dawg", "bruh", "imma", "lemme", "gimme"}
 
 
-_GAME_WORDS = {"jason", "duval", "lucia", "caminos", "boobie", "ike", "brian", "heder", "lori", "cal",
-               "hampton", "dre'quan", "drequan", "priest", "raul", "bautista", "dimez", "bae", "luxe", "roxy",
-               "vice", "leonida", "leonida's", "grassrivers", "gellhorn", "ambrosia", "kalaga"}
+def _game_words() -> set[str]:
+    """Oyunların karakter/yer adlarındaki kelimeler (altyazi/data/*_isimler.txt): yeni bir oyunun
+    isim dosyası eklenince OCR o isimleri de tanır."""
+    try:
+        from .glossary import load_bundled
+
+        _general, names = load_bundled()
+    except Exception:
+        return set()
+    return {t.lower().replace("’", "'") for name in names for t in _TOKEN.findall(name)}
 
 
 @lru_cache(maxsize=1)
@@ -199,7 +206,7 @@ def _word_freq() -> dict[str, int]:
     words.update(dict.fromkeys(_SLANG_WORDS, 1_000_000))
     # Oyundaki isimler: satır başında "Lucia" -> "Lucid" gibi "düzeltilmesin", hızlı kabulü
     # engellemesin; yaygınlığı yazım düzeltmesine aday olacak kadar (OCR "Lucla" -> "Lucia").
-    words.update(dict.fromkeys(_GAME_WORDS, 5_000))
+    words.update(dict.fromkeys(_game_words(), 5_000))
     return words
 
 

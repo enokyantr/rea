@@ -480,3 +480,10 @@ def test_game_names_are_kept_untranslated_and_user_entries_win(tmp_path):
     entries = glossary.load(path)
     assert entries["Leonida Keys"] == "Leonida Keys" and entries["Lucia Caminos"] == "Lucia Caminos"
     assert entries["Roxy"] == "Roksi"
+
+
+def test_game_name_words_come_from_bundled_name_files():
+    from altyazi import textproc
+
+    words = textproc._game_words()
+    assert {"lucia", "gellhorn", "grassrivers", "dre'quan"} <= words

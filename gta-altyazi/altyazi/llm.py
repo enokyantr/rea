@@ -11,6 +11,8 @@ import threading
 
 import requests
 
+from .glossary import Matcher
+
 SYSTEM = """\
 You translate English subtitle lines from the crime video game Grand Theft Auto VI into natural, \
 spoken Turkish for a Turkish player who reads them live while playing.
@@ -70,11 +72,27 @@ EXAMPLES_PLAIN = [
 ]
 
 
-def _user_message(context: str | None, line: str) -> str:
-    return (f"<context>{context}</context>\n" if context else "") + f"<line>{line}</line>"
+# Sözlük varsa: satırda geçen terimler kullanıcı mesajında <glossary> içinde gelir (yalnızca o satırın
+# terimleri; sistem istemi her satırda aynı kalır, Ollama önbelleğe aldığı öneki yeniden kullanır).
+GLOSSARY_RULE = """\
+- <glossary> lists glossary terms that occur in the line (English = Turkish). Always use exactly these \
+Turkish translations for them; never translate or repeat the <glossary> block itself.
+"""
+# Biçim: (bağlam, satır, sözlük terimleri, çeviri). Yalnızca sözlük varken eklenir.
+EXAMPLES_GLOSSARY = [
+    (None, "Meet me at the safehouse in Vice City.", {"safehouse": "sığınak", "Vice City": "Vice City"},
+     "Benimle Vice City'deki sığınakta buluş."),
+]
+
+
+def _user_message(context: str | None, line: str, terms: dict[str, str] | None = None) -> str:
+    block = ""
+    if terms:
+        block = "<glossary>\n" + "\n".join(f"{src} = {dst}" for src, dst in terms.items()) + "\n</glossary>\n"
+    return block + (f"<context>{context}</context>\n" if context else "") + f"<line>{line}</line>"
 
 _LABEL = re.compile(r"^(?:türkçe|turkish|çeviri|translation)\s*:\s*", re.IGNORECASE)
-_TAGS = re.compile(r"</?(?:line|context)>")
+_TAGS = re.compile(r"</?(?:line|context|glossary)>")
 # Modelin çevirinin sonuna eklediği açıklama: "... (Not: "nigga" kelimesi ...)"
 _NOTE = re.compile(r"\s*\(\s*(?:not|note|açıklama|explanation)\s*:.*$", re.IGNORECASE | re.DOTALL)
 _NOTE_LINE = re.compile(r"^\s*(?:not|note|açıklama|explanation)\s*:", re.IGNORECASE)
@@ -154,10 +172,14 @@ class OllamaBackend:
 
     def __init__(self, model: str, url: str = "http://127.0.0.1:11434", timeout_s: float = 10.0,
                  uncensored: bool = True, glossary: dict[str, str] | None = None, keep_alive: str = "60m",
-                 num_ctx: int = 2048, use_context: bool = True, context_for_continuation: bool = True):
+                 num_ctx: int = 2048, use_context: bool = True, context_for_continuation: bool = True,
+                 num_gpu: int | None = None):
         self.model = model
         # Küçük bağlam penceresi: istem ~600 token; daha büyük pencere ekran kartı belleğini boşa harcar.
         self._num_ctx = num_ctx
+        # Ekran kartına alınan katman sayısı (None: Ollama karar verir). Oyun ekran kartı belleğini
+        # kullanırken sınırlamak için; istek gövdesine yalnızca ayarlıysa eklenir.
+        self._num_gpu = num_gpu
         # Bazı modeller (CI'da aya-expanse) <context> satırını da çeviriyor: kapatılabilir.
         self._use_context = use_context
         self._context_for_continuation = context_for_continuation
@@ -165,20 +187,28 @@ class OllamaBackend:
         self._timeout = timeout_s
         self._keep_alive = keep_alive
         self._http = requests.Session()  # bağlantı yeniden kullanılır
-        terms = ""
-        if glossary:
-            lines = "\n".join(f"  {src} = {dst}" for src, dst in list(glossary.items())[:200])
-            terms = f"- Always use these glossary translations (English = Turkish):\n{lines}\n"
-        self._system = SYSTEM.format(uncensored=UNCENSORED if uncensored else "", glossary=terms)
-        self._examples = (EXAMPLES_UNCENSORED if uncensored else []) + EXAMPLES_PLAIN
+        # Sözlüğün tamamı istemde değil: her satıra yalnızca o satırda geçen terimler eklenir. Önbellek
+        # anahtarı da bu terimlerin özetini içerir (cache_terms): ilgisiz terim eklemek önbelleği silmez.
+        self._matcher = Matcher(glossary or {})
+        self._system = SYSTEM.format(uncensored=UNCENSORED if uncensored else "",
+                                     glossary=GLOSSARY_RULE if self._matcher else "")
+        self._examples = [(context, src, None, dst) for context, src, dst in
+                          (EXAMPLES_UNCENSORED if uncensored else []) + EXAMPLES_PLAIN]
+        if self._matcher:
+            self._examples += EXAMPLES_GLOSSARY
         self.instructions_active = uncensored
-        # "clean-2": clean_output değişti (eklenen "(Not: ...)" açıklamaları); eski kayıtlarda kalmış.
-        blob = json.dumps([self._system, self._examples, "clean-2"], ensure_ascii=False).encode("utf-8")
+        # "clean-3": clean_output değişti (<glossary> etiketi de temizlenir).
+        blob = json.dumps([self._system, self._examples, "clean-3"], ensure_ascii=False).encode("utf-8")
         self._fingerprint = hashlib.sha256(blob).hexdigest()[:10]
 
     def cache_namespace(self) -> str:
         # Model veya talimat (sansürsüz kural, örnekler, sözlük) değişince eski çeviriler kullanılmaz.
         return f"ollama-{self.model}-{self._fingerprint}-c{int(self._use_context)}"
+
+    def cache_terms(self, text: str) -> str:
+        """Bu satırın istemine eklenen sözlük terimlerinin özeti ("" = terim yok). CachedTranslator
+        anahtara ekler: yalnızca bu satıra uygulanan terimler değişince eski çeviri kullanılmaz."""
+        return self._matcher.fingerprint(text)
 
     # --- Ollama yönetimi -------------------------------------------------------------------
 
@@ -278,8 +308,8 @@ class OllamaBackend:
         # İstem sırası sabit önek + değişen kuyruk: sistem talimatı ve örnekler her istekte birebir aynı
         # (Ollama bu öneki önbellekten kullanır), sohbet geçmişi ve yeni satır en sonda.
         messages = [{"role": "system", "content": self._system}]
-        for context, src, dst in self._examples:
-            messages.append({"role": "user", "content": _user_message(context, src)})
+        for context, src, terms, dst in self._examples:
+            messages.append({"role": "user", "content": _user_message(context, src, terms)})
             messages.append({"role": "assistant", "content": dst})
         # Sohbet geçmişi: önceki satırlar ve verdiğimiz çeviriler gerçek turlar olarak (model bağlamı
         # çevirmeye/tekrarlamaya çalışmaz, yalnızca tutarlı devam eder).
@@ -295,6 +325,8 @@ class OllamaBackend:
             "keep_alive": self._keep_alive,  # model GPU'da kalsın, her satırda yeniden yüklenmesin
             "options": {"temperature": 0.1, "num_predict": num_predict, "num_ctx": self._num_ctx},
         }
+        if self._num_gpu is not None:
+            body["options"]["num_gpu"] = self._num_gpu
         with self._http.post(f"{self._url}/api/chat", timeout=timeout, json=body,
                              stream=cancel is not None) as r:
             if r.status_code == 404:
@@ -333,7 +365,9 @@ class OllamaBackend:
             context = None
         # Çıktı sınırı: Türkçe satır İngilizceden çok uzun olmaz; model açıklamaya başlarsa erken kesilir.
         limit = min(120, 24 + 4 * len(text.split()))
-        out = clean_output(self._chat(_user_message(context, text), timeout=self._timeout, num_predict=limit,
+        # Sözlük terimleri yalnızca yeni satırın mesajında (geçmiş turlar değişmez, önek önbelleği bozulmaz).
+        user = _user_message(context, text, self._matcher.matched(text))
+        out = clean_output(self._chat(user, timeout=self._timeout, num_predict=limit,
                                       history=history, cancel=cancel))
         if not out:
             raise RuntimeError("Yerel LLM boş yanıt verdi")

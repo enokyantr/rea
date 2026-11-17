@@ -14,6 +14,8 @@ class Backend(Protocol):
 
 
 GLOSSARY_PREFIX = "gta-altyazi-"
+# DeepL sözlüğü her eşleşen terimi bağlama bakmadan zorla uygular (yerel LLM'deki gibi ipucu değil):
+# bu yüzden DeepL'e yalnızca oyun adları ve kullanıcı terimleri gönderilir (bkz. setup_glossary).
 
 
 class DeepLBackend:
@@ -63,6 +65,18 @@ class DeepLBackend:
         """Sözlüğü DeepL'de oluşturur (aynı içerik varsa yeniden kullanır). Durum mesajı döndürür."""
         if not entries:
             return "Sözlük boş"
+        note = ""
+        core = getattr(entries, "core", None)
+        # DeepL sözlüğü bağlama bakmadan zorla uygular: genel oyun sözlüğü ("level up", "boss fight"...)
+        # hiçbir zaman gönderilmez; yalnızca oyun adları ve kullanıcının sozluk.txt'si.
+        if core is not None and len(core) < len(entries):
+            from .glossary import fingerprint as glossary_fingerprint
+
+            note = (" (genel oyun sözlüğü DeepL'e gönderilmez — DeepL terimleri bağlamsız uygular; "
+                    "yalnızca oyun adları ve sozluk.txt terimleri)")
+            entries, fingerprint = core, glossary_fingerprint(core)
+            if not entries:
+                return "Sözlük boş" + note
         # Dil çifti de adda: dil değişirse eski (uyumsuz) sözlük yeniden kullanılmaz.
         name = f"{GLOSSARY_PREFIX}{fingerprint}-{self._source}-{self._target}".lower()
         try:
@@ -76,7 +90,7 @@ class DeepLBackend:
                 found = self._translator.create_glossary(name, self._source, self._target, entries)
             self._glossary = found
             self._glossary_fp = fingerprint
-            return f"DeepL sözlüğü hazır: {len(entries)} terim"
+            return f"DeepL sözlüğü hazır: {len(entries)} terim{note}"
         except Exception as exc:
             self._glossary = None
             return f"DeepL sözlüğü kullanılamıyor ({exc}); sözlüksüz devam ediliyor"
@@ -164,10 +178,16 @@ class CachedTranslator:
 
     def key(self, text: str, namespace: str | None = None) -> str:
         """Anahtar, arka ucun o anki ayarlarını (sözlük, sansürsüz talimat) içerir; ayar değişince
-        eski çeviriler kullanılmaz. Önceden çeviri (hybrid.prefetch) de aynı anahtarla eşleştirir."""
+        eski çeviriler kullanılmaz. Önceden çeviri (hybrid.prefetch) de aynı anahtarla eşleştirir.
+        Arka uç `cache_terms` verirse (yerel LLM: satıra özel sözlük terimleri) onun özeti de eklenir:
+        yalnızca bu satıra uygulanan terimler değişince anahtar değişir."""
         if namespace is None:
             namespace = getattr(self._backend, "cache_namespace", lambda: "")()
         key = " ".join(text.split()).casefold()
+        terms = getattr(self._backend, "cache_terms", None)
+        terms_fp = terms(text) if terms is not None else ""
+        if terms_fp:
+            key = f"t{terms_fp}\x1f{key}"
         return f"{namespace}\x1f{key}" if namespace else key
 
     def cached(self, text: str) -> str | None:
