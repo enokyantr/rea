@@ -8,6 +8,7 @@ RapidOCR aynı satırı ilk denemede neredeyse kusursuz okudu ("you'd get some b
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -106,18 +107,27 @@ class RapidOcr:
 
     def recognize(self, gray: np.ndarray) -> list[str]:
         """Gri ton (uint8, HxW) görüntüdeki satırları yukarıdan aşağı döndürür."""
+        return [line.text for line in merge_lines(self.boxes(gray))]
+
+    def boxes(self, gray: np.ndarray) -> list[Box]:
+        """Bulunan yazı kutuları (metin, güven ve konum; girdi görüntüsü koordinatlarında).
+        Telefon okuması satırları ve gönderi bloklarını bunlardan kurar (bkz. phone.segment)."""
         h, w = gray.shape
         if h < 8 or w < 8:
+            self.last_confidence, self.last_span, self.last_box = 0.0, None, None
             return []
         result, _ = self._engine(np.repeat(gray[:, :, None], 3, axis=2), use_cls=False)
-        result = result or []
+        found = to_boxes(result or [])
         # Son okumanın en düşük kutu güveni ve yazının yatay kapsamı (Türkçeyi ortalamak için).
-        self.last_confidence = min((float(r[2]) for r in result), default=0.0)
-        xs = [p[0] for r in result for p in r[0]]
-        ys = [p[1] for r in result for p in r[0]]
-        self.last_span = (float(min(xs)), float(max(xs))) if xs else None
-        self.last_box = (int(min(xs)), int(min(ys)), int(max(xs)) + 1, int(max(ys)) + 1) if xs else None
-        return group_lines(result)
+        self.last_confidence = min((b.score for b in found), default=0.0)
+        if found:
+            x0, y0 = min(b.x0 for b in found), min(b.y0 for b in found)
+            x1, y1 = max(b.x1 for b in found), max(b.y1 for b in found)
+            self.last_span = (x0, x1)
+            self.last_box = (int(x0), int(y0), int(x1) + 1, int(y1) + 1)
+        else:
+            self.last_span = self.last_box = None
+        return found
 
 
 def _quiet_rapidocr_logs() -> None:
@@ -140,26 +150,77 @@ def _first_provider(engine) -> str:
         return ""
 
 
-def group_lines(boxes) -> list[str]:
-    """RapidOCR kutuları ([dörtgen, metin, güven]) -> satırlar. Aynı satır bazen birkaç kutuya
-    bölünür ("...that oldkyee-y" + "jee ass haircut..."): dikeyde örtüşenler soldan sağa birleşir."""
-    items = []
-    for quad, text, _score in boxes:
-        ys = [p[1] for p in quad]
-        xs = [p[0] for p in quad]
-        items.append((min(ys), max(ys), min(xs), str(text).strip()))
-    items.sort()
-    lines: list[list[tuple]] = []
-    for item in items:
-        top, bottom = item[0], item[1]
-        if lines:
-            ltop, lbottom = min(i[0] for i in lines[-1]), max(i[1] for i in lines[-1])
-            overlap = min(bottom, lbottom) - max(top, ltop)
-            if overlap > 0.5 * min(bottom - top, lbottom - ltop):
-                lines[-1].append(item)
+@dataclass(frozen=True)
+class Box:
+    """Tek bir OCR kutusu: metni, güveni (0..1) ve eksenlere hizalı sınırları (piksel)."""
+
+    text: str
+    score: float
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+
+    @property
+    def height(self) -> float:
+        return self.y1 - self.y0
+
+
+@dataclass(frozen=True)
+class Line:
+    """Aynı satırdaki kutuların soldan sağa birleşimi."""
+
+    text: str
+    boxes: tuple[Box, ...]
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+
+    @property
+    def height(self) -> float:
+        return self.y1 - self.y0
+
+    @property
+    def score(self) -> float:
+        return min((b.score for b in self.boxes), default=0.0)
+
+
+def to_boxes(raw) -> list[Box]:
+    """RapidOCR çıktısı ([dörtgen, metin, güven], ...) -> Box listesi. Ham biçimi yalnızca bu
+    fonksiyon yorumlar; satır gruplama ve telefon blokları Box kullanır."""
+    out = []
+    for quad, text, score in raw:
+        xs = [float(p[0]) for p in quad]
+        ys = [float(p[1]) for p in quad]
+        out.append(Box(str(text).strip(), float(score), min(xs), min(ys), max(xs), max(ys)))
+    return out
+
+
+def merge_lines(boxes: list[Box]) -> list[Line]:
+    """Kutular -> satırlar (yukarıdan aşağı). Aynı satır bazen birkaç kutuya bölünür ("...that
+    oldkyee-y" + "jee ass haircut..."): dikeyde örtüşenler soldan sağa birleşir."""
+    groups: list[list[Box]] = []
+    for box in sorted(boxes, key=lambda b: (b.y0, b.y1, b.x0, b.text)):
+        if groups:
+            ltop, lbottom = min(b.y0 for b in groups[-1]), max(b.y1 for b in groups[-1])
+            overlap = min(box.y1, lbottom) - max(box.y0, ltop)
+            if overlap > 0.5 * min(box.height, lbottom - ltop):
+                groups[-1].append(box)
                 continue
-        lines.append([item])
-    return [" ".join(i[3] for i in sorted(line, key=lambda i: i[2]) if i[3]) for line in lines]
+        groups.append([box])
+    lines = []
+    for group in groups:
+        group.sort(key=lambda b: b.x0)
+        lines.append(Line(" ".join(b.text for b in group if b.text), tuple(group),
+                          min(b.x0 for b in group), min(b.y0 for b in group),
+                          max(b.x1 for b in group), max(b.y1 for b in group)))
+    return lines
+
+
+def group_lines(raw) -> list[str]:
+    """RapidOCR kutuları ([dörtgen, metin, güven]) -> satır metinleri."""
+    return [line.text for line in merge_lines(to_boxes(raw))]
 
 
 def create(cfg, device: str | None = None):

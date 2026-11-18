@@ -52,6 +52,8 @@ class Controller(Protocol):
     def desktop_shortcut(self) -> str: ...
     def window_choices(self) -> list[str]: ...
     def set_target_window(self, choice: str) -> None: ...
+    def set_phone_mode(self, enabled: bool) -> str | None: ...
+    def phone_status(self) -> str: ...
 
 
 def _apply_theme(root: tk.Misc) -> bool:
@@ -223,6 +225,7 @@ class ControlPanel:
                           style="TButton" if on else self._accent)
 
     def _tab_status(self, f: ttk.Frame) -> None:
+        f = self._scrollable(f)  # telefon kartıyla pencereye sığmayabilir
         card = self._card(f, "Dublaj")
         row = ttk.Frame(card)
         row.pack(fill="x")
@@ -253,6 +256,8 @@ class ControlPanel:
                              "seçin.", style="Muted.TLabel").grid(row=9, column=0, columnspan=6, sticky="w",
                                                                   pady=(6, 0))
 
+        self._phone_card(f)
+
         card = self._card(f, "Son satır")
         self.last_lbl = ttk.Label(card, text="", justify="left", wraplength=840, font=(FONT, 11))
         self.last_lbl.pack(anchor="w")
@@ -272,6 +277,39 @@ class ControlPanel:
         ttk.Button(row, text="Masaüstüne kısayol ekle",
                    command=lambda: self.shortcut_lbl.configure(text=self.ctl.desktop_shortcut())).pack(side="left")
         self.shortcut_lbl.pack(side="left", padx=10)
+
+    def _phone_card(self, f) -> None:
+        card = self._card(f, "Telefon okuma modu")
+        self.phone_var = tk.BooleanVar(value=bool(self.cfg.phone_mode))
+        ttk.Checkbutton(card, text="Telefon ekranını yan panelde çevir", style=self._switch,
+                        variable=self.phone_var, command=self._toggle_phone).grid(row=0, column=0, sticky="w")
+        key = hk.display(self.cfg.hotkeys.get("phone-scan", ""))
+        ttk.Button(card, text=f"Şimdi çevir  ({key})" if key != "—" else "Şimdi çevir",
+                   command=lambda: self.ctl.action("phone-scan")).grid(row=0, column=1, padx=10)
+        ttk.Label(card, text="Panel yazısı").grid(row=0, column=2, sticky="e", padx=(10, 4))
+        var = tk.StringVar(value=str(self.cfg.phone_font_size))
+
+        def commit(*_):
+            try:
+                value = max(10, min(32, int(float(var.get()))))
+            except ValueError:
+                return
+            if value != self.cfg.phone_font_size:
+                self.cfg.phone_font_size = value
+                self._changed(True, False)
+
+        sb = ttk.Spinbox(card, from_=10, to=32, increment=1, textvariable=var, width=5, command=commit)
+        sb.grid(row=0, column=3, sticky="w")
+        sb.bind("<Return>", commit)
+        sb.bind("<FocusOut>", commit)
+        self.phone_lbl = ttk.Label(card, text="", style="Muted.TLabel", wraplength=840, justify="left")
+        self.phone_lbl.grid(row=1, column=0, columnspan=4, sticky="w", pady=(4, 0))
+
+    def _toggle_phone(self) -> None:
+        note = self.ctl.set_phone_mode(self.phone_var.get())
+        self.note_lbl.configure(text=note or ("Telefon okuma modu açık: gönderiler, haberler ve mesajlar "
+                                              "telefonun yanındaki panelde Türkçe." if self.phone_var.get() else ""),
+                                foreground=GREEN)
 
     # Görünüm ----------------------------------------------------------------------------------
 
@@ -565,24 +603,31 @@ class ControlPanel:
 
     def _tab_hotkeys(self, f: ttk.Frame) -> None:
         cols = ("islem", "kisayol", "durum")
-        self.hk_tree = ttk.Treeview(f, columns=cols, show="headings", height=len(hk.ACTIONS),
+        # Düğmeler ve açıklamalar önce (alttan) yerleşir: liste pencereye sığmazsa düğmeler değil
+        # liste kısalır ve kaydırılır.
+        self.free_lbl = ttk.Label(f, text="", wraplength=860, justify="left")
+        self.free_lbl.pack(side="bottom", anchor="w", pady=(4, 0))
+        self.hk_hint = ttk.Label(f, text="Bir işlem seçip \"Değiştir\"e basın, ardından yeni tuş birleşimine basın "
+                                         "(Ctrl ve/veya Alt ile). Esc: vazgeç.", style="Muted.TLabel")
+        self.hk_hint.pack(side="bottom", anchor="w")
+        row = ttk.Frame(f)
+        row.pack(side="bottom", fill="x", pady=8)
+        box = ttk.Frame(f)
+        box.pack(side="top", fill="both", expand=True)
+        self.hk_tree = ttk.Treeview(box, columns=cols, show="headings", height=len(hk.ACTIONS),
                                     selectmode="browse")
         for col, title, width in zip(cols, ("İşlem", "Kısayol", "Durum"), (320, 170, 250)):
             self.hk_tree.heading(col, text=title)
             self.hk_tree.column(col, width=width, anchor="w")
-        self.hk_tree.pack(fill="both", expand=True)
+        bar = ttk.Scrollbar(box, orient="vertical", command=self.hk_tree.yview)
+        self.hk_tree.configure(yscrollcommand=bar.set)
+        bar.pack(side="right", fill="y")
+        self.hk_tree.pack(side="left", fill="both", expand=True)
         self.hk_tree.bind("<Double-1>", lambda e: self._start_capture())
-        row = ttk.Frame(f)
-        row.pack(fill="x", pady=8)
         ttk.Button(row, text="Değiştir", style=self._accent, command=self._start_capture).pack(side="left")
         ttk.Button(row, text="Kaldır", command=self._clear_hotkey).pack(side="left", padx=6)
         ttk.Button(row, text="Varsayılanlar", command=self._default_hotkeys).pack(side="left")
         ttk.Button(row, text="Boştaki kısayolları göster", command=self._show_free).pack(side="right")
-        self.hk_hint = ttk.Label(f, text="Bir işlem seçip \"Değiştir\"e basın, ardından yeni tuş birleşimine basın "
-                                         "(Ctrl ve/veya Alt ile). Esc: vazgeç.", style="Muted.TLabel")
-        self.hk_hint.pack(anchor="w")
-        self.free_lbl = ttk.Label(f, text="", wraplength=860, justify="left")
-        self.free_lbl.pack(anchor="w", pady=(4, 0))
         self._fill_hotkeys()
 
     def _fill_hotkeys(self) -> None:
@@ -858,6 +903,9 @@ class ControlPanel:
                         if w["var"].get() != row["enabled"]:
                             w["var"].set(row["enabled"])
                 self.engine_lbl.configure(text="\n".join(f"{k}: {v}" for k, v in self.ctl.engine_rows()))
+                if self.phone_var.get() != bool(self.cfg.phone_mode):
+                    self.phone_var.set(bool(self.cfg.phone_mode))
+                self.phone_lbl.configure(text=self.ctl.phone_status())
                 en, tr, info = self.ctl.last_line()
                 self.last_lbl.configure(text=f"{en}\n→ {tr}" if en else "Henüz satır yok.")
                 self.ignore_last_btn.state(["!disabled"] if en else ["disabled"])

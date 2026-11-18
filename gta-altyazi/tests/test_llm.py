@@ -399,3 +399,38 @@ def test_history_is_trimmed_so_the_system_prompt_is_never_cut(monkeypatch):
     kept = [m for m in msgs if m["content"].startswith("<line>line ")]
     assert kept and kept[-1]["content"].startswith("<line>line 19")  # en yeni geçmiş korunur
     assert len(kept) < 20  # sığmayan en eskiler atıldı
+
+
+def test_phone_source_shares_system_prompt_sends_no_history_and_has_own_cache_key(fake):
+    from altyazi.textproc import Dialogue
+
+    backend = OllamaBackend("aya-expanse:8b", fake.url, use_context=True)
+    history = Dialogue("Where's my money?", [("Where's my money?", "Param nerede?")])
+    backend.translate("Shut up and drive.", history)
+    backend.translate("cops closed the pier again smh #LosSantos", history, source="phone")
+    sub, phone = (c["messages"] for c in fake.chats[-2:])
+    # Sistem istemi ve örnekler altyazıyla birebir aynı (Ollama önek önbelleği ortak)
+    base = 1 + 2 * len(backend._examples)
+    assert sub[:base] == phone[:base]
+    assert 'source="phone"' in phone[0]["content"] and "@handles" in phone[0]["content"]
+    # Telefon: sohbet geçmişi ve bağlam yok; işaret yalnızca son kullanıcı mesajında
+    assert len(phone) == base + 1 and len(sub) == base + 3
+    assert phone[-1] == {"role": "user",
+                         "content": '<line source="phone">cops closed the pier again smh #LosSantos</line>'}
+    assert not any('source="phone"' in m["content"] for m in phone[1:-1])
+    assert fake.chats[-1]["options"]["num_predict"] > 24 + 4 * 2  # uzun gönderiye yer
+    cache = CachedTranslator(backend, None)
+    assert len({cache.key("lol"), cache.key("lol", source="asr"), cache.key("lol", source="phone")}) == 3
+
+
+def test_prompt_version_changed_with_phone_rule(fake):
+    import hashlib
+    import json
+
+    from altyazi import llm
+
+    backend = OllamaBackend("aya-expanse:8b", fake.url)
+    old = hashlib.sha256(json.dumps([backend._system, backend._examples, "clean-6"],
+                                    ensure_ascii=False).encode("utf-8")).hexdigest()[:10]
+    assert old not in backend.cache_namespace()
+    assert "phone" in llm.SOURCES

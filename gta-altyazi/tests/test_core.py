@@ -451,6 +451,29 @@ def test_hotkeys_parse_normalize_and_merge():
     assert hk.from_tk_event("Control_L", 0x4) is None
 
 
+def test_new_phone_scan_hotkey_is_free_and_yields_to_user_assignments():
+    from altyazi import hotkeys as hk
+
+    assert hk.DEFAULT_HOTKEYS["phone-scan"] == "ctrl+alt+y"
+    assert not hk.conflicts(hk.DEFAULT_HOTKEYS)
+    # Eski sürümün kaydettiği atamalar (phone-scan yok): varsayılanı alır
+    assert hk.merged({"pause": "ctrl+alt+p"})["phone-scan"] == "ctrl+alt+y"
+    # Kullanıcı Ctrl+Alt+Y'yi başka işleme atamışsa yeni işlem atanmamış başlar, çakışma olmaz
+    merged = hk.merged({"pause": "ctrl+alt+y"})
+    assert merged["pause"] == "ctrl+alt+y" and merged["phone-scan"] == "" and not hk.conflicts(merged)
+    assert hk.merged({"pause": "ctrl+alt+y", "phone-scan": "ctrl+alt+y"})["phone-scan"] == "ctrl+alt+y"
+
+
+def test_phone_config_fields_round_trip(tmp_path):
+    path = tmp_path / "config.json"
+    cfg = config_mod.Config()
+    assert cfg.phone_mode is False and cfg.phone_debounce_ms == 300
+    cfg.phone_mode, cfg.phone_panel_geometry = True, "+1500+200"
+    config_mod.save(cfg, path)
+    loaded = config_mod.load(path)
+    assert loaded.phone_mode is True and loaded.phone_panel_geometry == "+1500+200"
+
+
 def test_config_keeps_hotkeys_and_region_switches(tmp_path):
     path = tmp_path / "config.json"
     cfg = config_mod.Config()

@@ -102,6 +102,14 @@ class Config:
     extra_regions: list[ExtraRegion] = field(default_factory=list)
     # Son satırlar paneli (Ctrl+Alt+H) kaç satır tutsun.
     history_size: int = 8
+    # Telefon okuma modu: telefon bölgesi altyazı gibi değil, gönderi/haber/mesaj blokları olarak okunur
+    # ve Türkçesi bölgenin yanındaki panelde gösterilir (menü > Durum > Telefon).
+    phone_mode: bool = False
+    # Panelin ekrandaki yeri ("+x+y"; boş: telefon bölgesinin yanına yerleşir). Panel taşınınca kaydedilir.
+    phone_panel_geometry: str = ""
+    # Telefon ekranı bu kadar ms durağan kalınca okunur (kaydırma bitsin).
+    phone_debounce_ms: int = 300
+    phone_font_size: int = 15
 
     # OCR
     # "auto": RapidOCR (kurulu değilse Windows OCR). "windows": yalnızca Windows OCR.

@@ -13,6 +13,7 @@ ACTIONS: list[tuple[str, str, str]] = [
     ("pick-telefon", "Telefon bölgesini seç", "ctrl+alt+t"),
     ("toggle-gorev", "Görev okumayı aç / kapat", ""),
     ("toggle-telefon", "Telefon okumayı aç / kapat", ""),
+    ("phone-scan", "Telefon ekranını şimdi çevir", "ctrl+alt+y"),
     ("original", "İngilizceyi de göster", "ctrl+alt+o"),
     ("history", "Son satırlar paneli", "ctrl+alt+h"),
     ("font-up", "Yazıyı büyüt", "ctrl+alt+pageup"),
@@ -88,13 +89,21 @@ def display(combo: str) -> str:
 def merged(user: dict | None) -> dict[str, str]:
     """Kullanıcının atamaları + yeni sürümde eklenen işlemlerin varsayılanları. Geçersiz olanlar atılır."""
     result = dict(DEFAULT_HOTKEYS)
+    assigned = set()
     for action, combo in (user or {}).items():
         if action not in result or not isinstance(combo, str):
             continue
         try:
             result[action] = normalize(combo) if combo else ""
+            assigned.add(action)
         except HotkeyError:
             pass
+    # Yeni sürümde eklenen işlemin varsayılanını kullanıcı başka bir işleme atadıysa yeni işlem
+    # atanmamış başlar (kullanıcının kısayolu çalışmaya devam eder).
+    taken = {result[a] for a in assigned if result[a]}
+    for action in result.keys() - assigned:
+        if result[action] in taken:
+            result[action] = ""
     return result
 
 

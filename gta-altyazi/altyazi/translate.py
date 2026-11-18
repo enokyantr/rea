@@ -187,8 +187,8 @@ class CachedTranslator:
         """Anahtar, arka ucun o anki ayarlarını (sözlük, sansürsüz talimat) içerir; ayar değişince
         eski çeviriler kullanılmaz. Önceden çeviri (hybrid.prefetch) de aynı anahtarla eşleştirir.
         Arka uç `cache_terms` verirse (yerel LLM: satıra özel sözlük terimleri) onun özeti de eklenir:
-        yalnızca bu satıra uygulanan terimler değişince anahtar değişir. Kaynak (`source`: "ocr" ya da
-        "asr") yalnızca istemi değiştiriyorsa anahtara girer."""
+        yalnızca bu satıra uygulanan terimler değişince anahtar değişir. Kaynak (`source`: "ocr", "asr"
+        ya da "phone") yalnızca istemi değiştiriyorsa anahtara girer."""
         if namespace is None:
             namespace = getattr(self._backend, "cache_namespace", lambda: "")()
         key = " ".join(text.split()).casefold()

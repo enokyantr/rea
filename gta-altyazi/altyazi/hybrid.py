@@ -23,7 +23,7 @@ class Backend(Protocol):
 
 
 class FinalTranslator(Protocol):
-    # `source`: satırın kaynağı ("ocr" ekrandaki altyazı, "asr" konuşma tanıma). İstemi değiştiren
+    # `source`: satırın kaynağı ("ocr" ekrandaki altyazı, "asr" konuşma tanıma, "phone" telefon). İstemi değiştiren
     # arka uç (yerel LLM) kullanır ve anahtara ekler; diğerleri yok sayar (bkz. CachedTranslator).
     def translate(self, text: str, context: str | None, source: str = "ocr") -> str: ...
     def cached(self, text: str, source: str = "ocr") -> str | None: ...
@@ -240,11 +240,24 @@ class HybridTranslator:
 
     # --- çeviri --------------------------------------------------------------------------------
 
+    def _route(self, text: str, draft: bool) -> bool:
+        """Son çevirmen kullanılacak mı? `draft=False`: son çevirmen varsa yalnızca o (yönlendirme
+        kuralından bağımsız, taslak hiç çalışmaz); yoksa taslak nihai sonuçtur."""
+        return self._use_final(text) or (not draft and self.final is not None)
+
+    def cached(self, text: str, source: str = "ocr", draft: bool = True) -> str | None:
+        """`submit`'in bu satır için anında vereceği kesin çeviri (önbellekte), yoksa None."""
+        if self._route(text, draft):
+            return self.final.cached(text, source=source)
+        return self._draft_get(text) if self.draft is not None else None
+
     def submit(self, text: str, context: str | None, is_current: Callable[[], bool],
-               on_result: ResultFn, on_error: ErrorFn, source: str = "ocr") -> None:
-        """`source`: satırın kaynağı ("ocr" ekrandaki altyazı, "asr" konuşma tanıma). Yalnızca son
-        çevirmene geçer; yerel taslak çevirmen kaynağı kullanmaz."""
-        use_final = self._use_final(text)
+               on_result: ResultFn, on_error: ErrorFn, source: str = "ocr", draft: bool = True) -> None:
+        """`source`: satırın kaynağı ("ocr" ekrandaki altyazı, "asr" konuşma tanıma, "phone" telefon
+        ekranı). Yalnızca son çevirmene geçer; yerel taslak çevirmen kaynağı kullanmaz.
+        `draft=False` (telefon): taslak gösterilmez, yazı bir kez (son çeviriyle) gelir; son çevirmen
+        yoksa taslak son çeviri olarak verilir."""
+        use_final = self._route(text, draft)
         spec = self._take_spec(text, context, use_final, source)
         if use_final:
             hit = self.final.cached(text, source=source)
@@ -326,7 +339,7 @@ class HybridTranslator:
             self.final.commit(key, translated)
             finish_final(translated, time.perf_counter() - submitted)
 
-        if self._draft_exec is not None and not self._no_draft(text):
+        if self._draft_exec is not None and not self._no_draft(text) and (draft or not use_final):
             self._draft_exec.submit(run_draft)
         if spec is not None:
             spec.future.add_done_callback(spec_done)

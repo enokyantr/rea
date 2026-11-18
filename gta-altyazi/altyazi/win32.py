@@ -157,6 +157,17 @@ def make_click_through(hwnd: int) -> None:
     set_(hwnd, GWL_EXSTYLE, style)
 
 
+def make_no_activate(hwnd: int) -> None:
+    """Tıklanabilir ama etkinleşmeyen pencere (telefon paneli): tıklanınca, gösterilince ya da
+    güncellenince oyun penceresi odakta kalır; görev çubuğunda görünmez."""
+    get = getattr(user32, "GetWindowLongPtrW", user32.GetWindowLongW)
+    set_ = getattr(user32, "SetWindowLongPtrW", user32.SetWindowLongW)
+    get.restype = ctypes.c_ssize_t
+    set_.restype = ctypes.c_ssize_t
+    set_.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
+    set_(hwnd, GWL_EXSTYLE, get(hwnd, GWL_EXSTYLE) | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW)
+
+
 WDA_EXCLUDEFROMCAPTURE = 0x00000011
 
 

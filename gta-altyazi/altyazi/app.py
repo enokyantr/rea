@@ -438,6 +438,7 @@ PRESETS = {
     "telefon": Region(0.70, 0.45, 0.27, 0.45),
 }
 REGION_ORDER = [MAIN, *EXTRA_REGION_KEYS.values()]
+PHONE = "telefon"
 STREET = "sokak"
 REGION_LABELS = {MAIN: "Altyazı", **EXTRA_REGION_LABELS, STREET: "Sokak"}
 
@@ -453,6 +454,8 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
     from . import hotkeys as hk
     from .menu import ControlPanel
     from .overlay import REMOVE, HistoryPanel, Overlay, RegionPicker
+    from .phone import PhonePipeline
+    from .phone_panel import PhonePanel
     from .sessionlog import SessionLog
 
     root = tk.Tk()
@@ -477,13 +480,15 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
                else "capture_visible: false") + ").")
 
     panel = None  # menü (aşağıda kurulur); own_rects okur
+    phone_panel = None  # telefon paneli (aşağıda kurulur); own_rects okur
 
     def own_rects() -> list[Rect]:
         """Ekran yakalamada görünen kendi pencerelerimiz: okuma bölgesine taşarsa OCR'dan önce karartılır."""
         rects = [ov.screen_rect for ov in overlays.values() if ov.capture_visible and ov.screen_rect]
-        menu_rect = panel.screen_rect if panel is not None else None
-        if menu_rect is not None:
-            rects.append(menu_rect)
+        for window in (panel, phone_panel):
+            rect = window.screen_rect if window is not None else None
+            if rect is not None:
+                rects.append(rect)
         return rects
 
     pipelines[MAIN] = Pipeline(cfg, MAIN, lambda: cfg.region if cfg.region_enabled else None, cfg.display_mode,
@@ -492,6 +497,8 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
     for name in EXTRA_REGION_KEYS.values():
         def get_region(name=name):
             extra = cfg.extra(name)
+            if name == PHONE and cfg.phone_mode:  # telefon okuma modu: bölgeyi PhonePipeline okur
+                return None
             return extra.region if extra and extra.enabled else None
         mode = cfg.extra(name).display_mode if cfg.extra(name) else "cover"
         overlays[name] = Overlay(root, cfg, mode)
@@ -504,13 +511,31 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
                                        lambda a, b: street_blocked(a, b), log,
                                        glossary_path=(cfg_path.parent / cfg.glossary_file) if cfg.glossary_file
                                        else None)
+    phone_base: dict = {"rect": None, "at": 0.0}
+
+    def phone_rect() -> Rect | None:
+        """Telefon okuma modu açık ve telefon bölgesi seçili/açıksa bölgenin ekran alanı (telefon
+        iş parçacığında çağrılır; hedef pencere saniyede bir yeniden aranır)."""
+        extra = cfg.extra(PHONE)
+        if not (cfg.phone_mode and extra is not None and extra.enabled):
+            return None
+        now = time.monotonic()
+        if phone_base["rect"] is None or now - phone_base["at"] >= 1.0:
+            found = win32.find_window(cfg.window_titles)
+            phone_base["rect"] = fit_aspect(found[1], cfg.video_aspect) if found else win32.primary_screen()
+            phone_base["at"] = now
+        return intersect(region_to_screen(extra.region, phone_base["rect"]), win32.virtual_screen())
+
+    phone_pipe = PhonePipeline(cfg, phone_rect, make_translator(), ui, own_rects=own_rects, log=log)
+    phone_pipe.debug = detail["on"]
+    phone_state = {"error": ""}
     from .perf import LoadMonitor, game_policy
 
     load = LoadMonitor(cfg, log)
     ocr_device = game_policy(cfg).ocr_device  # oyun modu: OCR işlemcide (ekran kartı oyuna kalır)
-    for p in pipelines.values():
+    for p in [*pipelines.values(), phone_pipe]:
         p.load = load
-        if isinstance(p, Pipeline):
+        if isinstance(p, (Pipeline, PhonePipeline)):
             p.ocr_device = ocr_device
     history = HistoryPanel(root, cfg)
     entries: list[dict] = []  # son satırlar: {"key": (bölge, seq), "label", "en", "tr"}
@@ -533,7 +558,7 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
     line_started: dict[str, int] = {}  # bölge -> dublajı kesilen son satır (seq)
 
     def all_pipelines():
-        return pipelines.values()
+        return [*pipelines.values(), phone_pipe]
 
     # --- ayarlar -------------------------------------------------------------------------------
 
@@ -550,6 +575,8 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
     def apply_style() -> None:
         for ov in overlays.values():
             ov.apply_style()
+        if phone_panel is not None:
+            phone_panel.apply_style()
         history.refresh(entries, pipelines[MAIN].base)
         if panel is not None:
             panel.refresh_style_vars()
@@ -666,6 +693,9 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
                 ov.hide()
             else:
                 ov.unhide()
+        if state["paused"]:
+            phone_panel.clear()
+            phone_panel.hide()
         log("Duraklatıldı" if state["paused"] else "Devam ediliyor")
 
     def pick(name: str) -> None:
@@ -679,6 +709,8 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
             ov.clear()
             ov.hide()
         history.hide()
+        phone_panel.clear()
+        phone_panel.hide()
         menu_was_visible = panel is not None and panel.visible
         if panel is not None:
             panel.hide()
@@ -721,8 +753,50 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
             return
         if not enabled:
             overlays[name].clear()
+            if name == PHONE:
+                phone_panel.clear()
+                phone_panel.hide()
         log(f"{REGION_LABELS[name]} okuma {'açık' if enabled else 'kapalı'}")
         save_soon()
+
+    def set_phone_mode(enabled: bool) -> str | None:
+        """Telefon okuma modu (yan panel) anında açılır/kapanır. Bölge yoksa önce seçtirilir."""
+        cfg.phone_mode = enabled
+        overlays[PHONE].clear()
+        if not enabled:
+            phone_panel.clear()
+            phone_panel.hide()
+        log(f"Telefon okuma modu {'açık' if enabled else 'kapalı'}")
+        save_soon()
+        if enabled and cfg.extra(PHONE) is None:
+            pick(PHONE)
+            return "Telefon ekranının alanını fareyle seçin."
+        if enabled and not cfg.extra(PHONE).enabled:
+            cfg.extra(PHONE).enabled = True
+        return None
+
+    def phone_scan() -> None:
+        """Kısayol / menü: telefon ekranını değişim beklemeden hemen oku (panel kapatıldıysa yeniden açılır)."""
+        if not cfg.phone_mode:
+            log("Telefon okuma modu kapalı (menü > Durum > Telefon)")
+            return
+        phone_panel.undismiss()
+        phone_pipe.scan_now()
+
+    def phone_status() -> str:
+        extra = cfg.extra(PHONE)
+        if not cfg.phone_mode:
+            return "Kapalı: telefon bölgesi altyazı gibi okunur."
+        if extra is None:
+            return "Telefon bölgesi seçilmedi."
+        if not extra.enabled:
+            return "Telefon okuma kapalı (Okuma bölgeleri)."
+        if phone_state["error"]:
+            return phone_state["error"]
+        if phone_pipe.last_scan is None:
+            return "Açık · telefon ekranı bekleniyor"
+        blocks, new, ms = phone_pipe.last_scan
+        return f"Açık · son okuma: {blocks} yazı, {new} yeni · OCR {ms:.0f} ms"
 
     def toggle_region(name: str) -> None:
         extra = cfg.extra(name)
@@ -899,7 +973,7 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
     def set_detailed(on: bool) -> None:
         detail["on"] = on
         cfg.detailed_log = on
-        for pipeline in pipelines.values():
+        for pipeline in all_pipelines():
             pipeline.debug = on
         if tts["speaker"] is not None:
             tts["speaker"].debug = on
@@ -953,6 +1027,7 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
         "move-up": lambda: move_text(8), "move-down": lambda: move_text(-8),
         "tts": lambda: set_tts(not cfg.tts_enabled),
         "street": lambda: set_street(not cfg.street_enabled),
+        "phone-scan": phone_scan,
     }
     for name in EXTRA_REGION_KEYS.values():
         actions[f"pick-{name}"] = lambda name=name: pick(name)
@@ -980,7 +1055,7 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
             rows = []
             now = time.monotonic()
             for name in REGION_ORDER:
-                p = pipelines[name]
+                p = phone_pipe if name == PHONE and cfg.phone_mode else pipelines[name]
                 if name == MAIN:
                     selected, enabled = True, cfg.region_enabled
                 else:
@@ -993,7 +1068,7 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
                 elif state["paused"] or state["picking"]:
                     status, color = "Duraklatıldı", "#d68910"
                 elif now - p.last_read_at < 1.5:
-                    status, color = "Çalışıyor ✔", "#1f8b4c"
+                    status, color = ("Telefon modu ✔" if p is phone_pipe else "Çalışıyor ✔"), "#1f8b4c"
                 else:
                     status, color = "Başlatılıyor…", "#d68910"
                 rows.append({"name": name, "label": REGION_LABELS[name], "enabled": enabled,
@@ -1097,7 +1172,15 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
         def character_sample(self, char_id: int) -> str | None:
             return character_sample(char_id)
 
+        def set_phone_mode(self, enabled: bool) -> str | None:
+            return set_phone_mode(enabled)
+
+        def phone_status(self) -> str:
+            return phone_status()
+
     panel = ControlPanel(root, Controller())
+    # Menüden sonra: menünün koyu teması (sv-ttk) panelin kaydırma çubuğuna da uygulansın.
+    phone_panel = PhonePanel(root, cfg, on_scan=phone_scan, on_moved=save_soon)
     # Menü ekran görüntüsünde ve yayında görünür (gizlenmez); bir okuma bölgesinin üstüne gelirse
     # o kısım OCR'dan önce karartılır (own_rects), menü yazıları çevrilmez.
     if not cfg.show_menu_on_start:
@@ -1173,6 +1256,21 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
                         menu_key = hk.display(cfg.hotkeys.get("menu", ""))
                         main_overlay.status(f"Türkçe altyazı aktif  •  {menu_key}: menü ve ayarlar")
                         root.after(5000, welcome_off)
+                elif kind == "phone-region":
+                    phone_panel.set_region(msg[1])
+                elif kind == "phone":
+                    if state["paused"] or state["picking"] or not cfg.phone_mode:
+                        continue  # yolda kalmış tarama: gizli panel yeniden açılmasın
+                    phone_state["error"] = ""
+                    phone_panel.show_blocks(msg[1])
+                elif kind == "phone-tr":
+                    _, key, translated = msg
+                    card = phone_panel.cards.get(key)
+                    phone_panel.set_translation(key, translated)
+                    if session is not None and card is not None:
+                        session.write(REGION_LABELS[PHONE], card["en"], translated)
+                elif kind == "phone-error":
+                    phone_state["error"] = msg[1][:160]
                 elif kind == "palette":
                     _, name, palette = msg
                     overlays[name].set_palette(palette)

@@ -603,3 +603,138 @@ def ignore_phrases(text: str, phrases, min_chars: int = 3) -> str:
         return text
     rest = re.sub(r"\s+([,.!?;:])", r"\1", _SPACE.sub(" ", rest)).strip(_IGNORE_EDGE)
     return rest if is_plausible(rest, min_chars) else ""
+
+
+# --- Telefon metni (sosyal medya gönderisi, haber, mesaj) ----------------------------------------
+# Altyazı düzeltmeleri (yazım düzeltme, bitişik kelime bölme, kenar çöpü) @kullanıcı adlarını,
+# #etiketleri, adresleri ve sayıları bozar ("@lennyavery" -> "lenny avery", "2.1K" -> ...). Bu
+# parçalar korunur; düzeltmeler yalnızca aradaki düz kelimelere uygulanır.
+_HANDLE = re.compile(r"^[(\[\"'“]?[@#][\w.]+")
+_URL = re.compile(r"^[(\[\"'“]?(?:https?://|www\.)\S+|^[\w-]+(?:\.[\w-]+)*\.(?:com|net|org|io|gg|tv|ly|co|me|app)"
+                  r"(?:/\S*)?[)\].,!?\"'”]*$", re.IGNORECASE)
+_HAS_DIGIT = re.compile(r"\d")
+# İnternet kısaltmaları ve uzatılmış kelimeler ("lmaooo", "sooo"): sözlükte yok, "düzeltilmemeli".
+INTERNET_SLANG = frozenset("""
+lol lols lmao lmfao rofl smh tbh imo imho omg omfg wtf wth brb idk idc ikr fr frfr ngl rn btw af irl fml
+ffs tfw mfw dm dms pov gg ez lowkey highkey sus bruh bro fam goat goated stan yall ya ur u r pls plz thx ty
+tho thru cuz bc gonna wanna gotta kinda lemme dunno hmu wyd wya nvm jk istg periodt bet slay vibe vibes
+""".split())
+_STRETCHED = re.compile(r"([A-Za-z])\1\1")
+
+
+def _protected(token: str) -> bool:
+    bare = token.strip(".,!?:;\"'“”()[]…").lower()
+    return bool(_HANDLE.match(token) or _URL.match(token) or _HAS_DIGIT.search(token)
+                or bare in INTERNET_SLANG or _STRETCHED.search(token))
+
+
+# RapidOCR arayüz yazısında (keskin, sık aralıklı) boşlukları sık atlıyor: "ViceCitymayorcaughtin",
+# "thewholepierAGAIN". Altyazıdaki bölücü karışık harfli parçalara dokunmaz (özel isimler); telefonda
+# uzun karışık parça en az üç sözlük kelimesine bölünebiliyorsa harf biçimi korunarak bölünür.
+_MIXED_GLUED = re.compile(r"(?<![\w'’@#])[A-Za-z]{10,}(?![\w'’])")
+
+
+def _split_mixed(text: str) -> str:
+    if not _word_freq():
+        return text
+
+    def fix(m: re.Match) -> str:
+        token = m.group(0)
+        if token.islower() or token.isupper() or (token[0].isupper() and token[1:].islower()):
+            return token  # tamamen küçük/büyük ya da İsim biçimi: altyazı bölücüsünün işi
+        words = _segment(token.lower())
+        if not words or len(words) < 3 or "".join(words) != token.lower():
+            return token
+        out, i = [], 0
+        for w in words:
+            out.append(token[i:i + len(w)])
+            i += len(w)
+        return " ".join(out)
+
+    return _MIXED_GLUED.sub(fix, text)
+
+
+def _fix_plain(text: str) -> str:
+    """Altyazı düzeltme zinciri (korunmayan düz kelime dizisine) + karışık harfli bitişik kelimeler."""
+    return _spell_fix(_split_glued(_split_mixed(_fix_ocr_confusions(_fold_accents(text)))))
+
+
+def join_wrapped(lines: list[str]) -> str:
+    """Bir bloğun satırlarını boşlukla birleştirir; satır sonundaki tirelemeyi düzeltir
+    ("some-" + "thing" -> "something"). Bir sonraki satır büyük harfle başlıyorsa tire kalır
+    ("Los Santos-" + "Vinewood" bileşik ad olabilir)."""
+    out = ""
+    for line in (" ".join(raw.split()) for raw in lines):
+        if not line:
+            continue
+        if out.endswith("-") and len(out) >= 2 and out[-2].isalpha() and line[0].islower():
+            out = out[:-1] + line
+        else:
+            out = f"{out} {line}" if out else line
+    return out
+
+
+def normalize_post(lines: list[str]) -> str:
+    """Telefon bloğunun metni: satırlar birleşir, @kullanıcı/#etiket/adres/sayı/internet kısaltması
+    olduğu gibi kalır, aradaki kelimelere altyazı düzeltmeleri uygulanır."""
+    # OCR'ın yapıştırdığı ayraçlar: "WeazelNews@WeazelNews·1h" -> "WeazelNews @WeazelNews · 1h"
+    joined = re.sub(r"\s*([·•|])\s*", r" \1 ", join_wrapped(lines))
+    joined = re.sub(r"(?<=[A-Za-z0-9.!?,])(?=[@#][A-Za-z])", " ", joined)
+    joined = re.sub(r"(?<=[a-z][.!?,])(?=www\.|https?://)", " ", joined)
+    tokens = joined.split()
+    out: list[str] = []
+    run: list[str] = []
+
+    def flush() -> None:
+        if run:
+            out.extend(_fix_plain(" ".join(run)).split())
+            run.clear()
+
+    for token in tokens:
+        if _protected(token):
+            flush()
+            out.append(token)
+        else:
+            run.append(token)
+    flush()
+    text = " ".join(out)
+    # Kenar çöpü ("• ", " |"); @ # ve açılış işaretleri silinmez.
+    text = re.sub(r"^[^\w@#\"'“(\[¿¡]+", "", text)
+    text = re.sub(r"[^\w.!?\"'”)\]…%]+$", "", text)
+    return text.strip()
+
+
+# Telefon arayüzü yazıları (saat, beğeni/görüntülenme sayısı, "3h", "Reply"...): yalnızca bunlardan
+# oluşan satır/blok çevrilmez.
+_CHROME_TOKEN = re.compile(
+    r"^(?:[\W_]+|\d{1,2}[:.]\d{2}(?:[ap]m)?|[ap]m|\d+(?:[.,]\d+)*[kmb]?\+?|\d+\s?(?:s|m|h|d|w|y|mo|min|mins|hr|hrs|"
+    r"sec|secs)|%?\d+%?)$",
+    re.IGNORECASE)
+_CHROME_WORDS = frozenset("""
+like likes liked reply replies replied share shares shared repost reposts reposted retweet retweets comment
+comments follow following followers follower views view ago now just today yesterday edited sent delivered
+read seen online typing more less translate see show all new message messages notifications home search
+min mins hr hrs sec secs lte 3g 4g 5g wifi hour hours minute minutes day days week weeks month months year years
+""".split())
+
+
+# Rakam içeren ve üç harflik kelime parçası olmayan parça da arayüz sayılır: OCR simgeleri harf
+# okuyor ("♡ 2.1K ↻ 340" -> "2.1KC340", pil/şebeke "5G87%").
+_LETTER_RUN = re.compile(r"[^\W\d_]{3,}")
+
+
+def _chrome_token(token: str) -> bool:
+    if _CHROME_TOKEN.match(token) or token.strip(".,:;!?·•()").lower() in _CHROME_WORDS:
+        return True
+    return bool(_HAS_DIGIT.search(token)) and not _LETTER_RUN.search(token) and not _HANDLE.match(token)
+
+
+def is_ui_chrome(text: str) -> bool:
+    """Metin yalnızca arayüz parçası mı (saat, sayı, "3h", "2.1K", "Reply · Share")?"""
+    return all(_chrome_token(t) for t in text.split())
+
+
+def is_handle_only(text: str) -> bool:
+    """Yalnızca kullanıcı adı/etiket (+ arayüz parçası): "@lennyavery · 3h"."""
+    tokens = text.split()
+    return any(_HANDLE.match(t) for t in tokens) and all(_HANDLE.match(t) or _chrome_token(t) for t in tokens)

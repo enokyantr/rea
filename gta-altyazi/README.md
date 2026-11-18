@@ -88,7 +88,7 @@ proje klasörüne kopyalayın ve `pip install -r requirements-gpu.txt` çalışt
 
 - **Durum:** çeviriyi duraklat/devam ettir; altyazı, görev ve telefon okumasının her biri için
   "Çalışıyor ✔ / Kapalı / Bölge seçilmedi" durumu, aç/kapat, bölge seç, hazır konum, kaldır;
-  kullanılan OCR ve çeviri motorları; son satır ve gecikmesi.
+  kullanılan OCR ve çeviri motorları; son satır ve gecikmesi; telefon okuma modu.
 - **Görünüm:** yazı boyutu, konumu, kontur, yazı tipi, İngilizceyi de göster, yayında görünürlük.
   Anında uygulanır.
 - **Çeviri / OCR ve hız:** son çevirmen, model, sansürsüz çeviri, OCR motoru ve cihazı, hızlı kabul.
@@ -106,6 +106,7 @@ Varsayılan kısayollar (menüden değiştirilebilir):
 | Ctrl+Alt+R | Altyazı bölgesini seç |
 | Ctrl+Alt+G | Görev hedefi bölgesini seç (seçicide Delete: kaldır) |
 | Ctrl+Alt+T | Telefon mesajı bölgesini seç (seçicide Delete: kaldır) |
+| Ctrl+Alt+Y | Telefon ekranını şimdi çevir (telefon okuma modu) |
 | Ctrl+Alt+S | Duraklat / devam |
 | Ctrl+Alt+PageUp / PageDown | Yazıyı büyüt / küçült |
 | Ctrl+Alt+↑ / ↓ | Yazıyı yukarı / aşağı taşı |
@@ -266,6 +267,27 @@ Altyazı dışında görev hedefleri ("Lose the cops") ve telefon mesajları da 
 Ctrl+Alt+G / Ctrl+Alt+T ile ilgili alanı bir kez seçin; her bölge ayrı okunur ve Türkçesi o alanın
 üstünü kapatan kutuda gösterilir. Bölgeyi kaldırmak için seçiciyi açıp Delete'e basın.
 Son satırlar panelinde (Ctrl+Alt+H) bu satırlar `[Görev]` / `[Telefon]` etiketiyle görünür.
+
+### Telefon okuma modu
+
+Oyundaki telefonda aynı anda birçok yazı olur (sosyal medya gönderileri, haberler, mesajlar) ve
+kaydırılır; bunlar altyazı gibi tek satır değil, ayrı ayrı çevrilir. Menü → Durum → **Telefon okuma
+modu** anahtarını açın (telefon bölgesi seçilmemişse önce seçtirilir). Türkçesi telefon bölgesinin
+yanındaki panelde (sağda yer yoksa solda), ekrandaki sırayla, her gönderi için bir kartta görünür.
+
+- Telefon ekranı yalnızca içerik değişip ~0,3 sn durağan kalınca okunur (kaydırma bitsin;
+  `phone_debounce_ms`). Değişmeyen ekranda OCR çalışmaz; duraklatılınca hiç okunmaz.
+- Her gönderi/yorum/haber başlığı/mesaj balonu ayrı çevrilir; @kullanıcı adları, #etiketler,
+  adresler, sayılar ve emojiler olduğu gibi kalır, internet argosu (lol, smh, tbh...) doğal Türkçe
+  internet diliyle çevrilir. Saat, beğeni sayısı, "3h", "Reply" gibi arayüz yazıları atlanır.
+- Çeviri yalnızca son çevirmenle (yerel dil modeli) yapılır, yazı bir kez değişir: beklerken
+  İngilizcesi gri ve "…" ile görünür. Çeviriler önbellekte kalır; geri kaydırınca anında gelir.
+  Ekrandan çıkan gönderinin sırası iptal edilir. Dil modeli kapalıysa (oyun modu) yerel çeviri kullanılır.
+- Paneli başlığından sürükleyip taşıyabilirsiniz (yeri kaydedilir; başlığa çift tık: telefonun yanına
+  geri). ✕ paneli o içerik için kapatır. Telefonda birkaç saniye yazı yoksa panel kendiliğinden gizlenir.
+- **Ctrl+Alt+Y** (ya da paneldeki "Şimdi çevir"): değişim beklemeden hemen oku.
+  Telefon okumayı aç/kapat kısayolu paneli de gizler/gösterir.
+- Kapalıyken (varsayılan) telefon bölgesi eskisi gibi altyazı olarak okunur.
 
 ## Yerel dil modeli (ücretsiz, sansürsüz son çeviri)
 

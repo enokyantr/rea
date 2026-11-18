@@ -37,6 +37,7 @@ fear or hesitation stays hesitant. Use "sen" between friends, family, partners, 
 nicknames, forms of address (sen/siz), slang and the meaning consistent with them; resolve pronouns and \
 references from them. Translate only the new line.
 - Lines are read from the screen by OCR and may contain misread characters ("rn" read as "m", "I" as "l", "0" as "O", missing apostrophes or spaces). A <line source="asr"> was transcribed by speech recognition instead and may contain misheard words or missing punctuation. Translate the meaning the speaker most likely intended, using the context; never "correct" slang, profanity or deliberate misspellings into polite or standard words, and never mention the errors or add notes.
+- A <line source="phone"> is text from the in-game phone screen (a social media post or comment, a news headline or article, or a text message), not spoken dialogue: the earlier conversation turns do not apply to it. Keep @handles, #hashtags, emojis, URLs and numbers exactly as they are. Translate internet slang and abbreviations into natural Turkish internet language ("lol" -> "ahahah" / "lol", "lmao" -> "ahahaha", "smh" -> "yok artık", "tbh" -> "açıkçası", "wtf" -> "ne alaka" / "ne sikim", "omg" -> "aman tanrım"), using judgment; news stays in Turkish news style, casual posts stay casual.
 - Some characters speak Spanish or mix Spanish into English (Spanglish); OCR often drops Spanish accents and the marks ¿ ¡ ñ ("Que pasa, mija?" = "¿Qué pasa, mija?"). Translate the Spanish parts into Turkish too, with the same tone; never leave Spanish words untranslated except names.
 {uncensored}{glossary}"""
 
@@ -113,10 +114,13 @@ EXAMPLES_GLOSSARY = [
 ]
 
 
-# Satırın kaynağı: "ocr" (ekrandaki altyazı, varsayılan) ya da "asr" (konuşma tanıma, ör. sokak
-# konuşmaları). Kaynak yalnızca kullanıcı mesajındaki <line> etiketinde belirtilir; sistem istemi
-# her kaynak için aynıdır (önek önbelleği korunur).
-SOURCES = ("ocr", "asr")
+# Satırın kaynağı: "ocr" (ekrandaki altyazı, varsayılan), "asr" (konuşma tanıma, ör. sokak
+# konuşmaları) ya da "phone" (oyundaki telefonun ekranı: gönderi, haber, mesaj; sohbet geçmişi
+# gönderilmez). Kaynak yalnızca kullanıcı mesajındaki <line> etiketinde belirtilir; sistem istemi
+# her kaynak için aynıdır (önek önbelleği altyazıyla ortak kalır).
+SOURCES = ("ocr", "asr", "phone")
+# Bu kaynaklar diyalog değildir: sohbet geçmişi ve önceki satır bağlamı gönderilmez.
+STANDALONE_SOURCES = frozenset({"phone"})
 
 
 def _approx_tokens(messages) -> int:
@@ -155,7 +159,7 @@ _NOTE_LINE = re.compile(r"^\s*(?:not|note|açıklama|explanation)\s*:", re.IGNOR
 _META = re.compile(
     r"\b(?:not translated|translat(?:e|ed|ion|ing)\b|guidelines?|original (?:text|line)|as an ai|"
     r"i can(?:no|')t|çeviremem|çevrilemez|çevirmek mümkün değil|orijinal metin|anlaşılmaz|"
-    r"bu mesaj(?:ın|ı)?\b|daha (?:açık|net) bir (?:talimat|soru|ifade)|nasıl yardımcı olabilirim)",
+    r"bu mesaj(?:ın|ı)? (?:anla|anlam|çevir)|daha (?:açık|net) bir (?:talimat|soru|ifade)|nasıl yardımcı olabilirim)",
     re.IGNORECASE,
 )
 
@@ -254,8 +258,8 @@ class OllamaBackend:
         # Parametreyi reddeden Ollama/model (HTTP 400, hata "think" içerir) için bir kez parametresiz
         # yeniden denenir ve bu model için bir daha gönderilmez (nesne tek modele aittir).
         self._send_think = True
-        # "clean-6": doğallık/duygu/hitap kuralları ve örnekleri (clean-5: İspanyolca satırlar).
-        blob = json.dumps([self._system, self._examples, "clean-6"], ensure_ascii=False).encode("utf-8")
+        # "clean-7": telefon ekranı kuralı (clean-6: doğallık/duygu/hitap, clean-5: İspanyolca satırlar).
+        blob = json.dumps([self._system, self._examples, "clean-7"], ensure_ascii=False).encode("utf-8")
         self._fingerprint = hashlib.sha256(blob).hexdigest()[:10]
 
     def cache_namespace(self) -> str:
@@ -442,12 +446,15 @@ class OllamaBackend:
         # Bağlam: her zaman (use_context) ya da yalnızca satır öncekinin devamıysa ("or lawyer she
         # fucking with." gibi yarım cümleler bağlamsız yanlış çevriliyordu).
         history = getattr(context, "history", ())
-        if history:
+        if _check_source(source) in STANDALONE_SOURCES:
+            history, context = (), None  # telefon gönderisi diyaloğun parçası değil
+        elif history:
             context = None  # önceki satır zaten sohbet geçmişinde
         elif not (self._use_context or (self._context_for_continuation and is_continuation(context, text))):
             context = None
         # Çıktı sınırı: Türkçe satır İngilizceden çok uzun olmaz; model açıklamaya başlarsa erken kesilir.
-        limit = min(120, 24 + 4 * len(text.split()))
+        # Telefon bloğu (haber metni, uzun gönderi) altyazı satırından uzun olabilir.
+        limit = min(320 if source in STANDALONE_SOURCES else 120, 24 + 4 * len(text.split()))
         # Sözlük terimleri yalnızca yeni satırın mesajında (geçmiş turlar değişmez, önek önbelleği bozulmaz).
         # Kaynak (OCR/konuşma tanıma) da yalnızca bu mesajda; sistem istemi her satırda aynı.
         user = _user_message(context, text, self._matcher.matched(text), source)
