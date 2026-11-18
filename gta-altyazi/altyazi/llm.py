@@ -159,7 +159,11 @@ _NOTE_LINE = re.compile(r"^\s*(?:not|note|açıklama|explanation)\s*:", re.IGNOR
 _META = re.compile(
     r"\b(?:not translated|translat(?:e|ed|ion|ing)\b|guidelines?|original (?:text|line)|as an ai|"
     r"i can(?:no|')t|çeviremem|çevrilemez|çevirmek mümkün değil|orijinal metin|anlaşılmaz|"
-    r"bu mesaj(?:ın|ı)? (?:anla|anlam|çevir)|daha (?:açık|net) bir (?:talimat|soru|ifade)|nasıl yardımcı olabilirim)",
+    r"bu mesaj(?:ın|ı)? (?:anla|anlam|çevir)|daha (?:açık|net) bir (?:talimat|soru|ifade)|nasıl yardımcı olabilirim|"
+    r"anlaşılır bir (?:türkçe )?(?:cümle|ifade)|doğrudan bir (?:türkçe )?karşılığı|"
+    r"daha fazla (?:bağlam|bilgi) olmadan|bağlamını netleştirmek|anlamını belirlemek zor|"
+    r"bu bir hata gibi görünüyor|hata mesajı veya (?:bir )?kod parçası|"
+    r"muhtemelen bir (?:isim|yer|kurum)\b.{0,40}(?:adı|ifade))",
     re.IGNORECASE,
 )
 
@@ -169,6 +173,21 @@ def is_continuation(previous: str | None, text: str) -> bool:
     if not previous or not text:
         return False
     return previous.rstrip()[-1:] not in ".!?…\"'”" or text.lstrip()[:1].islower()
+
+
+_STAGE_LEAD = re.compile(r"^\s*\([^()]{2,80}\)\s*(?=\S)")
+_STAGE_TAIL = re.compile(r"\s*\([^()]{2,120}\)\s*\.?\s*$")
+
+
+def _strip_stage_notes(out: str, original: str) -> str:
+    """Modelin eklediği sahne/açıklama notları: "(Fısıldayarak) Blista..." ya da
+    "Kamyonet... (Tekrar vurgulayarak)". Orijinalde parantez yoksa başta/sonda kaldırılır (içerik
+    parantezle başlayan/biten gerçek satırlar korunur: orijinal de parantezliyse dokunulmaz)."""
+    if "(" in original:
+        return out
+    stripped = _STAGE_TAIL.sub("", out)
+    stripped = _STAGE_LEAD.sub("", stripped).strip().strip('"').strip()
+    return stripped or out
 
 
 def is_meta_reply(text: str) -> bool:
@@ -458,8 +477,8 @@ class OllamaBackend:
         # Sözlük terimleri yalnızca yeni satırın mesajında (geçmiş turlar değişmez, önek önbelleği bozulmaz).
         # Kaynak (OCR/konuşma tanıma) da yalnızca bu mesajda; sistem istemi her satırda aynı.
         user = _user_message(context, text, self._matcher.matched(text), source)
-        out = clean_output(self._chat(user, timeout=self._timeout, num_predict=limit,
-                                      history=history, cancel=cancel))
+        out = _strip_stage_notes(clean_output(self._chat(user, timeout=self._timeout, num_predict=limit,
+                                                         history=history, cancel=cancel)), text)
         if not out:
             raise RuntimeError("Yerel LLM boş yanıt verdi")
         if is_meta_reply(out):  # hata sayılır: taslak çeviri ekranda kalır, önbelleğe girmez

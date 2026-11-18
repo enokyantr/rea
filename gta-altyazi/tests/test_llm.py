@@ -434,3 +434,27 @@ def test_prompt_version_changed_with_phone_rule(fake):
                                     ensure_ascii=False).encode("utf-8")).hexdigest()[:10]
     assert old not in backend.cache_namespace()
     assert "phone" in llm.SOURCES
+
+
+@pytest.mark.parametrize("reply,meta", [
+    ('"GHONDEN GAGTUS" ifadesi anlaşılır bir Türkçe cümle değil. Anlamını netleştirmek için daha fazla', True),
+    ('Bu bir hata gibi görünüyor. Belki de bir hata mesajı veya kod parçası', True),
+    ('"TACKED" kelimesi Türkçe\'de doğrudan bir karşılığı olmayan bir İngilizce terimdir.', True),
+    ('"HAMLET POLİS DEPARTMANI" muhtemelen bir yer veya kurumun adını ifade ediyor.', True),
+    ("Seni görmek ne güzel be kanka.", False),
+    ("Bu bir hata değil, kasıtlı yaptım.", False),
+    ("Muhtemelen bir yerde saklanıyordur.", False),
+])
+def test_more_explanation_replies_are_detected(reply, meta):
+    from altyazi.llm import is_meta_reply
+
+    assert is_meta_reply(reply) is meta
+
+
+def test_stage_notes_added_by_the_model_are_removed():
+    from altyazi.llm import _strip_stage_notes as strip
+
+    assert strip("Kamyonet... (Tekrar vurgulayarak)", "PICK UP") == "Kamyonet..."
+    assert strip('(Fısıldayarak) "Sravado..."', "SRAVADO") == "Sravado..."
+    assert strip("Seni (belki) görürüm.", "See you.") == "Seni (belki) görürüm."  # ortadaki parantez kalır
+    assert strip("(Gülüyor) Hadi.", "(laughs) Come on.") == "(Gülüyor) Hadi."  # orijinalde de var

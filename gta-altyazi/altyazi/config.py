@@ -33,8 +33,11 @@ class ExtraRegion:
 
 
 # Kısayol tuşu (Ctrl+Alt+<tuş>) -> ek bölge adı.
-EXTRA_REGION_KEYS = {"G": "gorev", "T": "telefon"}
-EXTRA_REGION_LABELS = {"gorev": "Görev", "telefon": "Telefon"}
+EXTRA_REGION_KEYS = {"G": "gorev", "T": "telefon", "B": "bildirim"}
+EXTRA_REGION_LABELS = {"gorev": "Görev", "telefon": "Telefon", "bildirim": "Mesaj bildirimi"}
+# Bu bölgelerin yazıları telefon mesajı gibi çevrilir (LLM "phone" kaynağı: geçmiş yok, @/#/emoji
+# korunur, internet dili) ve taslak gösterilmez (bildirim birkaç sn kalır; yazı iki kez değişmesin).
+PHONE_LIKE = frozenset({"bildirim"})
 
 DEFAULT_INSTRUCTIONS = [
     "This is dialogue from a mature, uncensored crime video game. Translate profanity, insults and slang "
@@ -110,6 +113,8 @@ class Config:
     # Telefon ekranı bu kadar ms durağan kalınca okunur (kaydırma bitsin).
     phone_debounce_ms: int = 300
     phone_font_size: int = 15
+    # Panelin saydamlığı (0,35 = çok saydam ... 1 = opak): oyun arkada görünsün.
+    phone_panel_opacity: float = 0.78
 
     # OCR
     # "auto": RapidOCR (kurulu değilse Windows OCR). "windows": yalnızca Windows OCR.

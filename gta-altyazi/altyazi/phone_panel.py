@@ -27,8 +27,9 @@ OFFSCREEN = "+-32000+-32000"
 
 
 class PhonePanel:
-    WIDTH = 400
-    MIN_HEIGHT = 320
+    WIDTH = 380
+    MIN_HEIGHT = 110     # içerik azken panel küçülür (ekranı kaplamaz)
+    MAX_SCREEN_FRACTION = 0.55  # ekran yüksekliğinin en çok bu kadarı
     GAP = 12  # telefon bölgesiyle panel arası
 
     def __init__(self, root: tk.Misc, cfg, on_scan: Callable[[], None] | None = None,
@@ -57,6 +58,9 @@ class PhonePanel:
         self._no_activate()
         self.win.wm_attributes("-topmost", True)
         self._set_alpha(0.0)
+
+    def _opacity(self) -> float:
+        return max(0.35, min(1.0, float(getattr(self.cfg, "phone_panel_opacity", 0.78))))
 
     # --- kurulum ----------------------------------------------------------------------------
 
@@ -126,8 +130,30 @@ class PhonePanel:
     # --- konum ------------------------------------------------------------------------------
 
     def _height(self) -> int:
-        h = self.region.height if self.region is not None else self.MIN_HEIGHT
-        return max(self.MIN_HEIGHT, min(h, self.win.winfo_screenheight() - 40))
+        """İçeriğe göre: başlık + kartlar, en çok ekranın %55'i (ve telefon bölgesinin yüksekliği).
+        Telefon bölgesi büyük olsa da panel bütün ekranı kaplamaz."""
+        try:
+            self.win.update_idletasks()
+            content = self.inner.winfo_reqheight() + 16 + self._head_height()
+        except tk.TclError:
+            content = self.MIN_HEIGHT
+        cap = int(self.win.winfo_screenheight() * self.MAX_SCREEN_FRACTION)
+        if self.region is not None:
+            cap = min(cap, max(self.MIN_HEIGHT, self.region.height))
+        return max(self.MIN_HEIGHT, min(content, cap))
+
+    def _head_height(self) -> int:
+        return 36
+
+    def _fit(self) -> None:
+        """İçerik değişince yüksekliği güncelle (konum aynı kalır)."""
+        if not self.shown or self._drag is not None:
+            return
+        h = self._height()
+        if abs(h - self.win.winfo_height()) > 6:
+            self.win.geometry(f"{self.WIDTH}x{h}+{self.win.winfo_x()}+{self.win.winfo_y()}")
+            self.win.update_idletasks()
+            self._update_rect()
 
     def docked_geometry(self) -> str:
         """Telefon bölgesinin sağı (yer varsa), değilse solu; üst kenarlar hizalı."""
@@ -203,7 +229,7 @@ class PhonePanel:
         if not self.shown:
             self.shown = True
             self._place()
-            self._set_alpha(1.0)  # her zaman üstte (topmost); lift/focus pencereyi etkinleştirebilirdi
+            self._set_alpha(self._opacity())  # her zaman üstte (topmost); lift/focus pencereyi etkinleştirebilirdi
         self._update_rect()
 
     def hide(self) -> None:
@@ -282,6 +308,7 @@ class PhonePanel:
         elif not self.empty_lbl.winfo_manager():
             self.empty_lbl.pack(anchor="w", pady=4)
         self._update_status()
+        self._fit()
         if order:
             self._cancel_hide()
             if self._dismissed is not None and frozenset(order) != self._dismissed:
@@ -297,6 +324,7 @@ class PhonePanel:
             card["tr"] = translated
             self._paint(card)
             self._update_status()
+            self._fit()
 
     def clear(self) -> None:
         self.show_blocks([])
@@ -308,3 +336,6 @@ class PhonePanel:
 
     def apply_style(self) -> None:
         self.font.configure(size=self._size())
+        if self.shown:
+            self._set_alpha(self._opacity())
+            self._fit()

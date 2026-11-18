@@ -524,3 +524,22 @@ def test_spanish_lines_are_detected_and_not_spell_corrected_into_english():
     assert textproc.all_words_known("Gracias, hermano.")
     # İspanyolca -lar/-ler fiilleri Türkçe ek sanılıp satır atlanmaz.
     assert not textproc.looks_turkish("Tienes que hablar con ellos para trabajar.")
+
+
+def test_draft_hold_follows_expected_final_latency_and_the_cap():
+    from altyazi.hybrid import draft_hold_s
+
+    assert draft_hold_s("Yeah.", 1000) < 0.6                  # kısa satır: kısa bekleme
+    assert draft_hold_s("x" * 300, 1000) == 1.0               # uzun satır: üst sınır
+    assert draft_hold_s("Hello there, friend.", 0) == 0.0     # 0: taslak hemen
+    assert draft_hold_s("Hello there, friend.", 400) <= 0.4
+
+
+def test_sms_notification_region_is_registered():
+    from altyazi import hotkeys
+    from altyazi.config import EXTRA_REGION_KEYS, EXTRA_REGION_LABELS, PHONE_LIKE
+
+    assert "bildirim" in EXTRA_REGION_KEYS.values() and "bildirim" in PHONE_LIKE
+    assert EXTRA_REGION_LABELS["bildirim"] == "Mesaj bildirimi"
+    assert hotkeys.DEFAULT_HOTKEYS["pick-bildirim"] == "ctrl+alt+b"
+    assert not hotkeys.conflicts(hotkeys.merged(None))

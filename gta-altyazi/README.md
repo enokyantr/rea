@@ -106,6 +106,7 @@ Varsayılan kısayollar (menüden değiştirilebilir):
 | Ctrl+Alt+R | Altyazı bölgesini seç |
 | Ctrl+Alt+G | Görev hedefi bölgesini seç (seçicide Delete: kaldır) |
 | Ctrl+Alt+T | Telefon mesajı bölgesini seç (seçicide Delete: kaldır) |
+| Ctrl+Alt+B | Sağ alttaki mesaj (SMS) bildirimi bölgesini seç — Türkçesi bildirimin üstüne basılır; telefon mesajı gibi çevrilir (internet dili, @/# korunur), diyalog geçmişi kullanılmaz |
 | Ctrl+Alt+Y | Telefon ekranını şimdi çevir (telefon okuma modu) |
 | Ctrl+Alt+S | Duraklat / devam |
 | Ctrl+Alt+PageUp / PageDown | Yazıyı büyüt / küçült |
@@ -249,6 +250,13 @@ tam doğru satır 55 -> 68/120, okuma başına ~+70 ms). Okuma
 emin değilken program görüntünün keskinleştirilmiş ve kumlanması süzülmüş hâllerini de okuyup en
 iyisini seçer (bu her zaman açık; iyi görüntüde ek iş yapılmaz).
 
+### Hızlı konuşma
+
+Satır değişince önceki satırın yarım kalan yapay zekâ çevirisi hemen kesilir (ekran kartı yeni satıra
+kalır); Görev, mesaj bildirimi ve telefon bölgelerinin çevirileri ana altyazının isteği sürerken
+bekler. Taslak çeviri, son çevirinin tahmini geliş süresi kadar (satır uzunluğuna göre, en çok
+**Taslak çeviri en fazla kaç ms bekletilsin** ayarı) tutulur; son çeviri gelirse yazı hiç değişmez.
+
 ### Yoksayılan ifadeler
 
 Menü → **Çeviri → Yoksayılan ifadeler**: her satıra bir ifade. Bu ifadeler hiç çevrilmez, gösterilmez
@@ -264,7 +272,7 @@ kaçırdığınız sahneleri okuyabilir, kötü çevirileri toplu bildirebilirsi
 ## Görev ve telefon yazıları
 
 Altyazı dışında görev hedefleri ("Lose the cops") ve telefon mesajları da çevrilebilir.
-Ctrl+Alt+G / Ctrl+Alt+T ile ilgili alanı bir kez seçin; her bölge ayrı okunur ve Türkçesi o alanın
+Ctrl+Alt+G / Ctrl+Alt+T / Ctrl+Alt+B (mesaj bildirimi) ile ilgili alanı bir kez seçin; her bölge ayrı okunur ve Türkçesi o alanın
 üstünü kapatan kutuda gösterilir. Bölgeyi kaldırmak için seçiciyi açıp Delete'e basın.
 Son satırlar panelinde (Ctrl+Alt+H) bu satırlar `[Görev]` / `[Telefon]` etiketiyle görünür.
 

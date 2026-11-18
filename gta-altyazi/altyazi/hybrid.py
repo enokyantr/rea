@@ -75,7 +75,29 @@ class _Speculation:
         return self.future.done() and (self.future.cancelled() or self.future.exception() is not None)
 
 
+class _Stale:
+    """Satır bayatlayınca ("yeni satır geldi", "yazı kayboldu") kurulmuş görünen iptal bayrağı:
+    LLM isteği akışla alınır ve her parçada buna bakılır; bayat satırın üretimi yarıda kesilir, ekran
+    kartı sıradaki satıra hemen kalır (hızlı konuşmada eski satırın bitmesi beklenmez)."""
+
+    def __init__(self, is_current: Callable[[], bool]):
+        self._is_current = is_current
+
+    def is_set(self) -> bool:
+        return not self._is_current()
+
+
+# Ana altyazının LLM isteği sürerken ek bölgelerin (görev, mesaj, telefon) istekleri bekler.
+_PRIORITY_LOCK = threading.Lock()
+_main_active = 0
+LOW_PRIORITY_WAIT_S = 2.5
+
+
 class HybridTranslator:
+    # True: bu çevirici ana altyazı değil (görev/telefon...); ana altyazının LLM isteği varken
+    # en çok LOW_PRIORITY_WAIT_S bekler (tek ekran kartında diyalog satırları öne geçer).
+    low_priority = False
+
     def __init__(self, final: FinalTranslator | None, draft: Backend | None,
                  final_for: Callable[[str], bool] | None = None,
                  final_only: Callable[[str], bool] | None = None):
@@ -188,6 +210,8 @@ class HybridTranslator:
             spec.context_sig = _context_sig(spec.context)
             spec.started = True
             spec.future.set_running_or_notify_cancel()
+        self._yield_to_main(lambda: not spec.cancel.is_set())
+        self._enter()
         try:
             result = self.final.translate_uncommitted(text, spec.context, cancel=spec.cancel,
                                                       source=spec.source)
@@ -195,6 +219,8 @@ class HybridTranslator:
             spec.future.set_exception(exc)
         else:
             spec.future.set_result(result)
+        finally:
+            self._leave()
 
     def _run_draft_spec(self, text: str, context_fn: Callable[[], Any]) -> None:
         with self._spec_lock:
@@ -318,12 +344,24 @@ class HybridTranslator:
         def run_final() -> None:
             if not is_current():
                 return
-            started = time.perf_counter()
-            try:
-                translated = self.final.translate(text, context, source=source)
-            except Exception as exc:
-                fail_final(exc)
+            self._yield_to_main(is_current)
+            if not is_current():
                 return
+            started = time.perf_counter()
+            self._enter()
+            try:
+                if hasattr(self.final, "translate_uncommitted"):
+                    key, translated = self.final.translate_uncommitted(text, context, cancel=_Stale(is_current),
+                                                                       source=source)
+                    self.final.commit(key, translated)
+                else:
+                    translated = self.final.translate(text, context, source=source)
+            except Exception as exc:
+                if is_current():  # bayatlayan satırın iptali/hatası sessiz: yeni satır zaten ekranda
+                    fail_final(exc)
+                return
+            finally:
+                self._leave()
             finish_final(translated, time.perf_counter() - started)
 
         def spec_done(future: Future) -> None:
@@ -346,8 +384,36 @@ class HybridTranslator:
         elif use_final:
             self._final_exec.submit(run_final)
 
+    def _enter(self) -> None:
+        global _main_active
+        if not self.low_priority:
+            with _PRIORITY_LOCK:
+                _main_active += 1
+
+    def _leave(self) -> None:
+        global _main_active
+        if not self.low_priority:
+            with _PRIORITY_LOCK:
+                _main_active = max(0, _main_active - 1)
+
+    def _yield_to_main(self, is_current: Callable[[], bool]) -> None:
+        """Düşük öncelikli çevirici: ana altyazının isteği bitene kadar (en çok 2,5 sn) bekler."""
+        if not self.low_priority:
+            return
+        deadline = time.monotonic() + LOW_PRIORITY_WAIT_S
+        while _main_active > 0 and time.monotonic() < deadline and is_current():
+            time.sleep(0.03)
+
     def shutdown(self) -> None:
         self.cancel_prefetch()
         for ex in (self._draft_exec, self._final_exec):
             if ex is not None:
                 ex.shutdown(wait=False, cancel_futures=True)
+
+
+def draft_hold_s(original: str, max_ms: int = 1000) -> float:
+    """Taslağın bekletileceği süre (sn): son çevirinin tahmini gelişi (≈ 0,25 sn + 11 ms/harf, kayıtlarda
+    40 harf ~0,7 sn, 100 harf ~1,3 sn) + 150 ms; en çok `max_ms`. Kısa/hızlı satırlarda gereksiz
+    beklenmez; son çeviri gelince bekletme zaten biter."""
+    expected = 0.25 + 0.011 * len(original) + 0.15
+    return max(0.0, min(max_ms / 1000, expected)) if max_ms > 0 else 0.0

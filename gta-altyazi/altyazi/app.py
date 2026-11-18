@@ -12,11 +12,11 @@ import numpy as np
 
 from . import config as config_mod
 from . import contrast, imageproc, reader, textproc, win32
-from .config import EXTRA_REGION_KEYS, EXTRA_REGION_LABELS, Config, Region
+from .config import EXTRA_REGION_KEYS, EXTRA_REGION_LABELS, PHONE_LIKE, Config, Region
 from .geometry import Rect, choose_target, fit_aspect, intersect, region_to_screen, screen_to_region, union
 from . import ocr as ocr_mod
 from .ocr import OcrUnavailable, WindowsOcr
-from .hybrid import DRAFT, FINAL, HybridTranslator
+from .hybrid import DRAFT, FINAL, HybridTranslator, draft_hold_s
 from .fullscreen import HINT as FULLSCREEN_HINT, FlatCaptureWatch, is_flat
 
 # Görüntü aynı kalsa bile bu kadar karede bir OCR tekrarlanır; altyazı belirirken (fade-in)
@@ -143,7 +143,10 @@ class Pipeline(threading.Thread):
                 self._retry_not_before = time.monotonic() + 2.0  # çevrimdışıyken istek yağdırma
                 self._retry.set()
 
-        self.translator.submit(event.text, context, lambda: seq == self.seq, on_result, on_error)
+        phone_like = self.region_name in PHONE_LIKE
+        self.translator.submit(event.text, None if phone_like else context, lambda: seq == self.seq,
+                               on_result, on_error, source="phone" if phone_like else "ocr",
+                               draft=not phone_like)
 
     def _remember_line(self, english: str, turkish: str) -> None:
         """Sohbet geçmişi: kesinleşen satırlar (çeviri tutarlılığı için sonraki satırlara bağlam)."""
@@ -169,8 +172,11 @@ class Pipeline(threading.Thread):
     def _prefetch(self, text: str, first_seen: float, draft: bool) -> None:
         """Doğrulanmamış ama güvenilir okumanın çevirisini şimdiden başlat (bkz. HybridTranslator.prefetch).
         Bağlam, `_on_show`'daki gibi üretilir; istem ve önbellek anahtarı birebir aynı olsun."""
-        if self.translator.prefetch(text, lambda: self._dialogue_context(first_seen, clear=False),
-                                    draft=draft) and self.debug:
+        phone_like = self.region_name in PHONE_LIKE
+        if self.translator.prefetch(text, lambda: None if phone_like else
+                                    self._dialogue_context(first_seen, clear=False),
+                                    draft=draft and not phone_like,
+                                    source="phone" if phone_like else "ocr") and self.debug:
             log(f"{self._tag}önceden çeviri: {text!r}")
 
     def _read_text(self, ocr, gray: np.ndarray) -> reader.ReadResult:
@@ -178,12 +184,12 @@ class Pipeline(threading.Thread):
         result = reader.read_text(gray, ocr.recognize, self.cfg, ocr.raw_input, ocr,
                                   retry_empty=now >= self._empty_retry_until)
         if not result.text and len(result.candidates) > 1:
-            # Yazısız parlak sahne: ek okumalar da boş çıktı; 1 sn boyunca boş karede tekrarlanmaz.
-            self._empty_retry_until = now + 1.0
+            # Yazısız parlak sahne: ek okumalar da boş çıktı; 4 sn boyunca boş karede tekrarlanmaz.
+            self._empty_retry_until = now + 4.0
         if result.ignored and result.ignored != self._last_ignored:
             log(f"{self._tag}yoksayıldı: {result.ignored!r}" + (f" → {result.text!r}" if result.text else ""))
         self._last_ignored = result.ignored
-        if self.debug and len(result.candidates) > 1:
+        if self.debug and len(result.candidates) > 1 and any(t for _n, t, _q in result.candidates):
             log(f"{self._tag}seçenekler: " + " | ".join(f"{n} {q:.0f} {t!r}" for n, t, q in result.candidates)
                 + f" → {result.variant}")
         if self.dump_dir is not None and result.crop is not None and self._dumped < 300:
@@ -436,7 +442,10 @@ PRESETS = {
     MAIN: Region(0.15, 0.80, 0.70, 0.15),
     "gorev": Region(0.25, 0.88, 0.50, 0.08),
     "telefon": Region(0.70, 0.45, 0.27, 0.45),
+    "bildirim": Region(0.62, 0.76, 0.36, 0.20),  # sağ alttaki SMS/mesaj bildirimi (tahmini; seçerek ayarlayın)
 }
+
+
 REGION_ORDER = [MAIN, *EXTRA_REGION_KEYS.values()]
 PHONE = "telefon"
 STREET = "sokak"
@@ -502,7 +511,9 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
             return extra.region if extra and extra.enabled else None
         mode = cfg.extra(name).display_mode if cfg.extra(name) else "cover"
         overlays[name] = Overlay(root, cfg, mode)
-        pipelines[name] = Pipeline(cfg, name, get_region, mode, make_translator(), ui, detail["on"],
+        extra_translator = make_translator()
+        extra_translator.low_priority = True  # ana altyazının çevirisi öne geçer
+        pipelines[name] = Pipeline(cfg, name, get_region, mode, extra_translator, ui, detail["on"],
                                    sample_rect=lambda ov=overlays[name]: ov.sample_rect, own_rects=own_rects)
     from .street import StreetListener
 
@@ -526,7 +537,9 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
             phone_base["at"] = now
         return intersect(region_to_screen(extra.region, phone_base["rect"]), win32.virtual_screen())
 
-    phone_pipe = PhonePipeline(cfg, phone_rect, make_translator(), ui, own_rects=own_rects, log=log)
+    phone_translator = make_translator()
+    phone_translator.low_priority = True
+    phone_pipe = PhonePipeline(cfg, phone_rect, phone_translator, ui, own_rects=own_rects, log=log)
     phone_pipe.debug = detail["on"]
     phone_state = {"error": ""}
     from .perf import LoadMonitor, game_policy
@@ -1295,7 +1308,7 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
                     if stage == DRAFT:
                         # Son çeviri kısa sürede gelecekse taslağı hiç gösterme: okunan yazı yarım saniye
                         # sonra değişmesin. En geç ilk okumadan draft_hold_ms sonra taslak görünür.
-                        wait = first_seen + cfg.draft_hold_ms / 1000 - time.monotonic()
+                        wait = first_seen + draft_hold_s(original, cfg.draft_hold_ms) - time.monotonic()
                         if wait > 0.02:
                             held_draft[name] = msg
                             root.after(int(wait * 1000), lambda n=name, q=seq: release_draft(n, q, final=False))

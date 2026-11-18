@@ -302,8 +302,20 @@ class ControlPanel:
         sb.grid(row=0, column=3, sticky="w")
         sb.bind("<Return>", commit)
         sb.bind("<FocusOut>", commit)
+        ttk.Label(card, text="Saydamlık").grid(row=1, column=0, sticky="w", pady=(6, 0))
+        opacity = tk.DoubleVar(value=float(self.cfg.phone_panel_opacity))
+
+        def opacity_set(_=None):
+            value = round(max(0.35, min(1.0, opacity.get())), 2)
+            if value != self.cfg.phone_panel_opacity:
+                self.cfg.phone_panel_opacity = value
+                self._changed(True, False)
+
+        sc = ttk.Scale(card, from_=0.35, to=1.0, variable=opacity, length=220)
+        sc.grid(row=1, column=1, columnspan=2, sticky="w", padx=10, pady=(6, 0))
+        sc.bind("<ButtonRelease-1>", opacity_set)
         self.phone_lbl = ttk.Label(card, text="", style="Muted.TLabel", wraplength=840, justify="left")
-        self.phone_lbl.grid(row=1, column=0, columnspan=4, sticky="w", pady=(4, 0))
+        self.phone_lbl.grid(row=2, column=0, columnspan=4, sticky="w", pady=(4, 0))
 
     def _toggle_phone(self) -> None:
         note = self.ctl.set_phone_mode(self.phone_var.get())

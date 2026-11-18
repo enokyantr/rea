@@ -217,3 +217,67 @@ def test_final_only_lines_skip_the_draft_translator():
     assert draft.calls == ["Hello there."]  # normal satırda taslak yine çalışır
     assert got[0] == (FINAL, "son")
     tr.shutdown()
+
+
+def test_stale_line_cancels_its_running_final_request_and_stays_silent():
+    import threading
+    import time
+
+    from altyazi.hybrid import HybridTranslator
+    from altyazi.translate import CachedTranslator
+
+    started, saw_cancel = threading.Event(), threading.Event()
+
+    class Slow:
+        cancellable = True
+
+        def translate(self, text, context, cancel=None):
+            started.set()
+            for _ in range(200):
+                if cancel is not None and cancel.is_set():
+                    saw_cancel.set()
+                    raise RuntimeError("iptal")
+                time.sleep(0.01)
+            return "uzun"
+
+    current = {"on": True}
+    got, errors = [], []
+    tr = HybridTranslator(CachedTranslator(Slow(), None), None)
+    tr.submit("A long line.", None, lambda: current["on"], lambda *a: got.append(a),
+              lambda *a: errors.append(a))
+    assert started.wait(5)
+    current["on"] = False  # yeni satır geldi
+    assert saw_cancel.wait(2)  # üretim yarıda kesildi (2 sn'lik tam çeviri beklenmedi)
+    time.sleep(0.1)
+    assert got == [] and errors == []
+    tr.shutdown()
+
+
+def test_low_priority_translator_waits_for_the_main_subtitle():
+    import threading
+
+    import altyazi.hybrid as hy
+    from altyazi.hybrid import HybridTranslator
+    from altyazi.translate import CachedTranslator
+
+    class Quick:
+        def translate(self, text, context):
+            return "çeviri"
+
+    main_busy = threading.Event()
+    low = HybridTranslator(CachedTranslator(Quick(), None), None)
+    low.low_priority = True
+    done = threading.Event()
+    with hy._PRIORITY_LOCK:
+        hy._main_active = 1
+    try:
+        low.submit("Hello there.", None, lambda: True, lambda *a: done.set(), lambda *a: None)
+        assert not done.wait(0.3)  # ana altyazı bitene kadar bekler
+        with hy._PRIORITY_LOCK:
+            hy._main_active = 0
+        assert done.wait(3)
+    finally:
+        with hy._PRIORITY_LOCK:
+            hy._main_active = 0
+        main_busy.set()
+        low.shutdown()
