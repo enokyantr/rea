@@ -409,16 +409,31 @@ _HUD_WORDS = frozenset("""scroll select back send exit confirm cancel options co
 open call answer reply delete menu next previous page zoom move rotate lock unlock equip use hold
 press tap toggle skip""".split())
 _HUD_STRONG = frozenset({"scroll", "select", "confirm", "cancel", "options", "exit"})
-_TASKBAR_CLOCK = re.compile(r"\b(?:TUR|ENG|TRK|ENG US)\s+\d{1,2}[./]\d{1,2}[./]\d{2,4}\s+\d{1,2}:\d{2}(?::\d{2})?\b",
-                            re.IGNORECASE)
+_HUD_TAIL = frozenset({"scroll", "select", "back", "send", "exit", "confirm", "cancel", "options"})
+_CLOCK_DATE = r"\d{1,2}[./]\d{1,2}[./]\d{2,4}"
+_CLOCK_TIME = r"\d{1,2}:\d{2}(?::\d{2})?"
+_TASKBAR_CLOCK = re.compile(
+    rf"(?:\b\S{{1,2}}\s+)?\b(?:TUR|ENG|TRK)\s*(?:{_CLOCK_DATE}\s+{_CLOCK_TIME}|{_CLOCK_TIME}\s+{_CLOCK_DATE})",
+    re.IGNORECASE)
 
 
-def strip_ui_chrome(text: str) -> str:
-    """Düğme ipuçları ve görev çubuğu saati temizlenir; geriye anlamlı yazı kalmazsa boş döner."""
+def strip_ui_chrome(text: str, strict: bool = False) -> str:
+    """Düğme ipuçları ve görev çubuğu saati temizlenir; geriye anlamlı yazı kalmazsa boş döner.
+    Satırın sonundaki düğme ipucu dizisi ("PHOTO STUDIO SELECT BACK" -> "PHOTO STUDIO") de atılır.
+    `strict` (mesaj bildirimi/telefon bölgeleri): tek başına "BACK" gibi ipuçları da atılır."""
     text = _TASKBAR_CLOCK.sub(" ", text).strip()
-    words = [w.lower() for w in _TOKEN.findall(text)]
-    if words and all(w in _HUD_WORDS for w in words) and (len(words) >= 2 or words[0] in _HUD_STRONG):
+    tokens = list(_TOKEN.finditer(text))
+    words = [m.group(0).lower() for m in tokens]
+    if words and all(w in _HUD_WORDS for w in words) and (strict or len(words) >= 2 or words[0] in _HUD_STRONG):
         return ""
+    # Sondaki düğme ipucu dizisi: yalnızca BÜYÜK HARFLİ ve dar listeden (arayüz ipuçları büyük yazılır;
+    # "I'll call you back" gibi gündelik cümleler korunur).
+    tail = 0
+    while (tail < len(tokens) and tokens[-1 - tail].group(0).isupper()
+           and words[-1 - tail] in _HUD_TAIL):
+        tail += 1
+    if tail >= 2 and len(tokens) > tail:
+        text = text[:tokens[len(tokens) - tail].start()]
     return _SPACE.sub(" ", text).strip()
 
 

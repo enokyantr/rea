@@ -71,7 +71,8 @@ def upscale_factor(crop_height: int, cfg) -> float:
 
 
 def read_text(gray: np.ndarray, recognize: Callable[[np.ndarray], list[str]], cfg,
-              raw: bool = False, engine=None, retry_empty: bool = True) -> ReadResult:
+              raw: bool = False, engine=None, retry_empty: bool = True,
+              strict_chrome: bool = False) -> ReadResult:
     """`gray`: bölgenin gri tonu. `recognize`: görüntü -> satırlar. `raw`: motor (RapidOCR) doğal
     görüntüyü olduğu gibi ister; ön işleme seçenekleri ve büyütme uygulanmaz.
     `retry_empty=False`: ham okuma hiç yazı bulamadıysa süzgeçli ek okumalar yapılmaz (çağıran,
@@ -130,7 +131,7 @@ def read_text(gray: np.ndarray, recognize: Callable[[np.ndarray], list[str]], cf
     if kept and textproc.looks_turkish(kept):
         kept = ""
     if kept:  # düğme ipuçları ("SCROLL SEND BACK") ve görev çubuğu saati altyazı değildir
-        kept = textproc.strip_ui_chrome(kept)
+        kept = textproc.strip_ui_chrome(kept, strict_chrome)
     if kept != result.text:
         result.ignored = result.text
         result.text = kept

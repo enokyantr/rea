@@ -182,7 +182,8 @@ class Pipeline(threading.Thread):
     def _read_text(self, ocr, gray: np.ndarray) -> reader.ReadResult:
         now = time.monotonic()
         result = reader.read_text(gray, ocr.recognize, self.cfg, ocr.raw_input, ocr,
-                                  retry_empty=now >= self._empty_retry_until)
+                                  retry_empty=now >= self._empty_retry_until,
+                                  strict_chrome=self.region_name in PHONE_LIKE)
         if not result.text and len(result.candidates) > 1:
             # Yazısız parlak sahne: ek okumalar da boş çıktı; 4 sn boyunca boş karede tekrarlanmaz.
             self._empty_retry_until = now + 4.0

@@ -93,5 +93,16 @@ def test_button_prompts_and_taskbar_clock_are_not_subtitles():
     for junk in ("SCROLL SEND BACK", "SELECT BACK", "EXIT", "SCROLL SEND 44 TUR 19.11.2026 02:30"):
         assert textproc.strip_ui_chrome(junk) == "", junk
     assert textproc.strip_ui_chrome("SCROLL SET DESTINATION TUR 19.11.2026 02:30") == "SCROLL SET DESTINATION"
-    for line in ("Back.", "Back off, man.", "Open the door.", "Hold on, call me back", "PHOTO STUDIO SELECT BACK"):
+    for line in ("Back.", "Back off, man.", "Open the door.", "Hold on, call me back"):
+        assert textproc.strip_ui_chrome(line) == line, line
+
+
+def test_trailing_button_prompts_are_cut_only_when_uppercase_hud_words():
+    from altyazi import textproc
+
+    assert textproc.strip_ui_chrome("PHOTO STUDIO SELECT BACK") == "PHOTO STUDIO"
+    assert textproc.strip_ui_chrome("REMINDERS SELECT EXIT") == "REMINDERS"
+    assert textproc.strip_ui_chrome("BACK", strict=True) == "" and textproc.strip_ui_chrome("BACK") == "BACK"
+    assert textproc.strip_ui_chrome("4 TUR 02:50 19.11.2026") == ""
+    for line in ("Press select to exit", "I'll call you back", "Send it back", "Meet me at 10:30 on 19.11.2026."):
         assert textproc.strip_ui_chrome(line) == line, line
