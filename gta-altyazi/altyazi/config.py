@@ -65,7 +65,7 @@ class Config:
     ollama_model: str = "aya-expanse:8b"
     ollama_url: str = "http://127.0.0.1:11434"
     ollama_timeout_s: float = 10.0
-    ollama_num_ctx: int = 2048
+    ollama_num_ctx: int = 4096  # sistem istemi + örnekler ~1.6k token; sohbet geçmişi ve sözlük sığsın
     # true: yerel LLM yalnızca küfür/argo içeren satırlarda kullanılır; diğer satırlarda yerel taslak
     # çeviri (daha doğru ve hızlı) nihai sonuçtur. false: her satır LLM'e gider.
     ollama_only_profanity: bool = True

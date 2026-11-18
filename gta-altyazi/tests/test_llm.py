@@ -356,3 +356,46 @@ def test_other_400_errors_are_not_retried(fake):
 ])
 def test_think_blocks_and_tag_attributes_are_cleaned(raw, expected):
     assert clean_output(raw) == expected
+
+
+def test_history_is_trimmed_so_the_system_prompt_is_never_cut(monkeypatch):
+    from altyazi import llm
+
+    sent = {}
+
+    class Resp:
+        status_code = 200
+        ok = True
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"message": {"content": "tamam"}}
+
+    class Http:
+        def post(self, url, timeout=None, json=None, stream=False):
+            sent["body"] = json
+            return Resp()
+
+    b = llm.OllamaBackend.__new__(llm.OllamaBackend)
+    b.__dict__.update(llm.OllamaBackend("m", "http://x").__dict__)
+    b._http = Http()
+    b._num_ctx = 4096
+    history = [("line %d " % i + "x" * 300, "satır %d " % i + "y" * 300) for i in range(20)]
+    try:
+        b._chat("<line>Hi.</line>", timeout=1, history=history)
+    except Exception:
+        pass
+    msgs = sent["body"]["messages"]
+    assert msgs[0]["role"] == "system"
+    assert llm._approx_tokens(msgs) <= 4096 - 120
+    kept = [m for m in msgs if m["content"].startswith("<line>line ")]
+    assert kept and kept[-1]["content"].startswith("<line>line 19")  # en yeni geçmiş korunur
+    assert len(kept) < 20  # sığmayan en eskiler atıldı

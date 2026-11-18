@@ -14,13 +14,23 @@ import requests
 from .glossary import Matcher
 
 SYSTEM = """\
-You translate English subtitle lines from the crime video game Grand Theft Auto VI into natural, \
-spoken Turkish for a Turkish player who reads them live while playing.
+You translate subtitle lines from video games (often crime games like Grand Theft Auto VI) into natural, \
+spoken Turkish for a Turkish player who reads them live while playing. The result must sound like a good \
+Turkish dub: what a Turkish person would actually say in that situation, never a word-by-word translation.
 
 Rules:
 - Reply with ONLY the Turkish translation of the text inside <line>. No quotes, labels, notes, \
 alternatives or explanations.
 - Keep it as short and readable as the original; match the speaker's tone, attitude and register.
+- Translate the meaning and intent of the WHOLE sentence, not the words. Rephrase freely; replace English \
+idioms with Turkish idioms; drop pronouns and subjects Turkish leaves out. Never use stiff written Turkish \
+("-mektedir", "bulunmaktadır", "olduğunu bilmektesin").
+- Make the emotion unmistakable: friendly or warm lines sound close and casual ("be", "ya", "kanka", \
+"canım"); angry lines are short, sharp and threatening ("lan", exclamations); sarcasm stays sarcastic; \
+fear or hesitation stays hesitant. Use "sen" between friends, family, partners, criminals and enemies; \
+"siz" only when the speaker is clearly formal or polite to a stranger.
+- "man", "dude", "bro", "buddy" used as address or exclamation are never "adam"/"insan": use "lan", \
+"dostum", "kanka", "be adamım" or drop them, depending on the tone.
 - Keep character names and place names as they are.
 - <context> holds the previous subtitle line for reference only; never translate or repeat it.
 - Earlier turns are the previous lines of the same conversation with your translations. Keep names, \
@@ -77,6 +87,16 @@ EXAMPLES_UNCENSORED = [
 EXAMPLES_PLAIN = [
     ("Holy shit, bro. That was close.", "Get in the car, we're leaving.", "Arabaya bin, gidiyoruz."),
     (None, "Where did you get the money?", "Parayı nereden buldun?"),
+    # Doğal, duygusu belli çeviri (kelimesi kelimesine değil; gerçek kayıtlardaki hatalardan)
+    (None, "Got a minute?", "Bir dakikan var mı?"),
+    ("You're not gonna rob me again?", "Man, I never robbed you. That was just a repossession.",
+     "Lan, ben seni hiç soymadım. Sadece malımı geri aldım."),
+    (None, "It's good to see you, man. Been way too long.", "Seni görmek ne güzel be kanka. Çok uzun zaman oldu."),
+    (None, "Touch my car again and you're a dead man, you hear me?",
+     "Bir daha arabama dokunursan ölürsün, duydun mu beni?"),
+    (None, "Oh, great. Another genius plan.", "Ah, harika. Yine bir dahiyane plan."),
+    (None, "Ay, mija, you scared me!", "Ay kızım, ödümü kopardın!"),
+    (None, "Orale, vamonos, hermano.", "Hadi kardeşim, gidelim."),
 ]
 
 
@@ -97,6 +117,11 @@ EXAMPLES_GLOSSARY = [
 # konuşmaları). Kaynak yalnızca kullanıcı mesajındaki <line> etiketinde belirtilir; sistem istemi
 # her kaynak için aynıdır (önek önbelleği korunur).
 SOURCES = ("ocr", "asr")
+
+
+def _approx_tokens(messages) -> int:
+    """Kaba token tahmini (Türkçe/İngilizce karışık metinde ~3 karakter/token; rol başına ek pay)."""
+    return sum(len(m["content"]) // 3 + 4 for m in messages)
 
 
 def _check_source(source: str) -> str:
@@ -200,7 +225,7 @@ class OllamaBackend:
 
     def __init__(self, model: str, url: str = "http://127.0.0.1:11434", timeout_s: float = 10.0,
                  uncensored: bool = True, glossary: dict[str, str] | None = None, keep_alive: str = "60m",
-                 num_ctx: int = 2048, use_context: bool = True, context_for_continuation: bool = True,
+                 num_ctx: int = 4096, use_context: bool = True, context_for_continuation: bool = True,
                  num_gpu: int | None = None):
         self.model = model
         # Küçük bağlam penceresi: istem ~600 token; daha büyük pencere ekran kartı belleğini boşa harcar.
@@ -229,8 +254,8 @@ class OllamaBackend:
         # Parametreyi reddeden Ollama/model (HTTP 400, hata "think" içerir) için bir kez parametresiz
         # yeniden denenir ve bu model için bir daha gönderilmez (nesne tek modele aittir).
         self._send_think = True
-        # "clean-5": İspanyolca/karışık satır kuralı ve İspanyolca küfür/argo karşılıkları eklendi.
-        blob = json.dumps([self._system, self._examples, "clean-5"], ensure_ascii=False).encode("utf-8")
+        # "clean-6": doğallık/duygu/hitap kuralları ve örnekleri (clean-5: İspanyolca satırlar).
+        blob = json.dumps([self._system, self._examples, "clean-6"], ensure_ascii=False).encode("utf-8")
         self._fingerprint = hashlib.sha256(blob).hexdigest()[:10]
 
     def cache_namespace(self) -> str:
@@ -349,7 +374,14 @@ class OllamaBackend:
             messages.append({"role": "user", "content": _user_message(context, src, terms)})
             messages.append({"role": "assistant", "content": dst})
         # Sohbet geçmişi: önceki satırlar ve verdiğimiz çeviriler gerçek turlar olarak (model bağlamı
-        # çevirmeye/tekrarlamaya çalışmaz, yalnızca tutarlı devam eder).
+        # çevirmeye/tekrarlamaya çalışmaz, yalnızca tutarlı devam eder). İstem bağlam penceresini
+        # aşarsa Ollama BAŞINI (talimatları) keserdi: sığmayan en eski geçmiş satırları atılır.
+        history = list(history)
+        budget = self._num_ctx - num_predict - 64
+        fixed = _approx_tokens(messages) + _approx_tokens([{"content": user}])
+        while history and fixed + sum(_approx_tokens([{"content": s}, {"content": d}]) + 8
+                                      for s, d in history) > budget:
+            history.pop(0)
         for src, dst in history:
             messages.append({"role": "user", "content": _user_message(None, src)})
             messages.append({"role": "assistant", "content": dst})
