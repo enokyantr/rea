@@ -243,6 +243,12 @@ class Pipeline(threading.Thread):
         self.engine_name = ocr.name
         if self.region_name == MAIN:
             log(f"OCR motoru: {ocr.name}")
+            note = getattr(ocr, "gpu_note", "")
+            if note:
+                log(note)
+            elif not getattr(ocr, "on_gpu", False) and getattr(ocr, "gpu_requested", True) is False:
+                log(f"OCR bilerek işlemcide (ayar: OCR nerede çalışsın = {self.ocr_device or self.cfg.ocr_device}, "
+                    f"performans: {self.cfg.performance_mode})")
         textproc.normalize(["warm up"])  # sözlük ilk satırda değil şimdi yüklensin (~0,1 sn)
 
         cfg = self.cfg
@@ -500,9 +506,19 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
                 rects.append(rect)
         return rects
 
+    def own_rects_others() -> list[Rect]:
+        """Altyazı/görev/mesaj okumaları için: telefon açıkken (panelde içerik var) telefon ekranının alanı
+        da karartılır; aynı yazı iki bölgede birden okunup çevrilmesin, işlemci iki kat yorulmasın."""
+        rects = own_rects()
+        if cfg.phone_mode and phone_panel is not None and phone_panel.shown:
+            rect = phone_rect()
+            if rect is not None:
+                rects.append(rect)
+        return rects
+
     pipelines[MAIN] = Pipeline(cfg, MAIN, lambda: cfg.region if cfg.region_enabled else None, cfg.display_mode,
                                make_translator(), ui, detail["on"],
-                               sample_rect=lambda: main_overlay.sample_rect, own_rects=own_rects)
+                               sample_rect=lambda: main_overlay.sample_rect, own_rects=own_rects_others)
     for name in EXTRA_REGION_KEYS.values():
         def get_region(name=name):
             extra = cfg.extra(name)
@@ -514,7 +530,8 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
         extra_translator = make_translator()
         extra_translator.low_priority = True  # ana altyazının çevirisi öne geçer
         pipelines[name] = Pipeline(cfg, name, get_region, mode, extra_translator, ui, detail["on"],
-                                   sample_rect=lambda ov=overlays[name]: ov.sample_rect, own_rects=own_rects)
+                                   sample_rect=lambda ov=overlays[name]: ov.sample_rect,
+                                   own_rects=own_rects_others)
     from .street import StreetListener
 
     overlays[STREET] = Overlay(root, cfg, "adaptive")

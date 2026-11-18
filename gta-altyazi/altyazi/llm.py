@@ -163,7 +163,9 @@ _META = re.compile(
     r"anlaşılır bir (?:türkçe )?(?:cümle|ifade)|doğrudan bir (?:türkçe )?karşılığı|"
     r"daha fazla (?:bağlam|bilgi) olmadan|bağlamını netleştirmek|anlamını belirlemek zor|"
     r"bu bir hata gibi görünüyor|hata mesajı veya (?:bir )?kod parçası|"
-    r"muhtemelen bir (?:isim|yer|kurum)\b.{0,40}(?:adı|ifade))",
+    r"muhtemelen bir (?:isim|yer|kurum)\b.{0,40}(?:adı|ifade)|"
+    r"bu mesaj(?:ın|ı)? içeri[ğk]|(?:ekran görüntüsü|telefon ekranı)(?: mesajı)? (?:gibi görünüyor|görünümünde)|"
+    r"çeviri gerektirmiyor|gta altyazısı|ne anlama geliyor\w* bilmiyorum|anlamını bilmiyorum)",
     re.IGNORECASE,
 )
 
@@ -195,6 +197,8 @@ def is_meta_reply(text: str) -> bool:
     stripped = text.strip()
     if stripped.startswith("(") and stripped.endswith(")"):
         return True
+    if stripped.startswith("(") and len(stripped) > 40:
+        return True  # "(Bu bir ekran görüntüsü ... " (uzunluk sınırında kesilmiş parantezli açıklama)
     return bool(_META.search(stripped))
 
 

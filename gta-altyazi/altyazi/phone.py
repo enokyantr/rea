@@ -495,7 +495,9 @@ class PhonePipeline(threading.Thread):
         gray = imageproc.to_gray(frame)
         self._mask_own(gray, rect)
         gate.forced = gate.forced or forced
-        if gate.feed(content_signature(gray), now, self.load.min_ocr_gap_s):
+        # OCR işlemcideyse tam ekran tarama 2-6 sn sürer: taramalar arası en az 3 sn (oyunu kastırmasın).
+        slow = self._ocr is not None and not getattr(self._ocr, "on_gpu", True)
+        if gate.feed(content_signature(gray), now, max(self.load.min_ocr_gap_s, 3.0 if slow else 0.0)):
             self.scan(gray)
         return max(MIN_CAPTURE_S, self.load.capture_interval_s)
 

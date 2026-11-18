@@ -208,3 +208,11 @@ def test_low_confidence_non_words_are_dropped_but_real_lines_kept():
     assert reader.read_text(_bright(), eng.recognize, cfg, True, eng).text == ""
     eng = _GarbageEngine("Geralt of Rivia. Witcher with tenure.", 0.62)
     assert reader.read_text(_bright(), eng.recognize, cfg, True, eng).text.startswith("Geralt")
+
+
+def test_button_prompt_region_reads_to_nothing():
+    from altyazi import reader
+    from altyazi.config import Config
+
+    eng = _GarbageEngine("SCROLL SEND BACK", 0.98)
+    assert reader.read_text(_bright(), eng.recognize, Config(), True, eng).text == ""

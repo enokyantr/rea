@@ -85,3 +85,13 @@ def test_turkish_screen_text_is_not_translated_but_english_with_names_is():
     for line in ("Geralt of Rivia. Witcher with tenure.", "Novigrad, Oxenfurt, Velen.", "Q Ara",
                  "Ve Boobie Ike said Var Var.", "Leaders, ladders, readers and traders.", "Gather Ingredients"):
         assert not textproc.looks_turkish(line), line
+
+
+def test_button_prompts_and_taskbar_clock_are_not_subtitles():
+    from altyazi import textproc
+
+    for junk in ("SCROLL SEND BACK", "SELECT BACK", "EXIT", "SCROLL SEND 44 TUR 19.11.2026 02:30"):
+        assert textproc.strip_ui_chrome(junk) == "", junk
+    assert textproc.strip_ui_chrome("SCROLL SET DESTINATION TUR 19.11.2026 02:30") == "SCROLL SET DESTINATION"
+    for line in ("Back.", "Back off, man.", "Open the door.", "Hold on, call me back", "PHOTO STUDIO SELECT BACK"):
+        assert textproc.strip_ui_chrome(line) == line, line

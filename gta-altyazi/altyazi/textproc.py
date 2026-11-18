@@ -402,6 +402,26 @@ def looks_turkish(text: str) -> bool:
     return known_fraction(text) < (0.6 if hits >= 4 else 0.35)
 
 
+# Konsol/oyun düğme ipuçları ("SCROLL SEND BACK", "SELECT BACK") ve Windows görev çubuğu saati
+# ("TUR 19.11.2026 02:30") altyazı değildir: çevrilmez. Hepsi bu kelimelerden oluşan satır atılır;
+# tek başına "Back" gibi gündelik kelime yalnızca en az iki ipucu kelimesiyle birlikte atılır.
+_HUD_WORDS = frozenset("""scroll select back send exit confirm cancel options continue accept decline close
+open call answer reply delete menu next previous page zoom move rotate lock unlock equip use hold
+press tap toggle skip""".split())
+_HUD_STRONG = frozenset({"scroll", "select", "confirm", "cancel", "options", "exit"})
+_TASKBAR_CLOCK = re.compile(r"\b(?:TUR|ENG|TRK|ENG US)\s+\d{1,2}[./]\d{1,2}[./]\d{2,4}\s+\d{1,2}:\d{2}(?::\d{2})?\b",
+                            re.IGNORECASE)
+
+
+def strip_ui_chrome(text: str) -> str:
+    """Düğme ipuçları ve görev çubuğu saati temizlenir; geriye anlamlı yazı kalmazsa boş döner."""
+    text = _TASKBAR_CLOCK.sub(" ", text).strip()
+    words = [w.lower() for w in _TOKEN.findall(text)]
+    if words and all(w in _HUD_WORDS for w in words) and (len(words) >= 2 or words[0] in _HUD_STRONG):
+        return ""
+    return _SPACE.sub(" ", text).strip()
+
+
 def known_fraction(text: str) -> float:
     """Harflerin ne kadarı sözlükteki gerçek İngilizce kelimelerde (isimler sayılmaz). Sözlük yoksa 1."""
     if not _word_freq():

@@ -458,3 +458,16 @@ def test_stage_notes_added_by_the_model_are_removed():
     assert strip('(Fısıldayarak) "Sravado..."', "SRAVADO") == "Sravado..."
     assert strip("Seni (belki) görürüm.", "See you.") == "Seni (belki) görürüm."  # ortadaki parantez kalır
     assert strip("(Gülüyor) Hadi.", "(laughs) Come on.") == "(Gülüyor) Hadi."  # orijinalde de var
+
+
+@pytest.mark.parametrize("reply,meta", [
+    ("(Bu bir ekran görüntüsü mesajı gibi görünüyor ve Türkçe'ye çeviri gerektirmiyor.", True),
+    ("Bu mesajın içeriği oyunla ilgili bir telefon ekranı görünümünde görünüyor.", True),
+    ('Bu "chiaki-ng" ne anlama geliyor bilmiyorum, ama muhtemelen bir NG+', True),
+    ("(Gülüyor) Tamam.", False),
+    ("Bu mesajı sil.", False),
+])
+def test_phone_explanation_replies_are_detected(reply, meta):
+    from altyazi.llm import is_meta_reply
+
+    assert is_meta_reply(reply) is meta

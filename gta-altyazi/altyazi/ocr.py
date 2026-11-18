@@ -104,6 +104,20 @@ class RapidOcr:
                                  "guncelle.bat çalıştırın.") from exc
         self.on_gpu = _first_provider(self._engine) == "DmlExecutionProvider"
         self.name = "RapidOCR (ekran kartı, DirectML)" if self.on_gpu else "RapidOCR (işlemci)"
+        # Ekran kartı istendi ama kullanılamadıysa nedeni (kayıtta görünür): OCR işlemcide 5-10 kat yavaş.
+        self.gpu_note = ""
+        self.gpu_requested = gpu
+        if gpu and not self.on_gpu:
+            try:
+                import onnxruntime as ort
+
+                providers = ", ".join(ort.get_available_providers())
+            except Exception as exc:
+                providers = f"okunamadı ({exc})"
+            self.gpu_note = ("Ekran kartı (DirectML) ile OCR kurulamadı; işlemcide çalışıyor (yavaş, oyunu "
+                             f"kastırır). onnxruntime sağlayıcıları: {providers}. Çözüm: guncelle.bat'ı yeniden "
+                             "çalıştırın; olmazsa .venv\\Scripts\\python -m pip install --force-reinstall --no-deps "
+                             "onnxruntime-directml")
 
     def recognize(self, gray: np.ndarray) -> list[str]:
         """Gri ton (uint8, HxW) görüntüdeki satırları yukarıdan aşağı döndürür."""

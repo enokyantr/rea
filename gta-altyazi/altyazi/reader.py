@@ -129,6 +129,8 @@ def read_text(gray: np.ndarray, recognize: Callable[[np.ndarray], list[str]], cf
     # Türkçe ekran yazısı (konsol bildirimi/menüsü bölgeye taştı): zaten Türkçe, çevrilmez.
     if kept and textproc.looks_turkish(kept):
         kept = ""
+    if kept:  # düğme ipuçları ("SCROLL SEND BACK") ve görev çubuğu saati altyazı değildir
+        kept = textproc.strip_ui_chrome(kept)
     if kept != result.text:
         result.ignored = result.text
         result.text = kept
