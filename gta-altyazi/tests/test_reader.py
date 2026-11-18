@@ -216,3 +216,37 @@ def test_button_prompt_region_reads_to_nothing():
 
     eng = _GarbageEngine("SCROLL SEND BACK", 0.98)
     assert reader.read_text(_bright(), eng.recognize, Config(), True, eng).text == ""
+
+
+def test_pipelines_share_one_ocr_engine_but_keep_their_own_results(monkeypatch):
+    import threading
+    import altyazi.ocr as ocr_mod
+
+    built = []
+
+    class FakeRapid:
+        def __init__(self, gpu=True):
+            built.append(gpu)
+            self.name, self.on_gpu, self.gpu_note, self.gpu_requested = "sahte", True, "", gpu
+            self.last_confidence, self.last_span, self.last_box = 0.0, None, None
+
+        def recognize(self, gray):
+            self.last_confidence = float(gray[0, 0]) / 100
+            return ["x"]
+
+        def boxes(self, gray):
+            return []
+
+    monkeypatch.setattr(ocr_mod, "RapidOcr", FakeRapid)
+    ocr_mod._shared.clear()
+    import numpy as np
+    from altyazi.config import Config
+
+    a, b = ocr_mod.create(Config()), ocr_mod.create(Config())
+    assert built == [True]  # tek motor kuruldu
+    a.recognize(np.full((10, 10), 90, np.uint8))
+    b.recognize(np.full((10, 10), 30, np.uint8))
+    assert (a.last_confidence, b.last_confidence) == (0.9, 0.3)  # birbirinin sonucunu ezmez
+    assert ocr_mod.create(Config(), "cpu") is not None and built == [True, False]
+    ocr_mod._shared.clear()
+    assert threading  # içe aktarma kullanılsın

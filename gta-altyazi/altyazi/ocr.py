@@ -8,6 +8,7 @@ RapidOCR aynı satırı ilk denemede neredeyse kusursuz okudu ("you'd get some b
 from __future__ import annotations
 
 import asyncio
+import threading
 from dataclasses import dataclass
 
 import numpy as np
@@ -237,12 +238,63 @@ def group_lines(raw) -> list[str]:
     return [line.text for line in merge_lines(to_boxes(raw))]
 
 
+class SharedRapid:
+    """Tüm okuma bölgelerinin ortak kullandığı TEK RapidOCR motoru (kilitle sırayla).
+
+    Her bölge (altyazı, görev, mesaj bildirimi, telefon) kendi motorunu kurunca ekran kartında bölge
+    başına 3 DirectML oturumu açılıyordu; 8 GB kartta yerel dil modeli (5-6 GB) ile birlikte bellek
+    yetmeyip program çöküyordu. Ortak motorda oturumlar bir kez açılır; OCR GPU'da 50-200 ms olduğu
+    için bölgelerin sırayla beklemesi fark edilmez. Her tutamak kendi `last_*` sonucunu tutar
+    (okuma bittiği anda kilit altında kopyalanır), böylece iş parçacıkları birbirinin güvenini görmez."""
+
+    raw_input = True
+
+    def __init__(self, engine: "RapidOcr", lock: threading.Lock):
+        self._engine = engine
+        self._lock = lock
+        self.name = engine.name
+        self.on_gpu = engine.on_gpu
+        self.gpu_note = engine.gpu_note
+        self.gpu_requested = engine.gpu_requested
+        self.last_confidence = 0.0
+        self.last_span: tuple[float, float] | None = None
+        self.last_box: tuple[int, int, int, int] | None = None
+
+    def _sync(self) -> None:
+        e = self._engine
+        self.last_confidence, self.last_span, self.last_box = e.last_confidence, e.last_span, e.last_box
+
+    def recognize(self, gray: np.ndarray) -> list[str]:
+        with self._lock:
+            lines = self._engine.recognize(gray)
+            self._sync()
+        return lines
+
+    def boxes(self, gray: np.ndarray) -> list[Box]:
+        with self._lock:
+            found = self._engine.boxes(gray)
+            self._sync()
+        return found
+
+
+_shared: dict[bool, tuple["RapidOcr", threading.Lock]] = {}
+_shared_guard = threading.Lock()
+
+
+def _shared_rapid(gpu: bool) -> SharedRapid:
+    with _shared_guard:
+        if gpu not in _shared:
+            _shared[gpu] = (RapidOcr(gpu=gpu), threading.Lock())
+        engine, lock = _shared[gpu]
+    return SharedRapid(engine, lock)
+
+
 def create(cfg, device: str | None = None):
     """`cfg.ocr_engine`: "auto" (RapidOCR, yoksa Windows OCR) | "rapid" | "windows". `device`: RapidOCR'ın
     yeri ("auto" | "cpu"); verilmezse `cfg.ocr_device` (oyun modu bunu perf.game_policy ile değiştirir)."""
     if cfg.ocr_engine in ("auto", "rapid"):
         try:
-            return RapidOcr(gpu=(device or cfg.ocr_device) != "cpu")
+            return _shared_rapid((device or cfg.ocr_device) != "cpu")
         except OcrUnavailable:
             if cfg.ocr_engine == "rapid":
                 raise
