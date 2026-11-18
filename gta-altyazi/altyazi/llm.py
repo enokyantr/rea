@@ -27,6 +27,7 @@ alternatives or explanations.
 nicknames, forms of address (sen/siz), slang and the meaning consistent with them; resolve pronouns and \
 references from them. Translate only the new line.
 - Lines are read from the screen by OCR and may contain misread characters ("rn" read as "m", "I" as "l", "0" as "O", missing apostrophes or spaces). A <line source="asr"> was transcribed by speech recognition instead and may contain misheard words or missing punctuation. Translate the meaning the speaker most likely intended, using the context; never "correct" slang, profanity or deliberate misspellings into polite or standard words, and never mention the errors or add notes.
+- Some characters speak Spanish or mix Spanish into English (Spanglish); OCR often drops Spanish accents and the marks ¿ ¡ ñ ("Que pasa, mija?" = "¿Qué pasa, mija?"). Translate the Spanish parts into Turkish too, with the same tone; never leave Spanish words untranslated except names.
 {uncensored}{glossary}"""
 
 UNCENSORED = """\
@@ -51,6 +52,12 @@ if the original is vulgar, the Turkish must be just as vulgar. Use correct Turki
   "y'all" -> "siz" / "hepiniz"; "ain't" -> "değil" / "yok"; "trippin'" -> "kafayı yemek"
   "get bitches" / "pull bitches" -> "karı kız tavlamak"; "fuck with someone" -> "biriyle takılmak" (sexual: "biriyle yatmak")
   "X-ass" after a word is an intensifier, not a body part: "dog-ass" / "punk-ass" -> "it" / "şerefsiz", "broke-ass" -> "meteliksiz"
+- Spanish (translate the MEANING with the same strength):
+  "pendejo" -> "salak" / "gerizekalı" / "göt herif"; "cabrón" -> "şerefsiz" / "pezevenk" (between friends: "kanka")
+  "puta" -> "orospu"; "hijo de puta" -> "orospu çocuğu"; "chinga tu madre" / "puta madre" -> "ananı sikeyim" / "amına koyayım"
+  "mierda" -> "bok" / "hassiktir"; "chingado" / "carajo" -> "siktir" / "lanet olsun"
+  "mija" / "mijo" -> "kızım" / "oğlum" (affectionate: "canım"); "hermano" -> "kardeşim"; "vato" / "ese" / "güey" -> "kanka" / "moruk"
+  "órale" / "ándale" / "vámonos" -> "hadi" / "tamam" / "gidelim"; "Dios mío" -> "Tanrım"
 - Equally important: never ADD swearing or slang that is not in the original. A neutral line stays \
 neutral; translate the meaning exactly (left stays left, numbers and names stay the same).
 """
@@ -222,9 +229,8 @@ class OllamaBackend:
         # Parametreyi reddeden Ollama/model (HTTP 400, hata "think" içerir) için bir kez parametresiz
         # yeniden denenir ve bu model için bir daha gönderilmez (nesne tek modele aittir).
         self._send_think = True
-        # "clean-4": istem kaynak kuralı (OCR/konuşma tanıma) ve clean_output (<think>, etiket
-        # öznitelikleri) değişti.
-        blob = json.dumps([self._system, self._examples, "clean-4"], ensure_ascii=False).encode("utf-8")
+        # "clean-5": İspanyolca/karışık satır kuralı ve İspanyolca küfür/argo karşılıkları eklendi.
+        blob = json.dumps([self._system, self._examples, "clean-5"], ensure_ascii=False).encode("utf-8")
         self._fingerprint = hashlib.sha256(blob).hexdigest()[:10]
 
     def cache_namespace(self) -> str:

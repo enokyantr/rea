@@ -487,3 +487,17 @@ def test_game_name_words_come_from_bundled_name_files():
 
     words = textproc._game_words()
     assert {"lucia", "gellhorn", "grassrivers", "dre'quan"} <= words
+
+
+def test_spanish_lines_are_detected_and_not_spell_corrected_into_english():
+    from altyazi import textproc
+
+    for line in ("Que pasa, mija?", "Come on, hermano, vamos!", "¿Donde esta el dinero, pendejo?"):
+        assert textproc.has_spanish(line), line
+    for line in ("I'm looking for a woman.", "Lucia, get in the car.", "No, son. Me too."):
+        assert not textproc.has_spanish(line), line
+    assert textproc._spell_fix("hola pendejo, callate") == "hola pendejo, callate"
+    assert textproc.normalize(["Oye, mija, ven aqui."]) == "Oye, mija, ven aqui."
+    assert textproc.all_words_known("Gracias, hermano.")
+    # İspanyolca -lar/-ler fiilleri Türkçe ek sanılıp satır atlanmaz.
+    assert not textproc.looks_turkish("Tienes que hablar con ellos para trabajar.")

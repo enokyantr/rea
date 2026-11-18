@@ -181,3 +181,39 @@ def test_backends_that_ignore_source_accept_it():
     assert c.done.wait(2) and c.results == [(FINAL, "deepl:Hi")]
     # Kaynak DeepL'in çevirisini değiştirmez: OCR satırı aynı önbellek kaydını kullanır
     assert final.cached("Hi") == "deepl:Hi" and deepl.calls == 1
+
+
+def test_final_only_lines_skip_the_draft_translator():
+    import threading
+    from altyazi.hybrid import FINAL, HybridTranslator
+
+    class Draft:
+        calls = []
+
+        def translate(self, text, context):
+            self.calls.append(text)
+            return "taslak"
+
+    class Final:
+        def translate(self, text, context, source="ocr"):
+            return "son"
+
+    from altyazi.translate import CachedTranslator
+
+    draft = Draft()
+    tr = HybridTranslator(CachedTranslator(Final(), None), draft, final_only=lambda t: "mija" in t)
+    got, done = [], threading.Event()
+
+    def on_result(stage, text, took):
+        got.append((stage, text))
+        if stage == FINAL:
+            done.set()
+    tr.submit("Que pasa, mija?", None, lambda: True, on_result, lambda *a: None)
+    assert done.wait(5)
+    assert got == [(FINAL, "son")] and draft.calls == []
+    done.clear()
+    tr.submit("Hello there.", None, lambda: True, on_result, lambda *a: None)
+    assert done.wait(5)
+    assert draft.calls == ["Hello there."]  # normal satırda taslak yine çalışır
+    assert got[0] == (FINAL, "son")
+    tr.shutdown()

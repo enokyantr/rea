@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from . import config as config_mod
-from .textproc import needs_llm
+from .textproc import has_spanish, needs_llm
 from .hybrid import HybridTranslator
 from .translate import CachedTranslator, DeepLBackend, DryRunBackend
 
@@ -212,7 +212,8 @@ def main() -> int:
     def make_translator() -> HybridTranslator:
         # Her bölgenin kendi kuyruğu; çeviri motorları (yerel model, DeepL, önbellek) ortak.
         only_profane = cfg.final_translator == "ollama" and cfg.ollama_only_profanity
-        return HybridTranslator(final, local, final_for=route_to_final if only_profane else None)
+        return HybridTranslator(final, local, final_for=route_to_final if only_profane else None,
+                                final_only=has_spanish)
 
     app.log(f"Çeviri modu: {make_translator().mode}")
     if args.ocr_compare:

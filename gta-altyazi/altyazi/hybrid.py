@@ -77,7 +77,8 @@ class _Speculation:
 
 class HybridTranslator:
     def __init__(self, final: FinalTranslator | None, draft: Backend | None,
-                 final_for: Callable[[str], bool] | None = None):
+                 final_for: Callable[[str], bool] | None = None,
+                 final_only: Callable[[str], bool] | None = None):
         # Not: `if final` kullanma — CachedTranslator boş önbellekte len()==0 olduğu için False sayılır.
         if final is None and draft is None:
             raise ValueError("en az bir çevirmen gerekli")
@@ -86,6 +87,9 @@ class HybridTranslator:
         # Son çevirmen yalnızca bu koşulu sağlayan satırlarda kullanılır (ör. küfürlü satırlar);
         # diğerlerinde taslak çeviri nihai sonuçtur. None: her satır.
         self.final_for = final_for
+        # Bu satırlar yalnızca son çevirmene gider, taslak hiç çalışmaz (ör. İspanyolca satır: yerel
+        # taslak model yalnızca İngilizce bilir, bozuk taslak göstermektense son çeviri beklenir).
+        self.final_only = final_only
         # Ayrı işçiler: yavaş DeepL isteği hızlı yerel taslağı bekletmesin.
         self._draft_exec = ThreadPoolExecutor(max_workers=1, thread_name_prefix="local-mt") if draft is not None else None
         self._final_exec = ThreadPoolExecutor(max_workers=1, thread_name_prefix="deepl") if final is not None else None
@@ -127,7 +131,10 @@ class HybridTranslator:
 
     def _use_final(self, text: str) -> bool:
         return self.final is not None and (
-            self.draft is None or self.final_for is None or self.final_for(text))
+            self.draft is None or self.final_for is None or self.final_for(text) or self._no_draft(text))
+
+    def _no_draft(self, text: str) -> bool:
+        return self.final is not None and self.final_only is not None and self.final_only(text)
 
     # --- önceden çeviri ------------------------------------------------------------------------
 
@@ -155,7 +162,7 @@ class HybridTranslator:
                     started = True
             if started:
                 self._final_exec.submit(self._run_spec, spec, text)
-        if draft and self.draft is not None and self._draft_get(text) is None:
+        if draft and self.draft is not None and not self._no_draft(text) and self._draft_get(text) is None:
             with self._spec_lock:
                 queued = self._draft_spec == text
                 self._draft_spec = text
@@ -319,7 +326,7 @@ class HybridTranslator:
             self.final.commit(key, translated)
             finish_final(translated, time.perf_counter() - submitted)
 
-        if self._draft_exec is not None:
+        if self._draft_exec is not None and not self._no_draft(text):
             self._draft_exec.submit(run_draft)
         if spec is not None:
             spec.future.add_done_callback(spec_done)

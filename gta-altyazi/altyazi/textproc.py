@@ -237,7 +237,7 @@ def _spell_fix(text: str) -> str:
     def fix(m: re.Match) -> str:
         token = m.group(0)
         low = token.lower()
-        if low in freq:
+        if low in freq or low in SPANISH_WORDS:  # İspanyolca kelime İngilizceye "düzeltilmez"
             return token
         # Özel isimlere dokunma: yalnızca küçük harfli kelime ya da satır başındaki büyük harfli kelime.
         first = not text[:m.start()].strip(" \"'(-")
@@ -306,6 +306,28 @@ def _segment(chunk: str) -> list[str] | None:
     return words[::-1]
 
 
+# İspanyolca konuşan karakterler (altyazıda İspanyolca ya da İspanyolca-İngilizce karışık satırlar).
+# Aksanlar OCR sonrası düzleştirildiği için düz biçimler. İngilizcede de kelime olanlar (no, me, con,
+# solo, pan, si...) bilerek yok: İngilizce satır İspanyolca sanılmasın.
+SPANISH_WORDS = frozenset("""
+que porque pero para por como donde cuando quien quiero quieres tengo tienes tiene estoy estas esta
+eres somos esto eso aqui alli ahora siempre nunca nada todo todos mucho muy bien bueno buena
+claro hola adios gracias senor senora senorita amigo amiga amigos hermano hermana mija mijo mama papa
+chica chico chicos vamos vamonos andale orale oye mira ven vete callate cabron cabrona pendejo pendeja
+pendejos chingado chingada chingao mierda puta puto carajo culero cono joder verdad dinero policia
+loco loca vato ese hijo hija familia corazon cerveza fiesta trabajo dios ayuda espera tranquilo
+tranquila cuidado rapido despacio sabes sabe entiendes nosotros ustedes ellos ella usted contigo
+conmigo tambien entonces porfa favor hombre mujer gringo gringa pinche chamaco guey wey neta
+""".split())
+
+
+def has_spanish(text: str) -> bool:
+    """Satırda İspanyolca var mı (tamamı ya da birkaç kelime: "Come on, mija, vamos!")?"""
+    if "¿" in text or "¡" in text:
+        return True
+    return any(t.lower() in SPANISH_WORDS for t in _TOKEN.findall(text))
+
+
 def _split_glued(text: str) -> str:
     freq = _word_freq()
     if not freq:
@@ -314,7 +336,7 @@ def _split_glued(text: str) -> str:
     def fix(m: re.Match) -> str:
         token = m.group(0)
         low = token.lower().replace("’", "'")
-        if low in freq:
+        if low in freq or low in SPANISH_WORDS:
             return token
         # Özel isimlere dokunma (Vinewood, Yetarian): yalnızca küçük harfli parça ya da satır başındaki
         # büyük harfli parça; satır başındakinin en az 3 kelimeye bölünmesi gerekir.
@@ -342,7 +364,7 @@ def all_words_known(text: str) -> bool:
     if not freq:
         return True
     for t in _TOKEN.findall(text):
-        if len(t) < 2 or t.lower().replace("’", "'") in freq:
+        if len(t) < 2 or t.lower().replace("’", "'") in freq or t.lower() in SPANISH_WORDS:
             continue
         if t[0].isupper() and t[1:].islower():
             continue
@@ -371,7 +393,7 @@ def looks_turkish(text: str) -> bool:
     (sık kelime ya da -ları/-leri/-nizi gibi ek) ve harflerin çoğu İngilizce kelime değil
     (dört ve üstü işarette yarısı İngilizceye benzeyebilir)."""
     tokens = [t.lower() for t in _TOKEN.findall(text)]
-    if len(tokens) < 2:
+    if len(tokens) < 2 or has_spanish(text):  # İspanyolca "hablar", "estar" -lar/-ler eki değil
         return False
     hits = sum(1 for t in tokens if t in _TURKISH_WORDS or (len(t) >= 6 and _TURKISH_SUFFIX.search(t)))
     if hits < 2:
@@ -390,8 +412,10 @@ def known_fraction(text: str) -> float:
 
 
 def _known_words(tokens: list[str]) -> int:
+    """Sözlükteki (İngilizce ya da İspanyolca) kelimelerin harf sayısı."""
     freq = _word_freq()
-    return sum(len(t) for t in tokens if t.lower().replace("’", "'") in freq)
+    return sum(len(t) for t in tokens
+               if t.lower().replace("’", "'") in freq or t.lower() in SPANISH_WORDS)
 
 
 def reading_score(text: str) -> float:
