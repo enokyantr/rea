@@ -127,8 +127,11 @@ class SileroVad:
         opts.intra_op_num_threads = 1
         opts.inter_op_num_threads = 1
         opts.log_severity_level = 4
-        self._session = onnxruntime.InferenceSession(str(path), sess_options=opts,
-                                                     providers=["CPUExecutionProvider"])
+        from .ocr import ORT_INIT_LOCK
+
+        with ORT_INIT_LOCK:  # OCR oturumlarıyla eşzamanlı kurulmasın (bkz. ocr.ORT_INIT_LOCK)
+            self._session = onnxruntime.InferenceSession(str(path), sess_options=opts,
+                                                         providers=["CPUExecutionProvider"])
         inputs = self._session.get_inputs()
         self._audio_name = inputs[0].name
         # Eski modellerde ayrıca örnekleme hızı girdisi var; durum girdileri (h/c ya da state) çıktılarla

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from pathlib import Path
 from dataclasses import dataclass
 
 import numpy as np
@@ -279,12 +280,46 @@ class SharedRapid:
 
 _shared: dict[bool, tuple["RapidOcr", threading.Lock]] = {}
 _shared_guard = threading.Lock()
+# ONNX Runtime oturumları (OCR, konuşma algılama) bir arada, eşzamanlı KURULMAZ: onnxruntime-directml
+# derlemesinde eşzamanlı kurulum 0xc0000005 (erişim ihlali) ile çökebiliyor (kullanıcı kaydı).
+ORT_INIT_LOCK = threading.RLock()
+# Ekran kartı OCR'ı kurulurken çökerse bu dosya kalır: sonraki açılış işlemcide başlar (çökme döngüsü
+# olmasın). Kurulum ve ilk okuma başarılı olunca silinir. Elle silinirse ekran kartı yeniden denenir.
+GPU_MARKER = Path(__file__).resolve().parent.parent / ".ocr_gpu_deneme"
+
+
+def _warm_up(engine: "RapidOcr") -> None:
+    """Oturumlar kurulduktan hemen sonra bir kez çalıştır: ilk kullanım (DirectML derlemesi) tek
+    iş parçacığında, diğer bölgeler beklerken olsun."""
+    image = np.zeros((48, 320), dtype=np.uint8)
+    image[14:34, 20:300] = 255
+    engine.recognize(image)
 
 
 def _shared_rapid(gpu: bool) -> SharedRapid:
-    with _shared_guard:
+    with _shared_guard, ORT_INIT_LOCK:
         if gpu not in _shared:
-            _shared[gpu] = (RapidOcr(gpu=gpu), threading.Lock())
+            note = ""
+            use_gpu = gpu
+            if gpu and GPU_MARKER.exists():
+                use_gpu = False
+                note = ("Ekran kartı OCR'ı önceki açılışta kurulurken çöktü: bu oturum işlemcide çalışıyor. "
+                        f"Yeniden denemek için şu dosyayı silin: {GPU_MARKER}")
+            elif gpu:
+                try:
+                    GPU_MARKER.write_text("ekran karti OCR kurulumu basladi\n", encoding="utf-8")
+                except OSError:
+                    pass
+            engine = RapidOcr(gpu=use_gpu)
+            _warm_up(engine)
+            if use_gpu:
+                try:
+                    GPU_MARKER.unlink()
+                except OSError:
+                    pass
+            if note:
+                engine.gpu_note = note
+            _shared[gpu] = (engine, threading.Lock())
         engine, lock = _shared[gpu]
     return SharedRapid(engine, lock)
 

@@ -250,3 +250,31 @@ def test_pipelines_share_one_ocr_engine_but_keep_their_own_results(monkeypatch):
     assert ocr_mod.create(Config(), "cpu") is not None and built == [True, False]
     ocr_mod._shared.clear()
     assert threading  # içe aktarma kullanılsın
+
+
+def test_gpu_ocr_crash_marker_forces_cpu_next_time(monkeypatch, tmp_path):
+    import altyazi.ocr as ocr_mod
+    from altyazi.config import Config
+
+    built = []
+
+    class FakeRapid:
+        def __init__(self, gpu=True):
+            built.append((gpu, ocr_mod.GPU_MARKER.exists()))
+            self.name, self.on_gpu, self.gpu_note, self.gpu_requested = "sahte", gpu, "", gpu
+            self.last_confidence, self.last_span, self.last_box = 0.0, None, None
+
+        def recognize(self, gray):
+            return []
+
+    monkeypatch.setattr(ocr_mod, "RapidOcr", FakeRapid)
+    monkeypatch.setattr(ocr_mod, "GPU_MARKER", tmp_path / ".marker")
+    ocr_mod._shared.clear()
+    ocr_mod.create(Config())
+    assert built == [(True, True)] and not ocr_mod.GPU_MARKER.exists()  # kurulurken işaret vardı, başarıyla silindi
+
+    ocr_mod._shared.clear()
+    ocr_mod.GPU_MARKER.write_text("çöktü")  # önceki açılış kurulum sırasında çöktü
+    handle = ocr_mod.create(Config())
+    assert built[-1] == (False, True) and "önceki açılışta" in handle.gpu_note  # işlemcide başladı
+    ocr_mod._shared.clear()
