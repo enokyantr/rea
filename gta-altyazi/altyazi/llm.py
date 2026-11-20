@@ -251,6 +251,15 @@ def echoes_history(out: str, text: str, history) -> bool:
     return len(names_out) > max(1, len(names_in))
 
 
+def keep_speaker(text: str, out: str) -> str:
+    """Model konuşmacı etiketini attıysa ("Cal: Yeah, that's right." -> "Evet, tam olarak öyle.") geri
+    eklenir: kimin konuştuğu altyazının parçası."""
+    names = _speakers(text)
+    if names and text.startswith(names[0] + ":") and not _speakers(out):
+        return f"{names[0]}: {out}"
+    return out
+
+
 def is_meta_reply(text: str) -> bool:
     """Çeviri değil, modelin kendi açıklaması mı? (Tamamı parantez içinde ya da açıklama ifadesi.)"""
     stripped = text.strip()
@@ -558,7 +567,7 @@ class OllamaBackend:
                 raise RuntimeError(f"Yerel LLM çeviri yerine açıklama yazdı: {out[:80]}")
         if self.instructions_active and textproc.is_softened(text, out):
             out = self._harden(user, text, out, limit, history, cancel)
-        return out
+        return keep_speaker(text, out)
 
     def _harden(self, user: str, text: str, soft: str, limit: int, history, cancel) -> str:
         """Sert küfür yumuşak çevrildi ("Oh shit" -> "Lanet olsun"): model bir kez daha, sert karşılık

@@ -579,3 +579,11 @@ def test_still_softened_profanity_is_hardened_deterministically():
     assert force_strong("Aww, shit.", "Ah, lanet olsun.") == "Ah, siktir."
     assert force_strong("Damn it!", "Lanet olsun!") == "Lanet olsun!"  # hafif: dokunulmaz
     assert force_strong("Oh shit!", "Hassiktir!") == "Hassiktir!"
+
+
+def test_dropped_speaker_label_is_restored():
+    from altyazi.llm import keep_speaker
+
+    assert keep_speaker("Cal: Yeah, that's right.", "Evet, tam olarak öyle.") == "Cal: Evet, tam olarak öyle."
+    assert keep_speaker("Local: Fuck!", "Yerel: Siktir!") == "Yerel: Siktir!"
+    assert keep_speaker("Yeah.", "Evet.") == "Evet."

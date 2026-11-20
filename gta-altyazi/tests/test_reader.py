@@ -320,3 +320,12 @@ def test_button_prompt_glued_to_objective_is_cut():
     assert drop_hud_lines(["Use gas car R1topour"]) == ["Use gas car"]
     assert drop_hud_lines(["Use gas car R1 to pour"]) == ["Use gas car"]
     assert drop_hud_lines(["Press R2 to shoot"]) == []
+
+
+def test_scene_digits_before_speaker_and_clipped_name_are_repaired():
+    from altyazi.textproc import drop_hud_lines, normalize
+
+    assert normalize(drop_hud_lines(["0000 ucia: For being too clever? What the fuck"])) == \
+        "Lucia: For being too clever? What the fuck"
+    assert drop_hud_lines(["00000 Cal: And he's like some evil"]) == ["Cal: And he's like some evil"]
+    assert drop_hud_lines(["Cal: Yeah."]) == ["Cal: Yeah."]

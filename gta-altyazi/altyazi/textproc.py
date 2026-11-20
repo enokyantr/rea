@@ -442,6 +442,39 @@ _TRAIL_CAPS = re.compile(r"(?<=[.!?\"”)\]…])\s*((?:[A-Z][A-Z0-9/&'-]+\s*)+(?
 _LEAD_CAPS = re.compile(r"^(?:[A-Z][A-Z0-9/&'-]+\s+)+(?=[A-Z][A-Za-z]+s?:)")
 
 
+# Konuşmacı adından önce sahneden okunan rakam/simge ("0000 Cal: ...": teknedeki gösterge) ve rengi
+# farklı olduğu için ilk harfi kaçan ad ("ucia:" -> "Lucia:"; model "000 üncü:" diye çeviriyordu).
+_LEAD_JUNK = re.compile(r"^(?:[^A-Za-z\s]+\s*)+(?=[A-Za-z][\w'.-]{1,20}s?:\s)")
+_LABEL = re.compile(r"^([A-Za-z][\w'.-]{1,20}):(?=\s)")
+
+
+@lru_cache(maxsize=1)
+def _speaker_names() -> tuple[str, ...]:
+    try:
+        from .glossary import load_bundled
+
+        _general, names = load_bundled()
+    except Exception:
+        return ()
+    return tuple(sorted({t for name in names for t in _TOKEN.findall(name) if t[:1].isupper() and len(t) >= 3}))
+
+
+def fix_speaker_label(line: str) -> str:
+    line = _LEAD_JUNK.sub("", line)
+    m = _LABEL.match(line)
+    if m is None:
+        return line
+    label = m.group(1)
+    names = _speaker_names()
+    if label in names or len(label) < 3:
+        return line
+    # Baştan bir-iki harfi eksik bilinen ad: "ucia" -> "Lucia" (tek aday varsa)
+    cands = [n for n in names if n.lower().endswith(label.lower()) and 0 < len(n) - len(label) <= 2]
+    if len(cands) == 1:
+        return cands[0] + line[m.end(1):]
+    return line
+
+
 _GLUED_BUTTON = re.compile(r"(?<![\w])([LR][123])(?=[a-z])")
 _BUTTON_TO = re.compile(r"\s+(?:(?:press|hold|tap)\s+)?[LR][123]\s*to\s*[a-z].*$", re.IGNORECASE)
 
@@ -464,6 +497,7 @@ def drop_hud_lines(lines: list[str]) -> list[str]:
         trimmed = _LEAD_CAPS.sub("", line).strip()  # "LOOT Locals: Police?" -> "Locals: Police?"
         if trimmed:
             line = trimmed
+        line = fix_speaker_label(line)
         # OCR boşluğu yutmuş düğme: "Use gas car R1topour" -> "Use gas car R1 topour"
         line = _GLUED_BUTTON.sub(r"\1 ", line)
         # Görev yazısının sonuna eklenen düğme yönergesi: "Use gas car R1 to pour" -> "Use gas car"

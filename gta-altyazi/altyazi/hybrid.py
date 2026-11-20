@@ -16,6 +16,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any, Callable, Protocol
 
 from . import textproc
+from .llm import keep_speaker
 
 DRAFT, FINAL = "draft", "final"
 
@@ -233,7 +234,7 @@ class HybridTranslator:
                 return
             self._draft_active.set()
             try:
-                translated = self.draft.translate(textproc.expand_slang(text), context_fn())
+                translated = keep_speaker(text, self.draft.translate(textproc.expand_slang(text), context_fn()))
             except Exception:
                 return  # gerçek istek yeniden dener ve hatayı o bildirir
             finally:
@@ -316,7 +317,8 @@ class HybridTranslator:
             cached = self._draft_get(text)
             self._draft_active.set()
             try:
-                translated = cached if cached is not None else self.draft.translate(textproc.expand_slang(text), context)
+                translated = cached if cached is not None else keep_speaker(
+                    text, self.draft.translate(textproc.expand_slang(text), context))
             except Exception as exc:
                 on_error(exc, DRAFT, False)
                 return
