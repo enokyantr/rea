@@ -267,6 +267,19 @@ class Config:
         return self.deepl_auth_key.strip() or os.environ.get("DEEPL_AUTH_KEY", "").strip()
 
 
+# Görev yazısı bölgenin sağ kenarında kesilince bölge bu oranla genişler (en fazla ekranın bu kadarı).
+WIDEN_FACTOR = 1.35
+MAX_TASK_WIDTH = 0.6
+
+
+def widened(region: Region) -> Region | None:
+    """Sağa doğru genişletilmiş bölge; daha fazla genişleyemiyorsa None."""
+    width = min(region.width * WIDEN_FACTOR, MAX_TASK_WIDTH, 1.0 - region.left)
+    if width <= region.width + 0.005:
+        return None
+    return Region(region.left, region.top, width, region.height)
+
+
 def default_display_mode(name: str) -> str:
     """Mesaj bildirimi ve görev yazısı: opak kutu (cover) oyunda çoğu şeyi örtüyordu, yalnızca yazı
     (adaptive: şeffaf, konturlu) gösterilir."""

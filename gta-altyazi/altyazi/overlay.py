@@ -34,6 +34,7 @@ class Overlay:
         else:
             self.palette = Palette(cfg.text_color, cfg.outline_color, cfg.outline_px)
         self.region: Rect | None = None
+        self.bounds: Rect | None = None  # oyun penceresi (Türkçe yazı dışına taşmaz)
         # Pipeline iş parçacığı okur: Türkçe yazının bulunduğu / bulunacağı ekran alanı.
         self.sample_rect: Rect | None = None
         # Yayında/ekran görüntüsünde görünür mü (yalnızca "adaptive"; "cover" okunan yazıyı örter).
@@ -66,9 +67,12 @@ class Overlay:
 
     # --- pipeline/arayüz olayları -------------------------------------------------------
 
-    def set_region(self, region: Rect | None) -> None:
-        if region != self.region:
+    def set_region(self, region: Rect | None, bounds: Rect | None = None) -> None:
+        """`bounds`: oyun penceresinin alanı; Türkçe yazı bunun dışına taşmaz (sol kenardaki görev
+        yazısının çevirisi pencerenin solundan taşıp yarım görünüyordu)."""
+        if region != self.region or bounds != self.bounds:
             self.region = region
+            self.bounds = bounds
             self.center_x = None
             self._redraw()
 
@@ -191,6 +195,11 @@ class Overlay:
             self.canvas.tag_lower(box)
             top = region.bottom + pad - height
 
+        if self.bounds is not None:
+            b = self.bounds
+            left = max(b.left, min(left, b.right - width))
+            if self.adaptive and top < b.top:
+                top = region.bottom + self.cfg.overlay_gap_px  # üstte yer yok: İngilizcenin altına
         self.canvas.configure(width=width, height=height)
         self.win.geometry(f"{width}x{height}+{left}+{top}")
         self.screen_rect = Rect(left, top, width, height)

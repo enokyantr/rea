@@ -32,3 +32,7 @@ Corsair Key = Corsair Key
 Donnie = Donnie
 Joey = Joey
 Shirley = Shirley
+Ammu-Nation = Ammu-Nation
+Moses = Moses
+Vicki = Vicki
+Dunk = Dunk

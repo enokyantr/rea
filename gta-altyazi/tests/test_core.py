@@ -580,3 +580,12 @@ def test_word_by_word_revealed_line_is_shown_again_when_complete():
     s = Stabilizer(stable_reads=2, similarity=0.88, clear_after=0.7)
     assert s.feed("Lucia: Apparently, her daughter n", 0.0, True) is None
     assert isinstance(s.feed("Lucia: Okay.", 1.0, True), Show)
+
+
+def test_task_region_widens_to_the_right_up_to_a_limit():
+    from altyazi.config import MAX_TASK_WIDTH, Region, widened
+
+    r = widened(Region(0.02, 0.3, 0.2, 0.2))
+    assert r == Region(0.02, 0.3, 0.2 * 1.35, 0.2)
+    assert widened(Region(0.02, 0.3, MAX_TASK_WIDTH, 0.2)) is None
+    assert widened(Region(0.9, 0.3, 0.1, 0.2)) is None  # pencerenin sağ kenarında

@@ -107,6 +107,7 @@ class Pipeline(threading.Thread):
         self.fullscreen_hint = False  # özel tam ekran şüphesi (bir kez uyarıldı)
         self._last_read_text = ""
         self._unfit: set[str] = set()  # çevirmenin "çevrilemez" dediği yazılar (tekrar denenmez)
+        self._edge_hits = 0  # görev yazısı art arda kaç okumada bölgenin sağ kenarına dayandı
 
     def _on_show(self, event: textproc.Show) -> None:
         self.seq += 1
@@ -189,6 +190,23 @@ class Pipeline(threading.Thread):
                                     draft=draft and not phone_like,
                                     source="phone" if phone_like else "ocr") and self.debug:
             log(f"{self._tag}önceden çeviri: {text!r}")
+
+    def _check_right_edge(self, result: reader.ReadResult, crop_width: int, whole: bool) -> None:
+        """Görev/ipucu kutusu bölgeden genişse her satırın sağ ucu kesiliyordu ("A new Ultimate Edition
+        unique weapon variant is available at any Ammu-Nation weapon locker." -> "AnewUitimate weapon
+        variant any Ammu-Natic locker.") ve yarım cümle çevriliyordu. Yazı art arda iki okumada bölgenin
+        sağ kenarına dayanırsa görev bölgesi sağa doğru genişletilir (ayar kaydedilir)."""
+        if self.region_name != "gorev":
+            return
+        box = result.text_box
+        if not result.text or box is None or crop_width < 8:
+            self._edge_hits = 0
+            return
+        # Bölge ekran kenarında kırpıldıysa (`whole` değil) genişletme anlamsız.
+        self._edge_hits = self._edge_hits + 1 if whole and box[2] >= crop_width - 6 else 0
+        if self._edge_hits >= 2:
+            self._edge_hits = 0
+            self.ui.put(("widen", self.region_name))
 
     def _read_text(self, ocr, gray: np.ndarray) -> reader.ReadResult:
         now = time.monotonic()
@@ -282,6 +300,7 @@ class Pipeline(threading.Thread):
         last_region: Rect | None = None
         last_base_check = 0.0
         last_window_title: str | None = None
+        last_base: Rect | None = None
         flat_watch = FlatCaptureWatch() if self.region_name == MAIN else None
         last_flat_check = 0.0
         screen = win32.virtual_screen()
@@ -336,10 +355,10 @@ class Pipeline(threading.Thread):
                     self.base = fit_aspect(found[1], cfg.video_aspect) if found else win32.primary_screen()
 
                 region = region_to_screen(spec, self.base)
-                if region != last_region:
-                    last_region = region
+                if region != last_region or self.base != last_base:
+                    last_region, last_base = region, self.base
                     last_sig, last_box = None, None
-                    self.ui.put(("region", self.region_name, region))
+                    self.ui.put(("region", self.region_name, region, self.base))
 
                 # Bölge ile Türkçe yazının alanı tek seferde yakalanır.
                 sample = self.sample_rect() if picker else None
@@ -421,6 +440,7 @@ class Pipeline(threading.Thread):
                     speculate = known and conf >= PREFETCH_CONFIDENCE
                     if result.center_x is not None and text:
                         self._center_x = round(origin.left + result.center_x)
+                    self._check_right_edge(result, gray.shape[1], origin.width >= region.width - 2)
                     if self.debug and text != last_text:
                         conf = "" if result.confidence is None else f" (güven {result.confidence:.2f})"
                         log(f"{self._tag}OCR {1000 * (time.perf_counter() - t0):.0f} ms{conf}: {text!r}")
@@ -532,7 +552,7 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
             found = win32.find_target(cfg.window_titles)
             cover["hwnd"], cover["hwnd_at"] = (found[0] if found else None), now
         windows = win32.covering_windows(cover["hwnd"]) if cover["hwnd"] else []
-        titles = tuple(sorted({title or "adsız" for _rect, title in windows}))
+        titles = tuple(sorted({title for _rect, title in windows}))
         if titles != cover["titles"]:
             cover["titles"] = titles
             if titles:
@@ -1359,14 +1379,22 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
                 msg = ui.get_nowait()
                 kind = msg[0]
                 if kind == "region":
-                    _, name, rect = msg
+                    _, name, rect, *bounds = msg
                     if rect is None:
                         overlays[name].clear()
-                    overlays[name].set_region(rect)
+                    overlays[name].set_region(rect, bounds[0] if bounds else None)
                     if name == MAIN and state["welcome"]:
                         menu_key = hk.display(cfg.hotkeys.get("menu", ""))
                         main_overlay.status(f"Türkçe altyazı aktif  •  {menu_key}: menü ve ayarlar")
                         root.after(5000, welcome_off)
+                elif kind == "widen":
+                    extra = cfg.extra(msg[1])
+                    wider = config_mod.widened(extra.region) if extra is not None and extra.region else None
+                    if wider is not None:
+                        cfg.set_extra(msg[1], wider)
+                        save_soon()
+                        log(f"{REGION_LABELS.get(msg[1], msg[1])} yazısı bölgenin sağ kenarında kesiliyordu: "
+                            f"bölge genişletildi (genişlik %{100 * extra.region.width:.0f} -> %{100 * wider.width:.0f})")
                 elif kind == "phone-region":
                     phone_panel.set_region(msg[1])
                 elif kind == "phone":
