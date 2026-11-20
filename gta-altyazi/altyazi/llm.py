@@ -11,6 +11,7 @@ import threading
 
 import requests
 
+from . import textproc
 from .glossary import Matcher
 
 SYSTEM = """\
@@ -69,6 +70,14 @@ if the original is vulgar, the Turkish must be just as vulgar. Use correct Turki
   "mierda" -> "bok" / "hassiktir"; "chingado" / "carajo" -> "siktir" / "lanet olsun"
   "mija" / "mijo" -> "kızım" / "oğlum" (affectionate: "canım"); "hermano" -> "kardeşim"; "vato" / "ese" / "güey" -> "kanka" / "moruk"
   "órale" / "ándale" / "vámonos" -> "hadi" / "tamam" / "gidelim"; "Dios mío" -> "Tanrım"
+- The Turkish for "fuck"/"shit"/"bitch"/"asshole"/"dick" must itself be strong profanity (siktir, sik, amk, bok, \
+orospu, göt, şerefsiz, ...). "Lanet olsun", "kahretsin", "Tanrım" and "Allah kahretsin" are NOT acceptable \
+for them: those are the translation of "damn" or "goddamn" only. "fucking" before a word -> "siktiğimin" / \
+"amına koduğumun" / "lan"; "fuck you" -> "siktir git" / "ananı sikeyim"; "fuck this" -> "siktir et bunu"; \
+"fuck off" -> "siktir git" / "defol lan"; "dumb ass" / "dip shit" -> "aptal göt herif" / "salak göt"; "bullshit" -> "bok" / "boktan".
+- Contractions and slang spellings are normal speech, not errors: "gonna", "wanna", "gotta", "lemme", "gimme", "dunno", \
+"I'mma" (= I'm going to), "'cause", "outta", "kinda", "tryna", "finna", "c'mon", "ya" (= you), "'em" (= them), \
+"ol'", "nah", "mm-hmm", "uh-huh". Read them as the full words and translate the meaning.
 - Equally important: never ADD swearing or slang that is not in the original. A neutral line stays \
 neutral; translate the meaning exactly (left stays left, numbers and names stay the same).
 """
@@ -84,6 +93,11 @@ EXAMPLES_UNCENSORED = [
     (None, "You trippin', dawg. Swing by my crib later.", "Kafayı yemişsin kanka. Sonra eve uğra."),
     (None, "That punk-ass fool still owes me money.", "O it herif hâlâ bana para borçlu."),
     (None, "Nigga...", "Lan..."),
+    (None, "Oh shit! They're coming straight at us!", "Hassiktir! Direkt üstümüze geliyorlar!"),
+    (None, "Fucking stop!", "Dur lan siktiğimin!"),
+    (None, "Fuck this! I'm outta here.", "Siktir et bunu! Ben gidiyorum."),
+    (None, "Get off my prick!", "Çekil lan üstümden, götüne koyayım!"),
+    (None, "Yeah, I'mma tell you the same thing, lemme go.", "Evet, sana da aynısını söyleyeceğim, bırak gideyim."),
 ]
 EXAMPLES_PLAIN = [
     ("Holy shit, bro. That was close.", "Get in the car, we're leaving.", "Arabaya bin, gidiyoruz."),
@@ -282,7 +296,7 @@ class OllamaBackend:
         # yeniden denenir ve bu model için bir daha gönderilmez (nesne tek modele aittir).
         self._send_think = True
         # "clean-7": telefon ekranı kuralı (clean-6: doğallık/duygu/hitap, clean-5: İspanyolca satırlar).
-        blob = json.dumps([self._system, self._examples, "clean-7"], ensure_ascii=False).encode("utf-8")
+        blob = json.dumps([self._system, self._examples, "clean-8"], ensure_ascii=False).encode("utf-8")
         self._fingerprint = hashlib.sha256(blob).hexdigest()[:10]
 
     def cache_namespace(self) -> str:
@@ -393,7 +407,7 @@ class OllamaBackend:
     # --- çeviri ------------------------------------------------------------------------------
 
     def _chat(self, user: str, timeout: float, num_predict: int = 120, history=(),
-              cancel: threading.Event | None = None) -> str:
+              cancel: threading.Event | None = None, extra=()) -> str:
         # İstem sırası sabit önek + değişen kuyruk: sistem talimatı ve örnekler her istekte birebir aynı
         # (Ollama bu öneki önbellekten kullanır), sohbet geçmişi ve yeni satır en sonda.
         messages = [{"role": "system", "content": self._system}]
@@ -413,6 +427,7 @@ class OllamaBackend:
             messages.append({"role": "user", "content": _user_message(None, src)})
             messages.append({"role": "assistant", "content": dst})
         messages.append({"role": "user", "content": user})
+        messages.extend(extra)  # düzeltme turu: önceki (yumuşak) yanıt + talimat
         body = {
             "model": self.model,
             "messages": messages,
@@ -487,4 +502,25 @@ class OllamaBackend:
             raise RuntimeError("Yerel LLM boş yanıt verdi")
         if is_meta_reply(out):  # hata sayılır: taslak çeviri ekranda kalır, önbelleğe girmez
             raise RuntimeError(f"Yerel LLM çeviri yerine açıklama yazdı: {out[:80]}")
+        if self.instructions_active and textproc.is_softened(text, out):
+            out = self._harden(user, text, out, limit, history, cancel)
         return out
+
+    def _harden(self, user: str, text: str, soft: str, limit: int, history, cancel) -> str:
+        """Sert küfür yumuşak çevrildi ("Oh shit" -> "Lanet olsun"): model bir kez daha, sert karşılık
+        istenerek denenir. Sonuç hâlâ yumuşaksa ya da açıklamaya dönerse ilk çeviri korunur."""
+        extra = [{"role": "assistant", "content": soft},
+                 {"role": "user", "content": (
+                     "Too mild: the original contains strong profanity, so the Turkish must contain the equally "
+                     "strong Turkish profanity (siktir, sik, amk, amına koyayım, bok, orospu, göt, şerefsiz...), "
+                     "not \"lanet olsun\"/\"kahretsin\". Translate the same line again. Reply with ONLY the translation.")}]
+        try:
+            again = _strip_stage_notes(clean_output(self._chat(user, timeout=self._timeout, num_predict=limit,
+                                                               history=history, cancel=cancel, extra=extra)), text)
+        except Cancelled:
+            raise
+        except Exception:
+            return soft
+        if again and not is_meta_reply(again) and not textproc.is_softened(text, again):
+            return again
+        return soft

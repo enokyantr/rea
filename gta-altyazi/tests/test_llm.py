@@ -471,3 +471,44 @@ def test_phone_explanation_replies_are_detected(reply, meta):
     from altyazi.llm import is_meta_reply
 
     assert is_meta_reply(reply) is meta
+
+
+def test_softened_profanity_is_retried_once_with_a_stronger_instruction(fake):
+    replies = iter(["Lanet olsun, dur!", "Dur lan siktiğimin!"])
+
+    backend = OllamaBackend("aya-expanse:8b", fake.url)
+    chats_before = len(fake.chats)
+    fake.reply = "Lanet olsun, dur!"
+    original_chat = backend._chat
+
+    def chat(user, timeout, num_predict=120, history=(), cancel=None, extra=()):
+        out = next(replies)
+        original_chat(user, timeout, num_predict, history, cancel, extra)  # istek gerçekten gider
+        return out
+
+    backend._chat = chat
+    assert backend.translate("Fucking stop!", None) == "Dur lan siktiğimin!"
+    assert len(fake.chats) - chats_before == 2
+    # Yumuşak yanıt ve talimat ikinci isteğe tur olarak eklenir
+    second = fake.chats[-1]["messages"][-2:]
+    assert second[0] == {"role": "assistant", "content": "Lanet olsun, dur!"} or second[1]["role"] == "user"
+
+
+def test_still_soft_after_retry_keeps_first_translation_and_neutral_lines_are_not_retried(fake):
+    backend = OllamaBackend("aya-expanse:8b", fake.url)
+    fake.reply = "Lanet olsun, dur!"
+    assert backend.translate("Oh shit, stop!", None) == "Lanet olsun, dur!"
+    n = len(fake.chats)
+    fake.reply = "Dur."
+    assert backend.translate("Stop it.", None) == "Dur."
+    assert len(fake.chats) == n + 1  # küfürsüz satır tek istek
+
+
+def test_is_softened_detector():
+    from altyazi.textproc import is_softened
+
+    assert is_softened("Oh shit!", "Lanet olsun!")
+    assert is_softened("Fuck this bull crap!", "Lan! Bu çılgınlığı bırak!")
+    assert not is_softened("Oh shit!", "Hassiktir!")
+    assert not is_softened("Damn it!", "Lanet olsun!")  # "damn" hafif: lanet olsun doğru
+    assert not is_softened("Hello", "Merhaba")

@@ -72,11 +72,13 @@ def upscale_factor(crop_height: int, cfg) -> float:
 
 def read_text(gray: np.ndarray, recognize: Callable[[np.ndarray], list[str]], cfg,
               raw: bool = False, engine=None, retry_empty: bool = True,
-              strict_chrome: bool = False) -> ReadResult:
+              strict_chrome: bool = False, known_text: str = "") -> ReadResult:
     """`gray`: bölgenin gri tonu. `recognize`: görüntü -> satırlar. `raw`: motor (RapidOCR) doğal
     görüntüyü olduğu gibi ister; ön işleme seçenekleri ve büyütme uygulanmaz.
     `retry_empty=False`: ham okuma hiç yazı bulamadıysa süzgeçli ek okumalar yapılmaz (çağıran,
-    yazısız ama parlak sahnede her karede üç OCR çalışmasın diye kısa süre kapatır)."""
+    yazısız ama parlak sahnede her karede üç OCR çalışmasın diye kısa süre kapatır).
+    `known_text`: bu bölgenin son okuması; ham okuma onunla aynıysa (animasyonlu "STASH" ipucu gibi
+    sürekli "değişen" ama aynı yazı) süzgeçli ek okumalar yapılmaz."""
     bbox = imageproc.bright_bbox(gray >= cfg.bright_threshold)
     left = top = 0
     if bbox is None:
@@ -95,14 +97,16 @@ def read_text(gray: np.ndarray, recognize: Callable[[np.ndarray], list[str]], cf
     while i < len(options):
         name, make = options[i]
         i += 1
-        text = textproc.normalize(recognize(imageproc.upscale(make(), factor)))
+        text = textproc.normalize(textproc.drop_hud_lines(recognize(imageproc.upscale(make(), factor))))
         score = textproc.reading_score(text)
         result.candidates.append((name, text, score))
         state = _engine_state(engine) if raw else None
         # Uzun ve temiz okuma kazanır; kısmi okuma ("Go to") tam okumayı yenemez.
         if best_score is None or score > best_score:
             best_score, result.text, result.variant, best_engine_state = score, text, name, state
-        if (raw and name == "ham" and state is not None and state[0] is not None
+        # Saat/düğme ipucundan başka yazı yoksa ya da okuma bir öncekiyle aynıysa ek okuma boşuna.
+        useless = bool(text) and (not textproc.strip_ui_chrome(text, strict_chrome) or text == known_text)
+        if (raw and name == "ham" and state is not None and state[0] is not None and not useless
                 and state[0] < getattr(cfg, "ocr_retry_confidence", LOW_CONFIDENCE) and (text or retry_empty)):
             # Düşük kaliteli akış (chiaki-ng / zayıf bağlantı): motor emin değil. Bulanık yazıda
             # keskinleştirme, bloklu/kumlu yazıda medyan süzgeci okumayı belirgin düzeltiyor.

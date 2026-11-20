@@ -144,9 +144,46 @@ def _keep(text: str, ignore, min_chars: int) -> bool:
     return not textproc.looks_turkish(text)  # konsolun Türkçe arayüzü
 
 
-def segment(boxes: list[Box], ignore=(), min_chars: int = 3) -> list[Block]:
-    """RapidOCR kutuları -> bloklar."""
-    return blocks_from_lines(merge_lines(boxes), ignore, min_chars)
+# Telefon ekranının genişliği bölge yüksekliğinin en çok bu oranı (dikey telefon ~0,46; pay dahil).
+# Bölge bundan belirgin genişse (oyun telefonu duruma göre sağda/ortada çıkar: kullanıcı geniş bir
+# alan seçer) yazının yoğun olduğu dikey şerit telefon sayılır, dışındaki yazı (HUD, altyazı) atılır.
+PHONE_ASPECT = 0.62
+FOCUS_STICKY = 0.8  # önceki şerit en iyinin bu kadarını tutuyorsa kayma (titreme olmasın)
+
+
+def focus_phone(lines: list[Line], width: float, height: float,
+                prev_x: float | None = None) -> tuple[list[Line], float | None]:
+    """Geniş bölgede telefonun şeridini bulur: `PHONE_ASPECT * height` genişliğindeki pencereler arasında
+    en çok yazı (karakter) içereni. Dönüş: (şeritteki satırlar, şeridin sol kenarı). Bölge zaten dar
+    ya da yazı yoksa satırlar olduğu gibi döner (x None)."""
+    win = PHONE_ASPECT * height
+    if not lines or width <= win * 1.2:
+        return lines, None
+
+    def inside(x: float) -> list[Line]:
+        return [ln for ln in lines if x - 0.05 * win <= (ln.x0 + ln.x1) / 2 <= x + win + 0.05 * win]
+
+    def score(group: list[Line]) -> int:
+        return sum(len(ln.text) for ln in group)
+
+    best_x, best = max(((max(0.0, min(ln.x0 - 0.05 * win, width - win)), None) for ln in lines),
+                       key=lambda c: score(inside(c[0])))
+    best_score = score(inside(best_x))
+    if prev_x is not None and score(inside(prev_x)) >= FOCUS_STICKY * best_score:
+        best_x = prev_x
+    return inside(best_x), best_x
+
+
+def segment(boxes: list[Box], ignore=(), min_chars: int = 3, size: tuple[float, float] | None = None,
+            focus: dict | None = None) -> list[Block]:
+    """RapidOCR kutuları -> bloklar. `size` (genişlik, yükseklik): geniş bölgede telefon şeridine odaklanır;
+    `focus`: taramalar arası şerit konumu (sözlük, "x" anahtarı)."""
+    lines = merge_lines(boxes)
+    if size is not None:
+        lines, x = focus_phone(lines, size[0], size[1], (focus or {}).get("x"))
+        if focus is not None and x is not None:
+            focus["x"] = x
+    return blocks_from_lines(lines, ignore, min_chars)
 
 
 def segment_lines(texts: list[str], ignore=(), min_chars: int = 3) -> list[Block]:
@@ -164,11 +201,11 @@ def segment_lines(texts: list[str], ignore=(), min_chars: int = 3) -> list[Block
     return out
 
 
-def read_blocks(ocr, gray: np.ndarray, ignore=(), min_chars: int = 3) -> list[Block]:
+def read_blocks(ocr, gray: np.ndarray, ignore=(), min_chars: int = 3, focus: dict | None = None) -> list[Block]:
     """Motor kutu verebiliyorsa (RapidOCR.boxes) gerçek bloklar; veremiyorsa satır başına blok."""
     boxes = getattr(ocr, "boxes", None)
     if boxes is not None:
-        return segment(boxes(gray), ignore, min_chars)
+        return segment(boxes(gray), ignore, min_chars, (gray.shape[1], gray.shape[0]), focus)
     return segment_lines(ocr.recognize(gray), ignore, min_chars)
 
 
@@ -395,6 +432,8 @@ class PhonePipeline(threading.Thread):
         self.engine_name = ""
         self.last_read_at = 0.0
         self.last_scan: tuple[int, int, float] | None = None  # (blok, yeni, OCR ms) — menü için
+        self._focus: dict = {}  # telefon şeridinin konumu (geniş bölgede, bkz. focus_phone)
+        self.last_content_at = -1e9  # telefonda son yazı okunan an (monotonic)
         self.known = KnownBlocks()
         self.queue = PhoneQueue(translator, self._translated, self._failed, log)
         self._ocr = None
@@ -444,12 +483,14 @@ class PhonePipeline(threading.Thread):
         """Tek tarama: OCR + bloklar + çeviri sırası. Arayüze ("phone", ...) gönderir."""
         ocr = self._ensure_ocr()
         t0 = time.perf_counter()
-        blocks = read_blocks(ocr, gray, self.cfg.ignore_phrases, self.cfg.min_text_chars)
+        blocks = read_blocks(ocr, gray, self.cfg.ignore_phrases, self.cfg.min_text_chars, self._focus)
         ocr_ms = 1000 * (time.perf_counter() - t0)
         blocks = self.known.canonical(blocks)
         rows = self.queue.update(blocks)
         new = sum(1 for b, hit in rows if hit is None)
         self.last_scan = (len(blocks), new, ocr_ms)
+        if blocks:
+            self.last_content_at = time.monotonic()
         if self.debug:
             self.log(f"telefon: {len(blocks)} blok, {new} yeni, OCR {ocr_ms:.0f} ms")
         self.ui.put(("phone", [(b.key, b.text, hit) for b, hit in rows]))

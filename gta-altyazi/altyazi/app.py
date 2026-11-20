@@ -105,6 +105,8 @@ class Pipeline(threading.Thread):
         self.ocr_device: str | None = None
         self.window_title: str | None = None
         self.fullscreen_hint = False  # özel tam ekran şüphesi (bir kez uyarıldı)
+        self._last_read_text = ""
+        self._unfit: set[str] = set()  # çevirmenin "çevrilemez" dediği yazılar (tekrar denenmez)
 
     def _on_show(self, event: textproc.Show) -> None:
         self.seq += 1
@@ -131,6 +133,14 @@ class Pipeline(threading.Thread):
                 return
             message = describe_error(exc)
             log(self._tag + message + (" (yerel çeviri ekranda kaldı)" if draft_shown else ""))
+            if "açıklama yazdı" in message:
+                # Çeviri değil açıklama: bu yazı çevrilecek bir söz değil (arayüz parçası/ipucu). Aynı yazıyı
+                # sürekli yeniden denemek ekran kartını ve kaydı boşa yoruyordu: bir daha okunmaz.
+                if len(self._unfit) > 200:
+                    self._unfit.clear()
+                self._unfit.add(event.text)
+                self.ui.put(("clear", self.region_name))
+                return
             if draft_shown:
                 # Taslak bu satırın kesin metni: aynı satır yeniden çevrilmez (yazı ve dublaj sonradan
                 # farklı bir çeviriyle değişmesin).
@@ -183,7 +193,11 @@ class Pipeline(threading.Thread):
         now = time.monotonic()
         result = reader.read_text(gray, ocr.recognize, self.cfg, ocr.raw_input, ocr,
                                   retry_empty=now >= self._empty_retry_until,
-                                  strict_chrome=self.region_name in PHONE_LIKE)
+                                  strict_chrome=self.region_name in PHONE_LIKE,
+                                  known_text=self._last_read_text)
+        self._last_read_text = result.ignored or result.text
+        if result.text and result.text in self._unfit:
+            result.ignored, result.text = result.text, ""  # LLM'in çeviremediği yazı (menü/ipucu): bir daha yok
         if not result.text and len(result.candidates) > 1:
             # Yazısız parlak sahne: ek okumalar da boş çıktı; 4 sn boyunca boş karede tekrarlanmaz.
             self._empty_retry_until = now + 4.0
@@ -441,6 +455,9 @@ class Pipeline(threading.Thread):
         self.translator.shutdown()
 
 
+# Telefondan bu kadar sn önce yazı okunduysa telefon açık sayılır (diğer bölgelerde alanı karartılır).
+PHONE_ACTIVE_S = 8.0
+
 # Dublaj açıkken taslak çeviri, son çeviri için en fazla bu kadar bekletilir (yazı = ses).
 DUB_DRAFT_HOLD_S = 1.5
 
@@ -448,7 +465,9 @@ DUB_DRAFT_HOLD_S = 1.5
 PRESETS = {
     MAIN: Region(0.15, 0.80, 0.70, 0.15),
     "gorev": Region(0.25, 0.88, 0.50, 0.08),
-    "telefon": Region(0.70, 0.45, 0.27, 0.45),
+    # Geniş: oyundaki telefon duruma göre sağda ya da (araçta) biraz ortada çıkar; okuma yalnızca yazının
+    # yoğun olduğu dikey şeridi (telefonu) alır (phone.focus_phone).
+    "telefon": Region(0.40, 0.08, 0.58, 0.86),
     "bildirim": Region(0.62, 0.76, 0.36, 0.20),  # sağ alttaki SMS/mesaj bildirimi (tahmini; seçerek ayarlayın)
 }
 
@@ -508,31 +527,47 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
         return rects
 
     def own_rects_others() -> list[Rect]:
-        """Altyazı/görev/mesaj okumaları için: telefon açıkken (panelde içerik var) telefon ekranının alanı
-        da karartılır; aynı yazı iki bölgede birden okunup çevrilmesin, işlemci iki kat yorulmasın."""
+        """Altyazı/görev/mesaj okumaları için: telefon açıkken (panelde içerik var ya da son saniyelerde
+        telefon yazısı okundu) telefon ekranının alanı da karartılır; aynı yazı iki bölgede birden okunup
+        çevrilmesin, işlemci iki kat yorulmasın (mesaj bildirimi bölgesi telefonun tarayıcı sayfasını
+        okuyordu)."""
         rects = own_rects()
-        if cfg.phone_mode and phone_panel is not None and phone_panel.shown:
+        if cfg.phone_mode and ((phone_panel is not None and phone_panel.shown)
+                               or time.monotonic() - phone_pipe.last_content_at < PHONE_ACTIVE_S):
             rect = phone_rect()
+            if rect is not None:
+                rects.append(rect)
+        return rects
+
+    def own_rects_with_task() -> list[Rect]:
+        """Altyazı ve mesaj bildirimi okumaları: görev (hedef) bölgesi karartılır. Görev yazısı altyazı
+        bölgesine taşınca diyaloğa yapışıp ("... Escort the bachelor party through the trench") birlikte
+        çevriliyordu; görev bölgesi kendi okumasını yapar."""
+        rects = own_rects_others()
+        extra = cfg.extra("gorev")
+        base = pipelines[MAIN].base if MAIN in pipelines else None
+        if extra is not None and extra.enabled and extra.region is not None and base is not None:
+            rect = intersect(region_to_screen(extra.region, base), win32.virtual_screen())
             if rect is not None:
                 rects.append(rect)
         return rects
 
     pipelines[MAIN] = Pipeline(cfg, MAIN, lambda: cfg.region if cfg.region_enabled else None, cfg.display_mode,
                                make_translator(), ui, detail["on"],
-                               sample_rect=lambda: main_overlay.sample_rect, own_rects=own_rects_others)
+                               sample_rect=lambda: main_overlay.sample_rect, own_rects=own_rects_with_task)
     for name in EXTRA_REGION_KEYS.values():
         def get_region(name=name):
             extra = cfg.extra(name)
             if name == PHONE and cfg.phone_mode:  # telefon okuma modu: bölgeyi PhonePipeline okur
                 return None
             return extra.region if extra and extra.enabled else None
-        mode = cfg.extra(name).display_mode if cfg.extra(name) else "cover"
+        mode = cfg.extra(name).display_mode if cfg.extra(name) else config_mod.default_display_mode(name)
         overlays[name] = Overlay(root, cfg, mode)
         extra_translator = make_translator()
         extra_translator.low_priority = True  # ana altyazının çevirisi öne geçer
         pipelines[name] = Pipeline(cfg, name, get_region, mode, extra_translator, ui, detail["on"],
                                    sample_rect=lambda ov=overlays[name]: ov.sample_rect,
-                                   own_rects=own_rects_others)
+                                   own_rects=own_rects_others if name == "gorev" else own_rects_with_task)
     from .street import StreetListener
 
     overlays[STREET] = Overlay(root, cfg, "adaptive")

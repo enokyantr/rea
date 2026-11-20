@@ -236,7 +236,7 @@ def test_config_saves_only_changes_and_migrates_frozen_old_defaults(tmp_path):
     cfg = config_mod.Config()
     cfg.deepl_auth_key = "k:fx"
     config_mod.save(cfg, path)
-    assert json.loads(path.read_text(encoding="utf-8")) == {"config_version": 2, "deepl_auth_key": "k:fx"}
+    assert json.loads(path.read_text(encoding="utf-8")) == {"config_version": config_mod.CONFIG_VERSION, "deepl_auth_key": "k:fx"}
 
     # Sürüm 1 dosyası: tüm ayarlar yazılmış, aralarında artık eskimiş varsayılanlar var.
     old = asdict(config_mod.Config())
@@ -248,7 +248,7 @@ def test_config_saves_only_changes_and_migrates_frozen_old_defaults(tmp_path):
     assert cfg.capture_interval_ms == config_mod.Config().capture_interval_ms
     assert cfg.font_size == 30 and cfg.deepl_auth_key == "k:fx"  # kullanıcının seçimleri korunur
     saved = json.loads(path.read_text(encoding="utf-8"))
-    assert saved == {"config_version": 2, "deepl_auth_key": "k:fx", "font_size": 30}
+    assert saved == {"config_version": config_mod.CONFIG_VERSION, "deepl_auth_key": "k:fx", "font_size": 30}
 
 
 def _replay(readings, stable_reads=2):
@@ -543,3 +543,17 @@ def test_sms_notification_region_is_registered():
     assert EXTRA_REGION_LABELS["bildirim"] == "Mesaj bildirimi"
     assert hotkeys.DEFAULT_HOTKEYS["pick-bildirim"] == "ctrl+alt+b"
     assert not hotkeys.conflicts(hotkeys.merged(None))
+
+
+def test_notification_region_becomes_transparent_text_once():
+    from altyazi.config import CONFIG_VERSION, _from_dict, default_display_mode
+
+    old = {"config_version": 2, "extra_regions": [
+        {"name": "bildirim", "region": {"x": 0.6, "y": 0.7, "w": 0.3, "h": 0.2}, "display_mode": "cover"},
+        {"name": "gorev", "region": {"x": 0.1, "y": 0.1, "w": 0.3, "h": 0.1}, "display_mode": "cover"}]}
+    cfg = _from_dict(old)
+    assert {e.name: e.display_mode for e in cfg.extra_regions} == {"bildirim": "adaptive", "gorev": "cover"}
+    assert default_display_mode("bildirim") == "adaptive" and CONFIG_VERSION == 3
+    # Yeni sürümde kullanıcının sonradan seçtiği "cover" korunur
+    new = {**old, "config_version": 3}
+    assert {e.name: e.display_mode for e in _from_dict(new).extra_regions}["bildirim"] == "cover"

@@ -417,6 +417,100 @@ _TASKBAR_CLOCK = re.compile(
     re.IGNORECASE)
 
 
+# --- Oyun içi kontrol ipuçları (HUD) -------------------------------------------------------------
+# "Hold L2 or R2 and aim", "THROW R2 TAKE BEER R1 DROP", "STASH", "HANDLING 8.4 RANGE 4.4": altyazı değil,
+# ekran ipucu. Satır bazında süzülür (OCR satırları ayrı geldiği için diyalog satırı korunur).
+_BUTTON = re.compile(r"(?<![\w])(?:[LR][123]|[LR]STICK|D-?PAD)(?![\w])")
+_UPPER_WORD = re.compile(r"[A-Z][A-Z0-9/&'.-]*[A-Z0-9]|[A-Z]")
+
+
+def _is_label_caps(line: str) -> bool:
+    """Tümü BÜYÜK HARF, tümce noktalaması ve "Ad:" yok: ekran etiketi ("TAKE BEER", "STASH")."""
+    letters = [c for c in line if c.isalpha()]
+    if len(letters) < 3 or any(c.islower() for c in letters):
+        return False
+    if ":" in line or re.search(r"[A-Za-z][.!?](?:\s|$)", line):
+        return False
+    return len(line.split()) <= 6
+
+
+_TRAIL_CAPS = re.compile(r"(?<=[.!?\"”)\]…])\s*((?:[A-Z][A-Z0-9/&'-]+\s*)+(?:[LR][123])?)$")
+_LEAD_CAPS = re.compile(r"^(?:[A-Z][A-Z0-9/&'-]+\s+)+(?=[A-Z][A-Za-z]+s?:)")
+
+
+def drop_hud_lines(lines: list[str]) -> list[str]:
+    """OCR satırlarından kontrol ipuçlarını ayıklar. Düğme simgeli bir BÜYÜK HARF öbeği ("DIVE R1")
+    satır sonundan/başından kesilir; küçük harfli cümle içinde düğme geçiyorsa ("Hold L2 or R2 and
+    aim ...") satır tümüyle atılır; BÜYÜK HARFLİ etiket satırları ("STASH") atılır."""
+    out: list[str] = []
+    for raw in lines:
+        line = raw.strip()
+        if not line:
+            continue
+        if _is_label_caps(line):
+            continue
+        # Cümle sonundan sonra gelen BÜYÜK HARFLİ öbek ("...okay? CAUTION MINDYOUR STEP", "...that! DIVE R1")
+        trimmed = _TRAIL_CAPS.sub("", line).strip()
+        if trimmed:
+            line = trimmed
+        trimmed = _LEAD_CAPS.sub("", line).strip()  # "LOOT Locals: Police?" -> "Locals: Police?"
+        if trimmed:
+            line = trimmed
+        if _BUTTON.search(line):
+            # Kalan düğme ipucu: BÜYÜK HARFLİ kuyruk ("... DIVE R1") ya da küçük harfli yönerge
+            cut = re.sub(r"\s*(?:[A-Z][A-Z0-9/&'-]+\s+)*[LR][123]\s*$", "", line).strip()
+            if cut and cut != line and not _BUTTON.search(cut):
+                line = cut
+            else:
+                continue
+        out.append(line)
+    return out
+
+
+# --- Konuşma kısaltmaları ----------------------------------------------------------------------
+# Yerel taslak çeviri modeli "I'mma", "lemme", "gonna" gibi biçimleri bilmiyor ("I'mma tell you" ->
+# "Sana Sam'i söyleyeceğim"). Yalnızca taslağa giden metin açılır; son çevirmen (LLM) özgün metni görür.
+_SLANG_EXPAND = [
+    (r"\bi'?mma\b", "I'm going to"), (r"\bgonna\b", "going to"), (r"\bwanna\b", "want to"),
+    (r"\bgotta\b", "got to"), (r"\blemme\b", "let me"), (r"\bgimme\b", "give me"),
+    (r"\bdunno\b", "don't know"), (r"\bkinda\b", "kind of"), (r"\bsorta\b", "sort of"),
+    (r"\boutta\b", "out of"), (r"(?<!\w)(?:cuz|'cause|cause)\b", "because"), (r"\b'em\b", "them"),
+    (r"\btryna\b", "trying to"), (r"\bfinna\b", "about to"), (r"\bc'mon\b", "come on"),
+    (r"\by'all\b", "you all"), (r"\bya\b", "you"), (r"\b'bout\b", "about"), (r"\bol'\b", "old"),
+    (r"\bshoulda\b", "should have"), (r"\bcoulda\b", "could have"), (r"\bwoulda\b", "would have"),
+    (r"\bwhatcha\b", "what are you"), (r"\bgotcha\b", "got you"), (r"\blil\b", "little"),
+    (r"\bbruh\b", "bro"), (r"\bnah\b", "no"), (r"\bain't\b", "isn't"),
+    (r"\b(\w+)in'(?!\w)", r"\1ing"),
+]
+_SLANG_RES = [(re.compile(p, re.IGNORECASE), r) for p, r in _SLANG_EXPAND]
+
+
+def expand_slang(text: str) -> str:
+    for pattern, repl in _SLANG_RES:
+        text = pattern.sub(repl, text)
+    return text
+
+
+# Sert küfür (yumuşatma denetimi): "damn/hell/crap/bro" gibi hafif sözler "lanet olsun" ile de çevrilebilir.
+_STRONG_PROFANITY = re.compile(
+    r"\b(?:\w*fuck\w*|\w*shit\w*|bitch\w*|\w+ass(?:es)?|ass|asses|ass(?:hole|hat|wipe)s?|dicks?|dickhead\w*"
+    r"|cocks?(?:sucker)?s?|cunts?|pricks?|whores?|sluts?|twats?|wankers?|bastards?|motherfuck\w*|tits|pussy)\b",
+    re.IGNORECASE)
+_STRONG_TR = re.compile(
+    r"(?:sik|amk|amın|amına|amina|orospu|göt|\bbok\b|\bboku|piç|pezevenk|şerefsiz|kahpe|puşt|yarrak|kaltak"
+    r"|sürtük|ananı|ananin|hassiktir|\bsiktir|\bsikim|\bsiktiğ|\bsıç|salak herif|yavşak|ibne|\bit\b|\bit herif)",
+    re.IGNORECASE)
+
+
+def has_strong_profanity(text: str) -> bool:
+    return bool(_STRONG_PROFANITY.search(_NOT_PROFANE.sub(" ", text)))
+
+
+def is_softened(source: str, translation: str) -> bool:
+    """Kaynakta sert küfür var ama çeviride sert karşılık yok ("Oh shit" -> "Lanet olsun")."""
+    return has_strong_profanity(source) and not _STRONG_TR.search(translation)
+
+
 def strip_ui_chrome(text: str, strict: bool = False) -> str:
     """Düğme ipuçları ve görev çubuğu saati temizlenir; geriye anlamlı yazı kalmazsa boş döner.
     Satırın sonundaki düğme ipucu dizisi ("PHOTO STUDIO SELECT BACK" -> "PHOTO STUDIO") de atılır.

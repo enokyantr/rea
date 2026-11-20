@@ -260,11 +260,17 @@ class Config:
         old = self.extra(name)
         self.extra_regions = [r for r in self.extra_regions if r.name != name]
         if region is not None:
-            self.extra_regions.append(ExtraRegion(name, region, old.display_mode if old else "cover",
+            self.extra_regions.append(ExtraRegion(name, region, old.display_mode if old else default_display_mode(name),
                                                   old.enabled if old else True))
 
     def resolved_auth_key(self) -> str:
         return self.deepl_auth_key.strip() or os.environ.get("DEEPL_AUTH_KEY", "").strip()
+
+
+def default_display_mode(name: str) -> str:
+    """Mesaj bildirimi köşede küçük ve oyun ipuçlarıyla aynı yerde: opak kutu (cover) çoğu şeyi örtüyordu,
+    yalnızca yazı (adaptive: şeffaf, konturlu) gösterilir."""
+    return "adaptive" if name == "bildirim" else "cover"
 
 
 def _region(value: dict) -> Region:
@@ -274,7 +280,7 @@ def _region(value: dict) -> Region:
 
 # config.json yalnızca kullanıcının değiştirdiği ayarları saklar; varsayılanlar koddan gelir, böylece
 # yeni sürümlerdeki iyileştirilmiş varsayılanlar mevcut kurulumlara da uygulanır.
-CONFIG_VERSION = 2
+CONFIG_VERSION = 3
 # Sürüm 1 dosyaları TÜM ayarları yazıyordu. Bu anahtarlar eski bir varsayılana eşitse kullanıcı
 # seçimi değil, donmuş eski varsayılandır: atılır ki yeni varsayılan geçerli olsun.
 _OLD_DEFAULTS = {
@@ -289,6 +295,12 @@ _OLD_DEFAULTS = {
 def _from_dict(data: dict) -> Config:
     if data.get("config_version", 1) < 2:
         data = {k: v for k, v in data.items() if v not in _OLD_DEFAULTS.get(k, [])}
+    if data.get("config_version", 1) < 3 and isinstance(data.get("extra_regions"), list):
+        # Sürüm 3: mesaj bildirimi opak kutu yerine şeffaf yazı (bkz. default_display_mode).
+        data = {**data, "extra_regions": [
+            {**item, "display_mode": "adaptive"}
+            if isinstance(item, dict) and item.get("name") == "bildirim" and item.get("display_mode") == "cover"
+            else item for item in data["extra_regions"]]}
     cfg = Config()
     known = {f.name for f in fields(Config)}
     for key, value in data.items():
@@ -300,7 +312,8 @@ def _from_dict(data: dict) -> Config:
             if not isinstance(value, list):
                 continue
             cfg.extra_regions = [
-                ExtraRegion(str(item["name"]), _region(item["region"]), str(item.get("display_mode", "cover")),
+                ExtraRegion(str(item["name"]), _region(item["region"]),
+                            str(item.get("display_mode", default_display_mode(str(item["name"])))),
                             bool(item.get("enabled", True)))
                 for item in value
                 if isinstance(item, dict) and "name" in item and "region" in item

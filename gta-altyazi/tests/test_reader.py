@@ -278,3 +278,37 @@ def test_gpu_ocr_crash_marker_forces_cpu_next_time(monkeypatch, tmp_path):
     handle = ocr_mod.create(Config())
     assert built[-1] == (False, True) and "önceki açılışta" in handle.gpu_note  # işlemcide başladı
     ocr_mod._shared.clear()
+
+
+def test_controller_prompts_and_labels_are_dropped_but_dialogue_stays():
+    from altyazi.textproc import drop_hud_lines, expand_slang
+
+    assert drop_hud_lines(["Hold L2 or R2 and aim around until you locate a signal"]) == []
+    assert drop_hud_lines(["THROW R2 TAKE BEER R1 DROP"]) == []
+    assert drop_hud_lines(["STASH"]) == [] and drop_hud_lines(["HANDLING 8.4 RANGE 4.4"]) == []
+    assert drop_hud_lines(["Cal Check it out!2lbs! DIVE R1"]) == ["Cal Check it out!2lbs!"]
+    assert drop_hud_lines(['Kenton: Okay? CAUTION MINDYOUR STEP']) == ["Kenton: Okay?"]
+    assert drop_hud_lines(["LOOT Locals: Police? I need you."]) == ["Locals: Police? I need you."]
+    assert drop_hud_lines(["Jason: Okay.", "NO!", "Kenton: you're ready, JASON"]) == \
+        ["Jason: Okay.", "NO!", "Kenton: you're ready, JASON"]
+    assert expand_slang("I'mma tell you, lemme go 'cause I'm gonna") == \
+        "I'm going to tell you, let me go because I'm going to"
+
+
+def test_phone_focus_follows_the_dense_text_column():
+    from altyazi.ocr import Line
+    from altyazi.phone import focus_phone
+
+    def line(t, x0, y0, x1, y1):
+        return Line(t, (), x0, y0, x1, y1)
+
+    lines = [line("post text goes right here", 700, 100, 900, 120), line("second phone line here ok", 705, 160, 905, 180),
+             line("HUD thing", 100, 300, 250, 320)]
+    kept, x = focus_phone(lines, 1000, 500)
+    assert [ln.text for ln in kept] == [lines[0].text, lines[1].text] and x is not None
+    # Dar bölge: dokunulmaz
+    assert focus_phone(lines, 300, 500) == (lines, None)
+    # Telefon ortaya taşındı: şerit yeni konuma geçer
+    moved = [line("another post in the middle", 380, 100, 580, 120), line("and one more line here", 382, 160, 582, 180)]
+    kept2, x2 = focus_phone(moved, 1000, 500, prev_x=x)
+    assert [ln.text for ln in kept2] == [m.text for m in moved]

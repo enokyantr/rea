@@ -405,13 +405,13 @@ class StreamingOllama:
 def test_ollama_streamed_request_matches_normal_request_and_output():
     from altyazi.llm import OllamaBackend
 
-    fake = StreamingOllama(["Kapa ", "lan ", "çeneni!"], gap=0.001)
+    fake = StreamingOllama(["Kapa ", "siktiğimin ", "çeneni!"], gap=0.001)
     try:
         backend = OllamaBackend("aya-expanse:8b", fake.url)
         context = Dialogue("Where's my money?", [("Where's my money?", "Param nerede?")])
         normal = backend.translate("Shut the fuck up!", context)
         streamed = backend.translate("Shut the fuck up!", context, cancel=threading.Event())
-        assert normal == streamed == "Kapa lan çeneni!"
+        assert normal == streamed == "Kapa siktiğimin çeneni!"
         a, b = fake.bodies
         assert a.pop("stream") is False and b.pop("stream") is True
         assert a == b  # istem ve seçenekler birebir aynı (önbellek/önek aynı)

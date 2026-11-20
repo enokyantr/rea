@@ -276,6 +276,17 @@ Ctrl+Alt+G / Ctrl+Alt+T / Ctrl+Alt+B (mesaj bildirimi) ile ilgili alanı bir kez
 üstünü kapatan kutuda gösterilir. Bölgeyi kaldırmak için seçiciyi açıp Delete'e basın.
 Son satırlar panelinde (Ctrl+Alt+H) bu satırlar `[Görev]` / `[Telefon]` etiketiyle görünür.
 
+**Kontrol ipuçları ve etiketler çevrilmez.** "Hold L2 or R2 and aim...", "THROW R2 ... DROP", "STASH", "HANDLING 8.4 RANGE 4.4"
+gibi düğme simgeli (R1/R2/L1/L2) ya da tümü BÜYÜK HARFLİ etiket satırları okumadan atılır; diyalog satırı korunur.
+Mesaj bildirimi köşede şeffaf yazı olarak (kutu olmadan) gösterilir. Görev bölgesi seçiliyse altyazı ve bildirim
+okuması o alanı atlar (görev yazısı diyaloğa yapışıp çevrilmez). Telefon açıkken bildirim bölgesi telefonun alanını okumaz.
+
+**Telefon konumu.** Oyundaki telefon duruma göre sağda ya da araçta biraz ortada çıkar. Telefon bölgesini geniş seçin
+(hazır konum sağ yarıyı kaplar); okuma, yazının yoğun olduğu telefon şeridini kendisi bulur, dışındaki yazıyı atar.
+
+**Küfür yumuşatma denetimi.** Satırda sert küfür ("fuck", "shit", "bitch"...) varsa taslak gösterilmez, yalnızca yerel
+dil modelinin çevirisi gelir; çeviri yumuşak çıkarsa ("Oh shit" -> "Lanet olsun") model sert karşılık istenerek bir kez daha denenir.
+
 ### Telefon okuma modu
 
 Oyundaki telefonda aynı anda birçok yazı olur (sosyal medya gönderileri, haberler, mesajlar) ve
