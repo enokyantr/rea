@@ -342,13 +342,14 @@ class Pipeline(threading.Thread):
                 # Oyunun önünde başka bir pencere (log penceresi, tarayıcı...) bölgeyi örtüyorsa okunmaz:
                 # açılışta Claude uygulamasının arama kutusu ("QAra"), görev bölgesinde log saatleri
                 # okunup çevriliyordu. Hedef pencere bulunamadıysa (ana ekran okunuyor) denetlenmez.
-                cover = win32.covering_window(target_hwnd) if target_hwnd else None
-                now_covered = cover is not None and intersect(cover, region) is not None
+                covers = win32.covering_windows(target_hwnd) if target_hwnd else []
+                cover = next((title for rect, title in covers if intersect(rect, region) is not None), None)
+                now_covered = cover is not None
                 if now_covered != covered:
                     covered = now_covered
                     if self.region_name == MAIN:
-                        log("Oyunun önünde başka bir pencere var: okuma duraklatıldı" if covered
-                            else "Oyun penceresi önde: okuma sürüyor")
+                        log(f"Oyunun üstünde başka bir pencere var ({cover or 'adsız'}): okuma duraklatıldı"
+                            if covered else "Oyun penceresi açıkta: okuma sürüyor")
                 if covered:
                     time.sleep(0.2)
                     continue
@@ -556,22 +557,43 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
                 rects.append(rect)
         return rects
 
-    def own_rects_with_task() -> list[Rect]:
-        """Altyazı ve mesaj bildirimi okumaları: görev (hedef) bölgesi karartılır. Görev yazısı altyazı
-        bölgesine taşınca diyaloğa yapışıp ("... Escort the bachelor party through the trench") birlikte
-        çevriliyordu; görev bölgesi kendi okumasını yapar."""
-        rects = own_rects_others()
-        extra = cfg.extra("gorev")
+    def region_rects(*names: str) -> list[Rect]:
+        """Seçili okuma bölgelerinin ekran alanları (MAIN: altyazı bölgesi)."""
         base = pipelines[MAIN].base if MAIN in pipelines else None
-        if extra is not None and extra.enabled and extra.region is not None and base is not None:
-            rect = intersect(region_to_screen(extra.region, base), win32.virtual_screen())
+        if base is None:
+            return []
+        rects = []
+        for name in names:
+            if name == MAIN:
+                spec = cfg.region if cfg.region_enabled else None
+            else:
+                extra = cfg.extra(name)
+                spec = extra.region if extra is not None and extra.enabled else None
+            rect = intersect(region_to_screen(spec, base), win32.virtual_screen()) if spec is not None else None
             if rect is not None:
                 rects.append(rect)
         return rects
 
+    def own_rects_main() -> list[Rect]:
+        """Altyazı okuması: görev (hedef) bölgesi karartılır (görev yazısı diyaloğa yapışıp
+        "... Escort the bachelor party through the trench" diye birlikte çevriliyordu). Telefon bölgesi
+        KARARTILMAZ: geniş seçilen telefon bölgesi altyazı şeridine taşıyordu; telefon okuması altyazının
+        sağ ucunu "telefon yazısı" sanıp telefonu açık sayıyor, altyazının sağ yarısı karartılıyor ve
+        satırlar yarım okunup uydurularak çevriliyordu ("I'm kidding, I'm kic")."""
+        return own_rects() + region_rects("gorev")
+
+    def own_rects_with_task() -> list[Rect]:
+        """Mesaj bildirimi okuması: telefon (açıkken) ve görev bölgesi karartılır."""
+        return own_rects_others() + region_rects("gorev")
+
+    def own_rects_phone() -> list[Rect]:
+        """Telefon okuması: altyazı, görev ve mesaj bildirimi bölgeleri karartılır; altyazı her zaman
+        önceliklidir (telefon bölgesi altyazıya taşsa da altyazı telefon diye okunmaz)."""
+        return own_rects() + region_rects(MAIN, "gorev", "bildirim")
+
     pipelines[MAIN] = Pipeline(cfg, MAIN, lambda: cfg.region if cfg.region_enabled else None, cfg.display_mode,
                                make_translator(), ui, detail["on"],
-                               sample_rect=lambda: main_overlay.sample_rect, own_rects=own_rects_with_task)
+                               sample_rect=lambda: main_overlay.sample_rect, own_rects=own_rects_main)
     for name in EXTRA_REGION_KEYS.values():
         def get_region(name=name):
             extra = cfg.extra(name)
@@ -609,7 +631,7 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
 
     phone_translator = make_translator()
     phone_translator.low_priority = True
-    phone_pipe = PhonePipeline(cfg, phone_rect, phone_translator, ui, own_rects=own_rects, log=log)
+    phone_pipe = PhonePipeline(cfg, phone_rect, phone_translator, ui, own_rects=own_rects_phone, log=log)
     phone_pipe.debug = detail["on"]
     phone_state = {"error": ""}
     from .perf import LoadMonitor, game_policy

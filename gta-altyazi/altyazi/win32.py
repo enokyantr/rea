@@ -128,16 +128,34 @@ def find_target(title_parts: list[str]) -> tuple[int, str, Rect] | None:
     return next(((h, t, r) for h, t, r in windows if (t, r) == picked), None)
 
 
-def covering_window(target: int) -> Rect | None:
-    """Öndeki pencere hedef oyun penceresi değilse onun alanı (oyunun üstünü örtüyor olabilir): log
-    penceresi, tarayıcı, Claude... OCR bunları okuyup çeviriyordu. Kendi pencerelerimiz ve masaüstü/görev
-    çubuğu sayılmaz (oyunu örtmezler)."""
-    hwnd = user32.GetForegroundWindow()
-    if not hwnd or hwnd == target or _window_pid(hwnd) in (os.getpid(), _window_pid(target)):
-        return None
-    if _class_name(hwnd) in _SHELL_CLASSES or user32.IsIconic(hwnd):
-        return None
-    return _client_rect(hwnd)
+def covering_windows(target: int) -> list[tuple[Rect, str]]:
+    """Oyun penceresinin üstünde duran (z sırasında önde) başka uygulama pencereleri: (alan, başlık).
+    Log penceresi, tarayıcı, Claude... oyunun üstündeyken OCR onları okuyup çeviriyordu ("QAra"); öne
+    geçmemiş ama oyunun üstünde kalan pencere de sayılır. Sayılmayanlar: kendi pencerelerimiz, hedefle aynı
+    programın pencereleri, masaüstü/görev çubuğu, gizli/simge durumundaki/arka plandaki (cloaked) pencereler
+    ve tıklamayı geçiren saydam katmanlar (ekran kaplayan oyun içi bindirmeler: NVIDIA vb.)."""
+    found: list[tuple[Rect, str]] = []
+    own_pid, target_pid = os.getpid(), _window_pid(target)
+    hwnd = user32.GetWindow(target, _GW_HWNDPREV)
+    guard = 0
+    while hwnd and guard < 512:
+        guard += 1
+        if (user32.IsWindowVisible(hwnd) and not user32.IsIconic(hwnd)
+                and _window_pid(hwnd) not in (own_pid, target_pid)
+                and not (user32.GetWindowLongW(hwnd, _GWL_EXSTYLE) & _WS_EX_TRANSPARENT)
+                and _class_name(hwnd) not in _SHELL_CLASSES and not _cloaked(hwnd)):
+            rect = _client_rect(hwnd)
+            if rect is not None:
+                found.append((rect, _window_title(hwnd)))
+        hwnd = user32.GetWindow(hwnd, _GW_HWNDPREV)
+    return found
+
+
+_GW_HWNDPREV = 3
+_GWL_EXSTYLE = -20
+_WS_EX_TRANSPARENT = 0x20
+user32.GetWindow.restype = wintypes.HWND
+user32.GetWindow.argtypes = [wintypes.HWND, wintypes.UINT]
 
 
 def window_choices() -> list[str]:

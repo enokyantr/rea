@@ -39,6 +39,9 @@ nicknames, forms of address (sen/siz), slang and the meaning consistent with the
 references from them. Translate only the new line.
 - Lines are read from the screen by OCR and may contain misread characters ("rn" read as "m", "I" as "l", "0" as "O", missing apostrophes or spaces). A <line source="asr"> was transcribed by speech recognition instead and may contain misheard words or missing punctuation. Translate the meaning the speaker most likely intended, using the context; never "correct" slang, profanity or deliberate misspellings into polite or standard words, and never mention the errors or add notes.
 - A <line source="phone"> is text from the in-game phone screen (a social media post or comment, a news headline or article, or a text message), not spoken dialogue: the earlier conversation turns do not apply to it. Keep @handles, #hashtags, emojis, URLs and numbers exactly as they are. Translate internet slang and abbreviations into natural Turkish internet language ("lol" -> "ahahah" / "lol", "lmao" -> "ahahaha", "smh" -> "yok artık", "tbh" -> "açıkçası", "wtf" -> "ne alaka" / "ne sikim", "omg" -> "aman tanrım"), using judgment; news stays in Turkish news style, casual posts stay casual.
+- The line may be cut off mid-word or mid-sentence because the subtitle is still appearing word by word \
+("I'm kidding, I'm kic", "That's goo", "Not all the tim"). Translate only the words that are there, drop an \
+unfinished last word and end with "..."; never guess, complete or invent the rest of the sentence.
 - Some characters speak Spanish or mix Spanish into English (Spanglish); OCR often drops Spanish accents and the marks ¿ ¡ ñ ("Que pasa, mija?" = "¿Qué pasa, mija?"). Translate the Spanish parts into Turkish too, with the same tone; never leave Spanish words untranslated except names.
 {uncensored}{glossary}"""
 
@@ -112,6 +115,9 @@ EXAMPLES_PLAIN = [
     (None, "Oh, great. Another genius plan.", "Ah, harika. Yine bir dahiyane plan."),
     (None, "Ay, mija, you scared me!", "Ay kızım, ödümü kopardın!"),
     (None, "Orale, vamonos, hermano.", "Hadi kardeşim, gidelim."),
+    # Kelime kelime açılan altyazının yarım okuması: devamı uydurulmaz
+    (None, "Cal: Are you kidding? That wa", "Cal: Şaka mı yapıyorsun? O..."),
+    (None, "Lucia: I need you to listen to me.", "Lucia: Beni dinlemeni istiyorum."),
 ]
 
 
@@ -186,6 +192,7 @@ _META = re.compile(
     r"verilen metin|önceki konuşmada|"
     # "Bu bir çeviri isteği değil gibi görünüyor. "deer" kelimesi...", "Bu talimatı yerine getiremem. Ben,
     # ... bir dil modeliyim" (ret önbelleğe girip her seferinde gösteriliyordu)
+    r"anlamı belirsiz|demek istedin|telefon ekranında görünen|çevirmeye gerek yok|"
     r"çeviri isteği|yerine getiremem|yardımcı olamam|\bdil modeli|yapay zeka|programlanmadım|programlanmamış|"
     r"kelimesi türkçe|türkçe'?de .{0,20}(?:anlamına gelir|olarak çevrilir))",
     re.IGNORECASE,
@@ -350,7 +357,7 @@ class OllamaBackend:
         # yeniden denenir ve bu model için bir daha gönderilmez (nesne tek modele aittir).
         self._send_think = True
         # "clean-7": telefon ekranı kuralı (clean-6: doğallık/duygu/hitap, clean-5: İspanyolca satırlar).
-        blob = json.dumps([self._system, self._examples, "clean-10"], ensure_ascii=False).encode("utf-8")
+        blob = json.dumps([self._system, self._examples, "clean-11"], ensure_ascii=False).encode("utf-8")
         self._fingerprint = hashlib.sha256(blob).hexdigest()[:10]
 
     def cache_namespace(self) -> str:

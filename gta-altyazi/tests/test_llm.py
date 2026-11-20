@@ -587,3 +587,10 @@ def test_dropped_speaker_label_is_restored():
     assert keep_speaker("Cal: Yeah, that's right.", "Evet, tam olarak öyle.") == "Cal: Evet, tam olarak öyle."
     assert keep_speaker("Local: Fuck!", "Yerel: Siktir!") == "Yerel: Siktir!"
     assert keep_speaker("Yeah.", "Evet.") == "Evet."
+
+
+def test_guess_replies_are_meta_and_prompt_forbids_completing_cut_lines():
+    from altyazi.llm import SYSTEM, is_meta_reply
+
+    assert is_meta_reply('Anlamı belirsiz bir kelime. Belki "neden?" veya "ne oluyor?" demek istedin.')
+    assert "never guess, complete or invent" in SYSTEM
