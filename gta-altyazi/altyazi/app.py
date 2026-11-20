@@ -282,8 +282,6 @@ class Pipeline(threading.Thread):
         last_region: Rect | None = None
         last_base_check = 0.0
         last_window_title: str | None = None
-        target_hwnd: int | None = None
-        covered = False
         flat_watch = FlatCaptureWatch() if self.region_name == MAIN else None
         last_flat_check = 0.0
         screen = win32.virtual_screen()
@@ -330,29 +328,14 @@ class Pipeline(threading.Thread):
                 if tick - last_base_check >= 1.0:
                     last_base_check = tick
                     screen = win32.virtual_screen()
-                    found = win32.find_target(cfg.window_titles)
-                    title = found[1] if found else None
+                    found = win32.find_window(cfg.window_titles)
+                    title = found[0] if found else None
                     if title != last_window_title and self.region_name == MAIN:
                         log(f"Hedef pencere: {title}" if title else "Hedef pencere bulunamadı, ana ekran kullanılıyor")
                     last_window_title = self.window_title = title
-                    target_hwnd = found[0] if found else None
-                    self.base = fit_aspect(found[2], cfg.video_aspect) if found else win32.primary_screen()
+                    self.base = fit_aspect(found[1], cfg.video_aspect) if found else win32.primary_screen()
 
                 region = region_to_screen(spec, self.base)
-                # Oyunun önünde başka bir pencere (log penceresi, tarayıcı...) bölgeyi örtüyorsa okunmaz:
-                # açılışta Claude uygulamasının arama kutusu ("QAra"), görev bölgesinde log saatleri
-                # okunup çevriliyordu. Hedef pencere bulunamadıysa (ana ekran okunuyor) denetlenmez.
-                covers = win32.covering_windows(target_hwnd) if target_hwnd else []
-                cover = next((title for rect, title in covers if intersect(rect, region) is not None), None)
-                now_covered = cover is not None
-                if now_covered != covered:
-                    covered = now_covered
-                    if self.region_name == MAIN:
-                        log(f"Oyunun üstünde başka bir pencere var ({cover or 'adsız'}): okuma duraklatıldı"
-                            if covered else "Oyun penceresi açıkta: okuma sürüyor")
-                if covered:
-                    time.sleep(0.2)
-                    continue
                 if region != last_region:
                     last_region = region
                     last_sig, last_box = None, None
@@ -535,14 +518,37 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
     panel = None  # menü (aşağıda kurulur); own_rects okur
     phone_panel = None  # telefon paneli (aşağıda kurulur); own_rects okur
 
+    cover = {"at": -1.0, "rects": [], "hwnd": None, "hwnd_at": -10.0, "titles": ()}
+
+    def cover_rects() -> list[Rect]:
+        """Oyun penceresinin üstünde duran başka programların pencereleri (log penceresi, tarayıcı, Claude,
+        Alt+Tab ekranı): okuma bölgesine taşan kısmı OCR'dan önce karartılır ("QAra", log saatleri okunup
+        çevriliyordu). Okuma durdurulmaz; bölgenin açıkta kalan kısmı okunmaya devam eder. Hedef pencere
+        bulunamadıysa (ana ekran okunuyor) boş. Okuma iş parçacıkları çağırır; 0,25 sn önbellekli."""
+        now = time.monotonic()
+        if now - cover["at"] < 0.25:
+            return cover["rects"]
+        if now - cover["hwnd_at"] >= 1.0:
+            found = win32.find_target(cfg.window_titles)
+            cover["hwnd"], cover["hwnd_at"] = (found[0] if found else None), now
+        windows = win32.covering_windows(cover["hwnd"]) if cover["hwnd"] else []
+        titles = tuple(sorted({title or "adsız" for _rect, title in windows}))
+        if titles != cover["titles"]:
+            cover["titles"] = titles
+            if titles:
+                log(f"Oyunun üstündeki pencere okunmuyor: {', '.join(titles)}")
+        cover["rects"], cover["at"] = [rect for rect, _title in windows], now
+        return cover["rects"]
+
     def own_rects() -> list[Rect]:
-        """Ekran yakalamada görünen kendi pencerelerimiz: okuma bölgesine taşarsa OCR'dan önce karartılır."""
+        """Ekran yakalamada görünen kendi pencerelerimiz ve oyunun üstündeki başka pencereler: okuma
+        bölgesine taşarsa OCR'dan önce karartılır."""
         rects = [ov.screen_rect for ov in overlays.values() if ov.capture_visible and ov.screen_rect]
         for window in (panel, phone_panel):
             rect = window.screen_rect if window is not None else None
             if rect is not None:
                 rects.append(rect)
-        return rects
+        return rects + cover_rects()
 
     def own_rects_others() -> list[Rect]:
         """Altyazı/görev/mesaj okumaları için: telefon açıkken (panelde içerik var ya da son saniyelerde

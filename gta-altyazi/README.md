@@ -279,8 +279,8 @@ Son satırlar panelinde (Ctrl+Alt+H) bu satırlar `[Görev]` / `[Telefon]` etike
 **Kontrol ipuçları ve etiketler çevrilmez.** "Hold L2 or R2 and aim...", "THROW R2 ... DROP", "STASH", "HANDLING 8.4 RANGE 4.4"
 gibi düğme simgeli (R1/R2/L1/L2) ya da tümü BÜYÜK HARFLİ etiket satırları okumadan atılır; diyalog satırı korunur.
 Görev yazısının sonundaki düğme yönergesi ("Use gas car R1 to pour") kesilir, yalnızca görev çevrilir.
-Mesaj bildirimi ve görev şeffaf yazı olarak (kutu olmadan) gösterilir. Oyunun önüne başka bir pencere gelip
-okuma bölgesini örterse (log penceresi, tarayıcı) okuma duraklar; o pencerenin yazısı çevrilmez. Görev bölgesi seçiliyse altyazı ve bildirim
+Mesaj bildirimi ve görev şeffaf yazı olarak (kutu olmadan) gösterilir. Oyunun üstünde başka bir pencere
+(log penceresi, tarayıcı) okuma bölgesine taşarsa o kısım okunmaz; bölgenin açıkta kalan kısmı okunmaya devam eder. Görev bölgesi seçiliyse altyazı ve bildirim
 okuması o alanı atlar (görev yazısı diyaloğa yapışıp çevrilmez). Telefon açıkken bildirim bölgesi telefonun alanını okumaz.
 
 **Telefon konumu.** Oyundaki telefon duruma göre sağda ya da araçta biraz ortada çıkar. Telefon bölgesini geniş seçin
