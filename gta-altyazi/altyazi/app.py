@@ -282,6 +282,8 @@ class Pipeline(threading.Thread):
         last_region: Rect | None = None
         last_base_check = 0.0
         last_window_title: str | None = None
+        target_hwnd: int | None = None
+        covered = False
         flat_watch = FlatCaptureWatch() if self.region_name == MAIN else None
         last_flat_check = 0.0
         screen = win32.virtual_screen()
@@ -328,14 +330,28 @@ class Pipeline(threading.Thread):
                 if tick - last_base_check >= 1.0:
                     last_base_check = tick
                     screen = win32.virtual_screen()
-                    found = win32.find_window(cfg.window_titles)
-                    title = found[0] if found else None
+                    found = win32.find_target(cfg.window_titles)
+                    title = found[1] if found else None
                     if title != last_window_title and self.region_name == MAIN:
                         log(f"Hedef pencere: {title}" if title else "Hedef pencere bulunamadı, ana ekran kullanılıyor")
                     last_window_title = self.window_title = title
-                    self.base = fit_aspect(found[1], cfg.video_aspect) if found else win32.primary_screen()
+                    target_hwnd = found[0] if found else None
+                    self.base = fit_aspect(found[2], cfg.video_aspect) if found else win32.primary_screen()
 
                 region = region_to_screen(spec, self.base)
+                # Oyunun önünde başka bir pencere (log penceresi, tarayıcı...) bölgeyi örtüyorsa okunmaz:
+                # açılışta Claude uygulamasının arama kutusu ("QAra"), görev bölgesinde log saatleri
+                # okunup çevriliyordu. Hedef pencere bulunamadıysa (ana ekran okunuyor) denetlenmez.
+                cover = win32.covering_window(target_hwnd) if target_hwnd else None
+                now_covered = cover is not None and intersect(cover, region) is not None
+                if now_covered != covered:
+                    covered = now_covered
+                    if self.region_name == MAIN:
+                        log("Oyunun önünde başka bir pencere var: okuma duraklatıldı" if covered
+                            else "Oyun penceresi önde: okuma sürüyor")
+                if covered:
+                    time.sleep(0.2)
+                    continue
                 if region != last_region:
                     last_region = region
                     last_sig, last_box = None, None

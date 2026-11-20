@@ -545,18 +545,22 @@ def test_sms_notification_region_is_registered():
     assert not hotkeys.conflicts(hotkeys.merged(None))
 
 
-def test_notification_region_becomes_transparent_text_once():
+def test_notification_and_task_regions_become_transparent_text_once():
     from altyazi.config import CONFIG_VERSION, _from_dict, default_display_mode
 
     old = {"config_version": 2, "extra_regions": [
         {"name": "bildirim", "region": {"x": 0.6, "y": 0.7, "w": 0.3, "h": 0.2}, "display_mode": "cover"},
-        {"name": "gorev", "region": {"x": 0.1, "y": 0.1, "w": 0.3, "h": 0.1}, "display_mode": "cover"}]}
-    cfg = _from_dict(old)
-    assert {e.name: e.display_mode for e in cfg.extra_regions} == {"bildirim": "adaptive", "gorev": "cover"}
-    assert default_display_mode("bildirim") == "adaptive" and CONFIG_VERSION == 3
-    # Yeni sürümde kullanıcının sonradan seçtiği "cover" korunur
-    new = {**old, "config_version": 3}
-    assert {e.name: e.display_mode for e in _from_dict(new).extra_regions}["bildirim"] == "cover"
+        {"name": "gorev", "region": {"x": 0.1, "y": 0.1, "w": 0.3, "h": 0.1}, "display_mode": "cover"},
+        {"name": "telefon", "region": {"x": 0.6, "y": 0.1, "w": 0.3, "h": 0.8}, "display_mode": "cover"}]}
+    modes = {e.name: e.display_mode for e in _from_dict(old).extra_regions}
+    assert modes == {"bildirim": "adaptive", "gorev": "adaptive", "telefon": "cover"}
+    assert default_display_mode("gorev") == "adaptive" and CONFIG_VERSION == 4
+    # Sürüm 3: bildirim için kullanıcının sonradan seçtiği "cover" korunur, görev bir kez geçer
+    modes = {e.name: e.display_mode for e in _from_dict({**old, "config_version": 3}).extra_regions}
+    assert modes["bildirim"] == "cover" and modes["gorev"] == "adaptive"
+    # Yeni sürümde kullanıcının seçimi korunur
+    modes = {e.name: e.display_mode for e in _from_dict({**old, "config_version": 4}).extra_regions}
+    assert modes == {"bildirim": "cover", "gorev": "cover", "telefon": "cover"}
 
 
 def test_word_by_word_revealed_line_is_shown_again_when_complete():

@@ -180,10 +180,14 @@ _META = re.compile(
     r"muhtemelen bir (?:isim|yer|kurum)\b.{0,40}(?:adı|ifade)|"
     r"bu mesaj(?:ın|ı)? içeri[ğk]|(?:ekran görüntüsü|telefon ekranı)(?: mesajı)? (?:gibi görünüyor|görünümünde)|"
     r"çeviri gerektirmiyor|gta altyazısı|ne anlama geliyor\w* bilmiyorum|anlamını bilmiyorum|"
-    r"^bu,? (?:da |bir )?.{0,40}\b(?:oyun içi|oyun|mağaza|metin|ifade|kelime|cümle|talimat|mesaj|menü|ekran|kod)\w*\b"
+    r"^bu,? (?:da |bir )?.{0,40}\b(?:oyun içi|oyun|mağaza|metin|ifade|kelime|cümle|talimat|mesaj|menü|ekran|kod|çeviri|istek)\w*\b"
     r".{0,50}(?:gibi görünüyor|anlamına geliyor|olabilir)|"
     r"tam olarak anlaşılamadı|lütfen daha fazla bilgi|türkçe'?ye .{0,30}çevirebilirsin|"
-    r"verilen metin|önceki konuşmada)",
+    r"verilen metin|önceki konuşmada|"
+    # "Bu bir çeviri isteği değil gibi görünüyor. "deer" kelimesi...", "Bu talimatı yerine getiremem. Ben,
+    # ... bir dil modeliyim" (ret önbelleğe girip her seferinde gösteriliyordu)
+    r"çeviri isteği|yerine getiremem|yardımcı olamam|\bdil modeli|yapay zeka|programlanmadım|programlanmamış|"
+    r"kelimesi türkçe|türkçe'?de .{0,20}(?:anlamına gelir|olarak çevrilir))",
     re.IGNORECASE,
 )
 
@@ -228,13 +232,23 @@ def echoes_history(out: str, text: str, history) -> bool:
 
     low = out.casefold().strip()
     for src, dst in history:
-        if src.strip() != text.strip() and dst and SequenceMatcher(None, low, dst.casefold().strip()).ratio() >= 0.85:
+        if src.strip() == text.strip() or not dst:
+            continue
+        old = dst.casefold().strip().rstrip(".!?…")
+        if SequenceMatcher(None, low, dst.casefold().strip()).ratio() >= 0.85:
             return True
-    said = {name.casefold() for src, _ in history for name in _speakers(src)}
+        # Önceki çeviriyi başa/sona eklemiş: "Gazlı arabayı R1topour kullan. Görevleri kontrol et ve..."
+        if len(old) >= 12 and old in low and len(low) > len(old) + 8:
+            return True
+    said = {name.casefold() for src, dst in history for name in (*_speakers(src), *_speakers(dst or ""))}
     names_out = _speakers(out)
+    names_in = _speakers(text)
     if names_out and names_out[0].casefold() in said and names_out[0].casefold() not in text.casefold():
-        return True
-    return len(names_out) > max(1, len(_speakers(text)))
+        # Kaynakta etiket yokken geçmişteki (çevrilmiş) etiketle başlıyor: "QAra" -> "Yerel: Aman tanrım..."
+        # Kaynakta başka etiket varsa çevrilmiş etiket ("Local" -> "Yerel") yeni satıra aittir.
+        if not names_in or names_out[0].casefold() in {n.casefold() for src, _ in history for n in _speakers(src)}:
+            return True
+    return len(names_out) > max(1, len(names_in))
 
 
 def is_meta_reply(text: str) -> bool:
@@ -327,7 +341,7 @@ class OllamaBackend:
         # yeniden denenir ve bu model için bir daha gönderilmez (nesne tek modele aittir).
         self._send_think = True
         # "clean-7": telefon ekranı kuralı (clean-6: doğallık/duygu/hitap, clean-5: İspanyolca satırlar).
-        blob = json.dumps([self._system, self._examples, "clean-9"], ensure_ascii=False).encode("utf-8")
+        blob = json.dumps([self._system, self._examples, "clean-10"], ensure_ascii=False).encode("utf-8")
         self._fingerprint = hashlib.sha256(blob).hexdigest()[:10]
 
     def cache_namespace(self) -> str:
@@ -560,7 +574,7 @@ class OllamaBackend:
         except Cancelled:
             raise
         except Exception:
-            return soft
+            return textproc.force_strong(text, soft)
         if again and not is_meta_reply(again) and not textproc.is_softened(text, again):
             return again
-        return soft
+        return textproc.force_strong(text, soft)

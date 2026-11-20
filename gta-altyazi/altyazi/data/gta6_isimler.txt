@@ -23,3 +23,12 @@ Grassrivers = Grassrivers
 Port Gellhorn = Port Gellhorn
 Ambrosia = Ambrosia
 Mount Kalaga = Mount Kalaga
+# Oyundan (oyuncu logları): yer ve karakter adları
+Key Lento = Key Lento
+Leonida Straits = Leonida Straits
+Gambit Bay = Gambit Bay
+Peregrine Bay = Peregrine Bay
+Corsair Key = Corsair Key
+Donnie = Donnie
+Joey = Joey
+Shirley = Shirley

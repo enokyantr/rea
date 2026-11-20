@@ -111,12 +111,33 @@ def active_window() -> int | None:
 
 
 def find_window(title_parts: list[str]) -> tuple[str, Rect] | None:
+    found = find_target(title_parts)
+    return (found[1], found[2]) if found else None
+
+
+def find_target(title_parts: list[str]) -> tuple[int, str, Rect] | None:
+    """Hedef pencere (tutamak, başlık, alan)."""
     windows = visible_windows()
     active_title = None
     if any(p.casefold() == ACTIVE for p in title_parts):
         hwnd = active_window()
         active_title = next((title for h, title, _rect in windows if h == hwnd), None)
-    return pick_window(title_parts, [(title, rect) for _hwnd, title, rect in windows], active_title)
+    picked = pick_window(title_parts, [(title, rect) for _hwnd, title, rect in windows], active_title)
+    if picked is None:
+        return None
+    return next(((h, t, r) for h, t, r in windows if (t, r) == picked), None)
+
+
+def covering_window(target: int) -> Rect | None:
+    """Öndeki pencere hedef oyun penceresi değilse onun alanı (oyunun üstünü örtüyor olabilir): log
+    penceresi, tarayıcı, Claude... OCR bunları okuyup çeviriyordu. Kendi pencerelerimiz ve masaüstü/görev
+    çubuğu sayılmaz (oyunu örtmezler)."""
+    hwnd = user32.GetForegroundWindow()
+    if not hwnd or hwnd == target or _window_pid(hwnd) in (os.getpid(), _window_pid(target)):
+        return None
+    if _class_name(hwnd) in _SHELL_CLASSES or user32.IsIconic(hwnd):
+        return None
+    return _client_rect(hwnd)
 
 
 def window_choices() -> list[str]:

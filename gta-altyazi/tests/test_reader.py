@@ -312,3 +312,11 @@ def test_phone_focus_follows_the_dense_text_column():
     moved = [line("another post in the middle", 380, 100, 580, 120), line("and one more line here", 382, 160, 582, 180)]
     kept2, x2 = focus_phone(moved, 1000, 500, prev_x=x)
     assert [ln.text for ln in kept2] == [m.text for m in moved]
+
+
+def test_button_prompt_glued_to_objective_is_cut():
+    from altyazi.textproc import drop_hud_lines
+
+    assert drop_hud_lines(["Use gas car R1topour"]) == ["Use gas car"]
+    assert drop_hud_lines(["Use gas car R1 to pour"]) == ["Use gas car"]
+    assert drop_hud_lines(["Press R2 to shoot"]) == []

@@ -494,10 +494,11 @@ def test_softened_profanity_is_retried_once_with_a_stronger_instruction(fake):
     assert second[0] == {"role": "assistant", "content": "Lanet olsun, dur!"} or second[1]["role"] == "user"
 
 
-def test_still_soft_after_retry_keeps_first_translation_and_neutral_lines_are_not_retried(fake):
+def test_still_soft_after_retry_is_hardened_and_neutral_lines_are_not_retried(fake):
     backend = OllamaBackend("aya-expanse:8b", fake.url)
     fake.reply = "Lanet olsun, dur!"
-    assert backend.translate("Oh shit, stop!", None) == "Lanet olsun, dur!"
+    # İkinci deneme de yumuşak: yumuşak ünlem sertiyle değiştirilir ("Jason: Shit." -> "Lanet olsun.")
+    assert backend.translate("Oh shit, stop!", None) == "Siktir, dur!"
     n = len(fake.chats)
     fake.reply = "Dur."
     assert backend.translate("Stop it.", None) == "Dur."
@@ -547,3 +548,34 @@ def test_explanations_with_quotes_are_meta():
     assert is_meta_reply('Anlamadım. "QAra" ne anlama geliyor?')
     assert is_meta_reply("Bu, oyun içi bir talimat gibi görünüyor. Anlamı şu")
     assert not is_meta_reply("Bu bir tuzak gibi görünüyor.")
+
+
+def test_refusals_and_request_comments_are_meta():
+    from altyazi.llm import is_meta_reply
+
+    assert is_meta_reply('Bu bir çeviri isteği değil gibi görünüyor. "deer" kelimesi Türkçe\'de "geyik"')
+    assert is_meta_reply("Bu talimatı yerine getiremem. Ben, belirli eylemleri gerçekleştirmeye "
+                         "programlanmamış bir dil modeliyim.")
+    assert not is_meta_reply("Donnie'nin arabasını yok et.")
+    assert not is_meta_reply("Bu modeli beğendin mi?")
+
+
+def test_echo_by_appending_previous_line_or_translated_label():
+    from altyazi.llm import echoes_history
+
+    h = [("Use gas car R1topour", "Gazlı arabayı R1topour kullan."),
+         ("Local: Oh look at you! I bet you're not even going to", "Yerel: Bak ne yapıyorsun! Sanırım...")]
+    assert echoes_history("Gazlı arabayı R1topour kullan. Görevleri kontrol et ve...", "Check the tasks and th", h)
+    assert echoes_history("Yerel: Aman tanrım, bak sen ne haldeymişsin!", "QAra", h)
+    # Yeni "Local:" satırının çevrilmiş etiketi yankı değil
+    assert not echoes_history("Yerel: Bir dalı götüne sok!", "Local: Shove a branch up your ass!", h)
+    assert not echoes_history("Görevleri kontrol et.", "Check the tasks", h)
+
+
+def test_still_softened_profanity_is_hardened_deterministically():
+    from altyazi.textproc import force_strong
+
+    assert force_strong("Jason: Shit.", "Jason: Lanet olsun.") == "Jason: Siktir."
+    assert force_strong("Aww, shit.", "Ah, lanet olsun.") == "Ah, siktir."
+    assert force_strong("Damn it!", "Lanet olsun!") == "Lanet olsun!"  # hafif: dokunulmaz
+    assert force_strong("Oh shit!", "Hassiktir!") == "Hassiktir!"

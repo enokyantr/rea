@@ -442,6 +442,10 @@ _TRAIL_CAPS = re.compile(r"(?<=[.!?\"”)\]…])\s*((?:[A-Z][A-Z0-9/&'-]+\s*)+(?
 _LEAD_CAPS = re.compile(r"^(?:[A-Z][A-Z0-9/&'-]+\s+)+(?=[A-Z][A-Za-z]+s?:)")
 
 
+_GLUED_BUTTON = re.compile(r"(?<![\w])([LR][123])(?=[a-z])")
+_BUTTON_TO = re.compile(r"\s+(?:(?:press|hold|tap)\s+)?[LR][123]\s*to\s*[a-z].*$", re.IGNORECASE)
+
+
 def drop_hud_lines(lines: list[str]) -> list[str]:
     """OCR satırlarından kontrol ipuçlarını ayıklar. Düğme simgeli bir BÜYÜK HARF öbeği ("DIVE R1")
     satır sonundan/başından kesilir; küçük harfli cümle içinde düğme geçiyorsa ("Hold L2 or R2 and
@@ -460,6 +464,12 @@ def drop_hud_lines(lines: list[str]) -> list[str]:
         trimmed = _LEAD_CAPS.sub("", line).strip()  # "LOOT Locals: Police?" -> "Locals: Police?"
         if trimmed:
             line = trimmed
+        # OCR boşluğu yutmuş düğme: "Use gas car R1topour" -> "Use gas car R1 topour"
+        line = _GLUED_BUTTON.sub(r"\1 ", line)
+        # Görev yazısının sonuna eklenen düğme yönergesi: "Use gas car R1 to pour" -> "Use gas car"
+        cut = _BUTTON_TO.sub("", line).strip()
+        if cut and cut != line and len(cut.split()) >= 2 and not _BUTTON.search(cut):
+            line = cut
         if _BUTTON.search(line):
             # Kalan düğme ipucu: BÜYÜK HARFLİ kuyruk ("... DIVE R1") ya da küçük harfli yönerge
             cut = re.sub(r"\s*(?:[A-Z][A-Z0-9/&'-]+\s+)*[LR][123]\s*$", "", line).strip()
@@ -513,6 +523,25 @@ def has_strong_profanity(text: str) -> bool:
 def is_softened(source: str, translation: str) -> bool:
     """Kaynakta sert küfür var ama çeviride sert karşılık yok ("Oh shit" -> "Lanet olsun")."""
     return has_strong_profanity(source) and not _STRONG_TR.search(translation)
+
+
+# Model iki denemede de yumuşattıysa ("Jason: Shit." -> "Lanet olsun.") yumuşak karşılıklar sertiyle
+# değiştirilir: kullanıcı sansürsüz çeviri istiyor, "lanet olsun" kaynağın anlamını taşımıyor.
+_SOFT_TR = [
+    (re.compile(r"\b(?:lanet olsun|kahretsin|kahrolsun|tüh|hay aksi)\b", re.IGNORECASE), "siktir"),
+    (re.compile(r"\b(?:kahrolası|lanet olası|lanetli|lanet|kahrolasıca)\b", re.IGNORECASE), "siktiğimin"),
+]
+
+
+def force_strong(source: str, translation: str) -> str:
+    """Kaynakta sert küfür varken çeviri yumuşaksa yumuşak ünlemleri sert karşılıkla değiştirir; değişecek
+    bir şey yoksa çeviri olduğu gibi döner."""
+    if not is_softened(source, translation):
+        return translation
+    out = translation
+    for pattern, repl in _SOFT_TR:
+        out = pattern.sub(lambda m, r=repl: r.capitalize() if m.group(0)[:1].isupper() else r, out)
+    return out
 
 
 def strip_ui_chrome(text: str, strict: bool = False) -> str:
