@@ -179,7 +179,11 @@ _META = re.compile(
     r"bu bir hata gibi görünüyor|hata mesajı veya (?:bir )?kod parçası|"
     r"muhtemelen bir (?:isim|yer|kurum)\b.{0,40}(?:adı|ifade)|"
     r"bu mesaj(?:ın|ı)? içeri[ğk]|(?:ekran görüntüsü|telefon ekranı)(?: mesajı)? (?:gibi görünüyor|görünümünde)|"
-    r"çeviri gerektirmiyor|gta altyazısı|ne anlama geliyor\w* bilmiyorum|anlamını bilmiyorum)",
+    r"çeviri gerektirmiyor|gta altyazısı|ne anlama geliyor\w* bilmiyorum|anlamını bilmiyorum|"
+    r"^bu,? (?:da |bir )?.{0,40}\b(?:oyun içi|oyun|mağaza|metin|ifade|kelime|cümle|talimat|mesaj|menü|ekran|kod)\w*\b"
+    r".{0,50}(?:gibi görünüyor|anlamına geliyor|olabilir)|"
+    r"tam olarak anlaşılamadı|lütfen daha fazla bilgi|türkçe'?ye .{0,30}çevirebilirsin|"
+    r"verilen metin|önceki konuşmada)",
     re.IGNORECASE,
 )
 
@@ -206,6 +210,33 @@ def _strip_stage_notes(out: str, original: str) -> str:
     return stripped or out
 
 
+# Tırnaklı açıklama: Bu, "Neşeli Harita" anlamına geliyor / "QAra" ne anlama geliyor?
+_META_QUOTED = re.compile(r"[\"“][^\"”]{1,60}[\"”] (?:ne )?anlam(?:ına|a) geliyor", re.IGNORECASE)
+_SPEAKER = re.compile(r"(?:^|(?<=[.!?…]\s))([A-ZÇĞİÖŞÜ][\wçğıöşü'.-]{1,20}(?: [A-ZÇĞİÖŞÜ][\wçğıöşü]{1,15})?):\s")
+
+
+def _speakers(text: str) -> list[str]:
+    return [m.group(1) for m in _SPEAKER.finditer(text)]
+
+
+def echoes_history(out: str, text: str, history) -> bool:
+    """Çıktı yeni satırın değil geçmişteki bir satırın çevirisi mi (ya da onu da içeriyor mu)?
+    - geçmişteki bir çeviriyle (başka bir İngilizce satırın) neredeyse aynı;
+    - satırda olmayan ama geçmişte konuşan birinin adıyla başlıyor ("Lucia: ..." -> "Jason: ...");
+    - kaynakta olduğundan çok konuşmacı etiketi var (önceki satırı başa eklemiş)."""
+    from difflib import SequenceMatcher
+
+    low = out.casefold().strip()
+    for src, dst in history:
+        if src.strip() != text.strip() and dst and SequenceMatcher(None, low, dst.casefold().strip()).ratio() >= 0.85:
+            return True
+    said = {name.casefold() for src, _ in history for name in _speakers(src)}
+    names_out = _speakers(out)
+    if names_out and names_out[0].casefold() in said and names_out[0].casefold() not in text.casefold():
+        return True
+    return len(names_out) > max(1, len(_speakers(text)))
+
+
 def is_meta_reply(text: str) -> bool:
     """Çeviri değil, modelin kendi açıklaması mı? (Tamamı parantez içinde ya da açıklama ifadesi.)"""
     stripped = text.strip()
@@ -213,7 +244,7 @@ def is_meta_reply(text: str) -> bool:
         return True
     if stripped.startswith("(") and len(stripped) > 40:
         return True  # "(Bu bir ekran görüntüsü ... " (uzunluk sınırında kesilmiş parantezli açıklama)
-    return bool(_META.search(stripped))
+    return bool(_META.search(stripped) or _META_QUOTED.search(stripped))
 
 
 def clean_output(text: str) -> str:
@@ -296,7 +327,7 @@ class OllamaBackend:
         # yeniden denenir ve bu model için bir daha gönderilmez (nesne tek modele aittir).
         self._send_think = True
         # "clean-7": telefon ekranı kuralı (clean-6: doğallık/duygu/hitap, clean-5: İspanyolca satırlar).
-        blob = json.dumps([self._system, self._examples, "clean-8"], ensure_ascii=False).encode("utf-8")
+        blob = json.dumps([self._system, self._examples, "clean-9"], ensure_ascii=False).encode("utf-8")
         self._fingerprint = hashlib.sha256(blob).hexdigest()[:10]
 
     def cache_namespace(self) -> str:
@@ -502,6 +533,15 @@ class OllamaBackend:
             raise RuntimeError("Yerel LLM boş yanıt verdi")
         if is_meta_reply(out):  # hata sayılır: taslak çeviri ekranda kalır, önbelleğe girmez
             raise RuntimeError(f"Yerel LLM çeviri yerine açıklama yazdı: {out[:80]}")
+        if history and echoes_history(out, text, history):
+            # Model yeni satır yerine geçmişteki bir satırı (çoğu zaman bir öncekini) çevirdi ya da başına
+            # ekledi: "Yo, your neighbor's real chatty" -> "Jason: Tamam, bırak artık." Geçmişsiz yeniden.
+            user = _user_message(None, text, self._matcher.matched(text), source)
+            out = _strip_stage_notes(clean_output(self._chat(user, timeout=self._timeout, num_predict=limit,
+                                                             cancel=cancel)), text)
+            history = ()
+            if not out or is_meta_reply(out):
+                raise RuntimeError(f"Yerel LLM çeviri yerine açıklama yazdı: {out[:80]}")
         if self.instructions_active and textproc.is_softened(text, out):
             out = self._harden(user, text, out, limit, history, cancel)
         return out

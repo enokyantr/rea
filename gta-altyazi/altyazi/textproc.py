@@ -21,9 +21,13 @@ def _fold_accents(text: str) -> str:
     return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
 
 
+_NON_LATIN = re.compile(r"[\u2E80-\u9FFF\uF900-\uFAFF\uFF00-\uFFEF\u25A0-\u25FF\u3000-\u303F\u300A-\u300B]+")
+
+
 def normalize(lines: list[str]) -> str:
     """Satırları tek cümleye birleştirir, boşlukları ve kenar çöplerini temizler."""
     text = _fold_accents(" ".join(line.strip() for line in lines if line.strip()))
+    text = _NON_LATIN.sub(" ", text)  # OCR'ın simgelerden uydurduğu CJK/şekil karakterleri ("川Map", "口")
     text = _spell_fix(_split_glued(_fix_ocr_confusions(_SPACE.sub(" ", text).strip())))
     text = _EDGE_JUNK.sub("", text).strip()
     # Satır sonunda kelime bölünmesi: "some- thing" -> "something"
@@ -577,6 +581,24 @@ def same_line(a: str, b: str, threshold: float) -> bool:
     return bool(small) and len(small & big) >= max(1, round(0.8 * len(small)))
 
 
+_SENTENCE_DONE = re.compile(r"[.!?…\"'”)\]]\s*$")
+_GROW_TOKEN = re.compile(r"[\w']+")
+
+
+def grows(new: str, old: str) -> bool:
+    """`new`, `old`un devamı mı? GTA VI altyazıyı konuşmayla birlikte kelime kelime açar: "Jason: You
+    mean Shirley? Witl" -> "... With the dog?". Eskinin kelimeleri yeninin başında aynen durur (son
+    kelime yarım okunmuş olabilir: ilk iki harfi tutmalı) ve yeni en az bir kelime / 3 harf uzundur."""
+    a = [w.lower() for w in _GROW_TOKEN.findall(old)]
+    b = [w.lower() for w in _GROW_TOKEN.findall(new)]
+    if not a or len(b) <= len(a) - 1 or len(new.strip()) < len(old.strip()) + 3:
+        return False
+    if b[:len(a) - 1] != a[:-1]:
+        return False
+    last, nxt = a[-1], b[len(a) - 1]
+    return nxt.startswith(last[:2]) and (len(b) > len(a) or len(nxt) > len(last))
+
+
 @dataclass(frozen=True)
 class Show:
     text: str
@@ -604,6 +626,9 @@ class Stabilizer:
     # her küçük farkta yeniden çevirmemek, ama eksik okunan satırı tamamlamak için.
     UPGRADE_MARGIN = 4
     UPGRADE_RATIO = 0.25
+    # Kelime kelime açılan satır: uzayan hâli de doğrulama okumasıyla (aynı metin tekrar) gösterilir;
+    # satır bundan uzun süre uzamaya devam ederse o ana kadarki kısım gösterilir (tamamı sonra yeniden).
+    GROW_MAX_WAIT_S = 1.4
 
     def __init__(self, stable_reads: int, similarity: float, clear_after: float, min_hold: float = 0.0):
         self.stable_reads = max(1, stable_reads)
@@ -617,6 +642,8 @@ class Stabilizer:
         self._candidate_count = 0
         self._candidate_since = 0.0
         self._last_text_at: float | None = None
+        self._last_growth: float | None = None
+        self._needs_repeat = False
 
     @property
     def pending(self) -> bool:
@@ -645,24 +672,42 @@ class Stabilizer:
 
         self._last_text_at = now
         score = reading_score(text)
-        if self.shown is not None and same_line(text, self.shown, self.similarity):
+        if (self.shown is not None and same_line(text, self.shown, self.similarity)
+                and not grows(text, self.shown)):
             needed = self._shown_score + max(self.UPGRADE_MARGIN, self.UPGRADE_RATIO * self._shown_score)
             if score < needed:
                 return None  # gösterilen satırın sıradan/kısmi okuması: bekleyen güncellemeyi bozmaz
             # Daha iyi okuma: yeni satır gibi doğrulanması gerekir (tek bozuk kare güncelleyemez).
 
-        if self._candidate is not None and same_line(text, self._candidate, self.similarity):
+        if self._candidate is not None and grows(text, self._candidate):
+            # Satır açılmaya devam ediyor: daha uzun hâli aday olur, yazı durana kadar beklenir.
+            self._candidate, self._candidate_score = text, score
             self._candidate_count += 1
-            if score >= self._candidate_score:  # en değerli okumayı tut
+            self._needs_repeat = True  # uzayan hâl bir kez daha aynı okunmalı (yazı durdu mu?)
+            self._last_growth = now
+        elif self._candidate is not None and same_line(text, self._candidate, self.similarity):
+            self._candidate_count += 1
+            self._needs_repeat = False
+            if score >= self._candidate_score and not grows(self._candidate, text):  # en değerli okumayı tut
                 self._candidate, self._candidate_score = text, score
         else:
             self._candidate, self._candidate_score = text, score
             self._candidate_count, self._candidate_since = 1, now
+            # Gösterilen yarım satırın devamı: yazı açılmayı sürdürüyor, durunca gösterilir.
+            self._last_growth = now if self.shown is not None and grows(text, self.shown) else None
+            self._needs_repeat = False
 
-        if confident or (self._candidate_count >= self.stable_reads
-                         and now - self._candidate_since >= self.min_hold):
+        # Cümle sonu noktalaması olmayan satır yarım olabilir (kelime kelime açılıyor): tek okumayla
+        # hızlı kabul edilmez, doğrulama okumasıyla beklenir.
+        confident = confident and bool(_SENTENCE_DONE.search(self._candidate))
+        since = self._candidate_since if self._last_growth is None else self._last_growth
+        overdue = self._last_growth is not None and now - self._candidate_since >= self.GROW_MAX_WAIT_S
+        if (confident and self._last_growth is None) or overdue or (
+                self._candidate_count >= self.stable_reads and not self._needs_repeat
+                and now - since >= self.min_hold):
             self.shown, self._shown_score = self._candidate, self._candidate_score
             self._candidate, self._candidate_count = None, 0
+            self._last_growth = None
             return Show(self.shown, self._candidate_since)
         return None
 

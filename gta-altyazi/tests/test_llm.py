@@ -512,3 +512,38 @@ def test_is_softened_detector():
     assert not is_softened("Oh shit!", "Hassiktir!")
     assert not is_softened("Damn it!", "Lanet olsun!")  # "damn" hafif: lanet olsun doğru
     assert not is_softened("Hello", "Merhaba")
+
+
+def test_echo_of_previous_line_is_detected_and_retried_without_history(fake):
+    from altyazi.llm import echoes_history
+    from altyazi.textproc import Dialogue
+
+    h = [("Jason: Okay, you know what? I'm done w", "Jason: Tamam, bırak artık.")]
+    assert echoes_history("Jason: Tamam, bırak artık.", "Lucia: Yo, your neighbor's real chatty.", h)
+    assert echoes_history("Satıcı: Garip olma. Yerel: Kafayı yedin kanka.", "Local: You tripping homie!", h)
+    assert not echoes_history("Jason: Evet, tamam.", "Jason: Yeah, okay.", h)
+    assert not echoes_history("Kyle: Hayır. Dobbs: Sus lan.", "Kyle: Nope. Dobbs: Shut up, man.", h)
+
+    backend = OllamaBackend("aya-expanse:8b", fake.url)
+    replies = iter(["Jason: Tamam, bırak artık.", "Lucia: Komşun da amma geveze."])
+    original = backend._chat
+
+    def chat(user, timeout, num_predict=120, history=(), cancel=None, extra=()):
+        original(user, timeout, num_predict, history, cancel, extra)
+        return next(replies)
+
+    backend._chat = chat
+    n = len(fake.chats)
+    out = backend.translate("Lucia: Yo, your neighbor's real chatty.", Dialogue(h[0][0], h))
+    assert out == "Lucia: Komşun da amma geveze." and len(fake.chats) == n + 2
+    # İkinci istek geçmişsiz (yalnızca sabit örnekler + satır)
+    assert not any("I'm done w" in m["content"] for m in fake.chats[-1]["messages"])
+
+
+def test_explanations_with_quotes_are_meta():
+    from altyazi.llm import is_meta_reply
+
+    assert is_meta_reply('Bu, "Neşeli Harita Mağazası Yardım" anlamına geliyor.')
+    assert is_meta_reply('Anlamadım. "QAra" ne anlama geliyor?')
+    assert is_meta_reply("Bu, oyun içi bir talimat gibi görünüyor. Anlamı şu")
+    assert not is_meta_reply("Bu bir tuzak gibi görünüyor.")

@@ -557,3 +557,22 @@ def test_notification_region_becomes_transparent_text_once():
     # Yeni sürümde kullanıcının sonradan seçtiği "cover" korunur
     new = {**old, "config_version": 3}
     assert {e.name: e.display_mode for e in _from_dict(new).extra_regions}["bildirim"] == "cover"
+
+
+def test_word_by_word_revealed_line_is_shown_again_when_complete():
+    from altyazi.textproc import grows
+
+    assert grows("Jason: You mean Shirley? With the dog?", "Jason: You mean Shirley? Witl")
+    assert not grows("Jason: You mean Shirley? With", "Jason: You mean Shirley? Witl")  # düzeltme, uzama değil
+    assert not grows("Lucia: Hey there", "Jason: Hey")
+    s = Stabilizer(stable_reads=2, similarity=0.88, clear_after=0.7, min_hold=0.04)
+    events = [s.feed(t, i * 0.15, True) for i, t in enumerate([
+        "Jason: You mean Shirley? Witl", "Jason: You mean Shirley? With", "Jason: You mean Shirley? With the",
+        "Jason: You mean Shirley? With the dog?", "Jason: You mean Shirley? With the dog?",
+        "Jason: You mean Shirley? With the dog?"])]
+    shown = [e.text for e in events if isinstance(e, Show)]
+    assert shown[-1] == "Jason: You mean Shirley? With the dog?" and len(shown) <= 2
+    # Noktalamasız (yarım olabilecek) satır tek okumayla hızlı kabul edilmez
+    s = Stabilizer(stable_reads=2, similarity=0.88, clear_after=0.7)
+    assert s.feed("Lucia: Apparently, her daughter n", 0.0, True) is None
+    assert isinstance(s.feed("Lucia: Okay.", 1.0, True), Show)

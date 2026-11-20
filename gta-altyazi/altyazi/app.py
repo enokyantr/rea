@@ -160,7 +160,8 @@ class Pipeline(threading.Thread):
 
     def _remember_line(self, english: str, turkish: str) -> None:
         """Sohbet geçmişi: kesinleşen satırlar (çeviri tutarlılığı için sonraki satırlara bağlam)."""
-        if self._dialogue and self._dialogue[-1][0] == english:
+        if self._dialogue and (self._dialogue[-1][0] == english or textproc.grows(english, self._dialogue[-1][0])):
+            # Aynı satır ya da yarım hâlinin tamamı (kelime kelime açılan altyazı): geçmişte tek satır kalır.
             self._dialogue[-1] = (english, turkish, time.monotonic())
         else:
             self._dialogue.append((english, turkish, time.monotonic()))
