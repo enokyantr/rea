@@ -526,13 +526,12 @@ def test_spanish_lines_are_detected_and_not_spell_corrected_into_english():
     assert not textproc.looks_turkish("Tienes que hablar con ellos para trabajar.")
 
 
-def test_draft_hold_follows_expected_final_latency_and_the_cap():
+def test_draft_hold_is_the_configured_cap():
+    from altyazi.config import Config
     from altyazi.hybrid import draft_hold_s
 
-    assert draft_hold_s("Yeah.", 1000) < 0.6                  # kısa satır: kısa bekleme
-    assert draft_hold_s("x" * 300, 1000) == 1.0               # uzun satır: üst sınır
-    assert draft_hold_s("Hello there, friend.", 0) == 0.0     # 0: taslak hemen
-    assert draft_hold_s("Hello there, friend.", 400) <= 0.4
+    assert draft_hold_s(Config().draft_hold_ms) == 2.5  # son çeviri gelene kadar taslak gösterilmez
+    assert draft_hold_s(0) == 0.0                        # 0: taslak hemen
 
 
 def test_sms_notification_region_is_registered():
@@ -589,3 +588,15 @@ def test_task_region_widens_to_the_right_up_to_a_limit():
     assert r == Region(0.02, 0.3, 0.2 * 1.35, 0.2)
     assert widened(Region(0.02, 0.3, MAX_TASK_WIDTH, 0.2)) is None
     assert widened(Region(0.9, 0.3, 0.1, 0.2)) is None  # pencerenin sağ kenarında
+
+
+def test_objective_glued_to_subtitle_is_stripped():
+    from altyazi.textproc import is_objective, strip_objective
+
+    assert is_objective("Follow Moses") and is_objective("Go to Dunk's trailer")
+    assert not is_objective("phone rings") and not is_objective("Lucia: No pro") and not is_objective("Follow")
+    ob = "Follow Moses"
+    assert strip_objective("Moses: It's not worth it. FollowMoses", ob) == "Moses: It's not worth it."
+    assert strip_objective("Lucia: heads turnin' FollowMoses", ob) == "Lucia: heads turnin'"
+    assert strip_objective("Lucia: I will follow Moses", ob) == "Lucia: I will follow Moses"
+    assert strip_objective("Follow Moses", ob) == "Follow Moses"

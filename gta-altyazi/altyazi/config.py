@@ -184,7 +184,7 @@ class Config:
     clear_after_ms: int = 700
     # Taslak (hızlı yerel) çeviri, son çeviri gelene kadar ilk okumadan en fazla bu kadar ms
     # bekletilir: son çeviri bu sürede gelirse ekranda yazı hiç değişmez. 0: taslak hemen gösterilir.
-    draft_hold_ms: int = 1000
+    draft_hold_ms: int = 2500
 
     # Overlay görünümü
     # "adaptive": Türkçe, İngilizce altyazının hemen üstünde kutusuz yazılır; yazı rengi arkadaki

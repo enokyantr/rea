@@ -504,7 +504,7 @@ class ControlPanel:
                         hint="cpu: ekran kartı oyuna kalır")
         r = self._spin(card, r, "Altyazı gidince Türkçe kaç ms sonra silinsin", "clear_after_ms", 200, 3000, 100,
                        restart=True)
-        r = self._spin(card, r, "Taslak çeviri en fazla kaç ms bekletilsin", "draft_hold_ms", 0, 2000, 100,
+        r = self._spin(card, r, "Taslak çeviri en fazla kaç ms bekletilsin", "draft_hold_ms", 0, 5000, 100,
                        live=True, hint="son çeviri bu sürede gelirse yazı hiç değişmez · 0: taslak hemen")
 
     # ad -> (parlak yazı eşiği, ek okuma güven eşiği). Düşük: doğruluk öncelikli (okuma başına ~+70 ms).

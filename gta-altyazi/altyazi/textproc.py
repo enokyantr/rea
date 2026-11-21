@@ -578,6 +578,35 @@ def force_strong(source: str, translation: str) -> str:
     return out
 
 
+# --- Görev hedefi altyazıya yapışması ------------------------------------------------------------
+# Ekranın altındaki görev hedefi ("Follow Moses", "Go to Dunk's trailer") altyazı bölgesinde altyazının
+# hemen altında durur; OCR onu her satırın sonuna ekliyordu ("Moses: ... worth. FollowMoses") ve satır
+# ile hedef arasında gidip gelen okumalar ekranda sürekli değişen çeviriye dönüşüyordu.
+_LABEL_START = re.compile(r"^[A-Z][\w'.&-]*(?: [A-Z&][\w'.&-]*)?\s*:")
+
+
+def is_objective(text: str) -> bool:
+    """Tek başına okunan görev hedefi mi: konuşmacı etiketi yok, 2-7 kelime, büyük harfle başlar, cümle
+    sonu noktalaması yok ("Follow Moses", "Get in Vicki's car")."""
+    words = text.split()
+    return (2 <= len(words) <= 7 and text[:1].isupper() and not text.isupper()
+            and not _LABEL_START.match(text) and text.rstrip()[-1:] not in ".?!…\"'”:")
+
+
+def strip_objective(text: str, objective: str) -> str:
+    """Satırın sonuna yapışmış görev hedefini atar (boşlukları yutulmuş olsa da: "FollowMoses").
+    Yalnızca kalan kısım bir noktalama ile bitiyorsa (gerçek bir altyazı sonu) atılır."""
+    letters = [c for c in objective if not c.isspace()]
+    if len(letters) < 4 or text == objective:
+        return text
+    pattern = re.compile(r"\s*" + r"\s*".join(re.escape(c) for c in letters) + r"\s*$", re.IGNORECASE)
+    m = pattern.search(text)
+    if m is None or m.start() == 0:
+        return text
+    rest = text[:m.start()].rstrip()
+    return rest if rest[-1:] in ".?!…,'\"”-" else text
+
+
 def strip_ui_chrome(text: str, strict: bool = False) -> str:
     """Düğme ipuçları ve görev çubuğu saati temizlenir; geriye anlamlı yazı kalmazsa boş döner.
     Satırın sonundaki düğme ipucu dizisi ("PHOTO STUDIO SELECT BACK" -> "PHOTO STUDIO") de atılır.

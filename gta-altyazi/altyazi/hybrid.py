@@ -415,9 +415,9 @@ class HybridTranslator:
                 ex.shutdown(wait=False, cancel_futures=True)
 
 
-def draft_hold_s(original: str, max_ms: int = 1000) -> float:
-    """Taslağın bekletileceği süre (sn): son çevirinin tahmini gelişi (≈ 0,25 sn + 11 ms/harf, kayıtlarda
-    40 harf ~0,7 sn, 100 harf ~1,3 sn) + 150 ms; en çok `max_ms`. Kısa/hızlı satırlarda gereksiz
-    beklenmez; son çeviri gelince bekletme zaten biter."""
-    expected = 0.25 + 0.011 * len(original) + 0.15
-    return max(0.0, min(max_ms / 1000, expected)) if max_ms > 0 else 0.0
+def draft_hold_s(max_ms: int) -> float:
+    """Taslağın ilk okumadan sonra en fazla bekletileceği süre (sn). Son çeviri bu sürede gelirse taslak
+    hiç gösterilmez ve ekrandaki yazı değişmez (gelince bekletme zaten biter). Önceden son çevirinin
+    tahmini gelişi kadar (uzun satırda en çok 1 sn) bekleniyordu; işlemcide OCR + yerel LLM ile son
+    çeviri çoğu satırda 1-3 sn sürdüğü için taslak gösterilip hemen değişiyor, yazı karışıyordu."""
+    return max(0, max_ms) / 1000

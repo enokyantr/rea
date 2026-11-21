@@ -107,7 +107,8 @@ class Pipeline(threading.Thread):
         self.fullscreen_hint = False  # özel tam ekran şüphesi (bir kez uyarıldı)
         self._last_read_text = ""
         self._unfit: set[str] = set()  # çevirmenin "çevrilemez" dediği yazılar (tekrar denenmez)
-        self._edge_hits = 0  # görev yazısı art arda kaç okumada bölgenin sağ kenarına dayandı
+        self._edge_hits = 0
+        self._objective = ""  # altyazı bölgesinde tek başına okunan son görev hedefi ("Follow Moses")  # görev yazısı art arda kaç okumada bölgenin sağ kenarına dayandı
 
     def _on_show(self, event: textproc.Show) -> None:
         self.seq += 1
@@ -190,6 +191,16 @@ class Pipeline(threading.Thread):
                                     draft=draft and not phone_like,
                                     source="phone" if phone_like else "ocr") and self.debug:
             log(f"{self._tag}önceden çeviri: {text!r}")
+
+    def _without_objective(self, text: str) -> str:
+        """Altyazı bölgesi: altyazının altındaki görev hedefi satırın sonuna yapışıyordu ("... worth.
+        FollowMoses"); tek başına okunan hedef hatırlanır ve sonraki okumaların sonundan atılır."""
+        if self.region_name != MAIN or not text:
+            return text
+        if textproc.is_objective(text):
+            self._objective = text
+            return text
+        return textproc.strip_objective(text, self._objective) if self._objective else text
 
     def _check_right_edge(self, result: reader.ReadResult, crop_width: int, whole: bool) -> None:
         """Görev/ipucu kutusu bölgeden genişse her satırın sağ ucu kesiliyordu ("A new Ultimate Edition
@@ -430,7 +441,7 @@ class Pipeline(threading.Thread):
                     last_ocr_at = tick
                     t0 = time.perf_counter()
                     result = self._read_text(ocr, gray)
-                    text = result.text
+                    text = self._without_objective(result.text)
                     if text:
                         self.last_visible_at = tick
                     conf = result.confidence or 0.0
@@ -1434,7 +1445,7 @@ def run_gui(cfg: Config, cfg_path: Path, make_translator: Callable[[], HybridTra
                     if stage == DRAFT:
                         # Son çeviri kısa sürede gelecekse taslağı hiç gösterme: okunan yazı yarım saniye
                         # sonra değişmesin. En geç ilk okumadan draft_hold_ms sonra taslak görünür.
-                        wait = first_seen + draft_hold_s(original, cfg.draft_hold_ms) - time.monotonic()
+                        wait = first_seen + draft_hold_s(cfg.draft_hold_ms) - time.monotonic()
                         if wait > 0.02:
                             held_draft[name] = msg
                             root.after(int(wait * 1000), lambda n=name, q=seq: release_draft(n, q, final=False))

@@ -143,10 +143,12 @@ def covering_windows(target: int) -> list[tuple[Rect, str]]:
         if (user32.IsWindowVisible(hwnd) and not user32.IsIconic(hwnd)
                 and _window_pid(hwnd) not in (own_pid, target_pid)
                 and not (user32.GetWindowLongW(hwnd, _GWL_EXSTYLE) & _WS_EX_TRANSPARENT)
-                and _class_name(hwnd) not in _SHELL_CLASSES and not _cloaked(hwnd)):
+                and _class_name(hwnd) not in _DESKTOP_CLASSES and not _cloaked(hwnd)):
             # Başlıksız pencereler sayılmaz: çoğu yardımcı/saydam bindirme (bir bölgenin ortasını
             # karartıp görev yazısını kesiyordu); gerçek uygulama pencerelerinin başlığı vardır.
-            title = _window_title(hwnd)
+            # Görev çubuğunun başlığı yoktur, adıyla sayılır.
+            taskbar = _class_name(hwnd) in ("Shell_TrayWnd", "Shell_SecondaryTrayWnd")
+            title = "Görev çubuğu" if taskbar else _window_title(hwnd)
             rect = _client_rect(hwnd) if title else None
             if rect is not None:
                 found.append((rect, title))
@@ -154,6 +156,9 @@ def covering_windows(target: int) -> list[tuple[Rect, str]]:
     return found
 
 
+# Masaüstü oyunun arkasındadır; görev çubuğu ise sayılır: oyun penceresi tam ekran değilken altyazı bölgesi
+# görev çubuğuna taşıyor, arama kutusu ("Q Ara") okunup çevriliyordu.
+_DESKTOP_CLASSES = ("Progman", "WorkerW")
 _GW_HWNDPREV = 3
 _GWL_EXSTYLE = -20
 _WS_EX_TRANSPARENT = 0x20
