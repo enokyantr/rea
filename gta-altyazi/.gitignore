@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+config.json
+config.json.tmp
+ceviri_onbellek.jsonl
+*_ocr_girdi.png
+build/
+dist/
+*.spec
+model/
+sozluk.txt
+dump/
+kayitlar/
+karakter_sesleri.json
+.ocr_gpu_deneme

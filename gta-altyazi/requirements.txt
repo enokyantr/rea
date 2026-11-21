@@ -1,0 +1,32 @@
+deepl>=1.33
+mss>=9.0
+numpy>=1.26
+pillow>=10.0
+# İngilizce kelime listesi: OCR okumaları arasından gerçek kelimeleri içereni seçmek için
+pyspellchecker>=0.8
+winrt-runtime>=3.0
+winrt-Windows.Foundation>=3.0
+winrt-Windows.Foundation.Collections>=3.0
+winrt-Windows.Globalization>=3.0
+winrt-Windows.Graphics.Imaging>=3.0
+winrt-Windows.Media.Ocr>=3.0
+# Sesli okuma (dublaj): Windows'un yerleşik Türkçe sesi
+winrt-Windows.Media.SpeechSynthesis>=3.0
+winrt-Windows.Media.Playback>=3.0
+winrt-Windows.Media.Core>=3.0
+winrt-Windows.Storage.Streams>=3.0
+# OCR motoru (PP-OCRv4, işlemcide; modeller paketin içinde). Kurulamazsa Windows OCR kullanılır.
+rapidocr-onnxruntime>=1.4.4,<2; python_version < "3.13"
+# Menü teması (Windows 11 görünümü)
+sv-ttk>=2.6
+# Dublaj: doğal Türkçe kadın/erkek ses (çevrimiçi) ve oyun sesini dinleyip konuşanı tanıma
+edge-tts>=7.0
+soundcard>=0.4.3
+# Sokak konuşmaları: oyun sesinden konuşma tanıma (yerel, işlemcide)
+faster-whisper>=1.0
+# Yük izleme (yayın sırasında kendini kısma)
+psutil>=5.9
+# Ekran kartı kullanımı ve belleği (NVIDIA; "oyun" performans modu). Yoksa yalnızca işlemciye bakılır.
+nvidia-ml-py>=12.535
+# Dublaj: Edge sesini inerken çalmak (düşük gecikme; yoksa eski MediaPlayer yolu)
+miniaudio>=1.61

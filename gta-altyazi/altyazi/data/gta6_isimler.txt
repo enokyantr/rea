@@ -1,0 +1,38 @@
+# GTA VI'nın bilinen karakter ve yer adları (fragmanlar ve Rockstar'ın sitesi): her zaman çevrilmeden
+# kalır. Biçim: İngilizce = Türkçe. Kullanıcının sozluk.txt'sindeki aynı terim bunların önüne geçer.
+# Bu klasördeki her *_isimler.txt dosyası programla birlikte gelen oyun adı listesi olarak okunur.
+
+Jason = Jason
+Jason Duval = Jason Duval
+Lucia = Lucia
+Lucia Caminos = Lucia Caminos
+Boobie Ike = Boobie Ike
+Brian Heder = Brian Heder
+Lori Heder = Lori Heder
+Cal Hampton = Cal Hampton
+Dre'Quan = Dre'Quan
+Dre'Quan Priest = Dre'Quan Priest
+Raul Bautista = Raul Bautista
+Real Dimez = Real Dimez
+Bae-Luxe = Bae-Luxe
+Roxy = Roxy
+Vice City = Vice City
+Leonida = Leonida
+Leonida Keys = Leonida Keys
+Grassrivers = Grassrivers
+Port Gellhorn = Port Gellhorn
+Ambrosia = Ambrosia
+Mount Kalaga = Mount Kalaga
+# Oyundan (oyuncu logları): yer ve karakter adları
+Key Lento = Key Lento
+Leonida Straits = Leonida Straits
+Gambit Bay = Gambit Bay
+Peregrine Bay = Peregrine Bay
+Corsair Key = Corsair Key
+Donnie = Donnie
+Joey = Joey
+Shirley = Shirley
+Ammu-Nation = Ammu-Nation
+Moses = Moses
+Vicki = Vicki
+Dunk = Dunk

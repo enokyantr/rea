@@ -1,0 +1,596 @@
+"""Yerel dil modeliyle (Ollama, NVIDIA GPU) son çeviri: ücretsiz, çevrimdışı, sansürsüz.
+
+Ollama ayrı kurulur (https://ollama.com/download); bu modül onun yerel HTTP API'sine bağlanır."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import threading
+
+import requests
+
+from . import textproc
+from .glossary import Matcher
+
+SYSTEM = """\
+You translate subtitle lines from video games (often crime games like Grand Theft Auto VI) into natural, \
+spoken Turkish for a Turkish player who reads them live while playing. The result must sound like a good \
+Turkish dub: what a Turkish person would actually say in that situation, never a word-by-word translation.
+
+Rules:
+- Reply with ONLY the Turkish translation of the text inside <line>. No quotes, labels, notes, \
+alternatives or explanations.
+- Keep it as short and readable as the original; match the speaker's tone, attitude and register.
+- Translate the meaning and intent of the WHOLE sentence, not the words. Rephrase freely; replace English \
+idioms with Turkish idioms; drop pronouns and subjects Turkish leaves out. Never use stiff written Turkish \
+("-mektedir", "bulunmaktadır", "olduğunu bilmektesin").
+- Make the emotion unmistakable: friendly or warm lines sound close and casual ("be", "ya", "kanka", \
+"canım"); angry lines are short, sharp and threatening ("lan", exclamations); sarcasm stays sarcastic; \
+fear or hesitation stays hesitant. Use "sen" between friends, family, partners, criminals and enemies; \
+"siz" only when the speaker is clearly formal or polite to a stranger.
+- "man", "dude", "bro", "buddy" used as address or exclamation are never "adam"/"insan": use "lan", \
+"dostum", "kanka", "be adamım" or drop them, depending on the tone.
+- Keep character names and place names as they are.
+- <context> holds the previous subtitle line for reference only; never translate or repeat it.
+- Earlier turns are the previous lines of the same conversation with your translations. Keep names, \
+nicknames, forms of address (sen/siz), slang and the meaning consistent with them; resolve pronouns and \
+references from them. Translate only the new line.
+- Lines are read from the screen by OCR and may contain misread characters ("rn" read as "m", "I" as "l", "0" as "O", missing apostrophes or spaces). A <line source="asr"> was transcribed by speech recognition instead and may contain misheard words or missing punctuation. Translate the meaning the speaker most likely intended, using the context; never "correct" slang, profanity or deliberate misspellings into polite or standard words, and never mention the errors or add notes.
+- A <line source="phone"> is text from the in-game phone screen (a social media post or comment, a news headline or article, or a text message), not spoken dialogue: the earlier conversation turns do not apply to it. Keep @handles, #hashtags, emojis, URLs and numbers exactly as they are. Translate internet slang and abbreviations into natural Turkish internet language ("lol" -> "ahahah" / "lol", "lmao" -> "ahahaha", "smh" -> "yok artık", "tbh" -> "açıkçası", "wtf" -> "ne alaka" / "ne sikim", "omg" -> "aman tanrım"), using judgment; news stays in Turkish news style, casual posts stay casual.
+- The line may be cut off mid-word or mid-sentence because the subtitle is still appearing word by word \
+("I'm kidding, I'm kic", "That's goo", "Not all the tim"). Translate only the words that are there, drop an \
+unfinished last word and end with "..."; never guess, complete or invent the rest of the sentence.
+- Some characters speak Spanish or mix Spanish into English (Spanglish); OCR often drops Spanish accents and the marks ¿ ¡ ñ ("Que pasa, mija?" = "¿Qué pasa, mija?"). Translate the Spanish parts into Turkish too, with the same tone; never leave Spanish words untranslated except names.
+{uncensored}{glossary}"""
+
+UNCENSORED = """\
+- This is a mature, uncensored game. Translate profanity, insults, slurs and slang with equally \
+strong, natural Turkish street-language equivalents. Never soften, censor, euphemize or omit swearing; \
+if the original is vulgar, the Turkish must be just as vulgar. Use correct Turkish grammar.
+- Common equivalents (pick what fits the sentence):
+  "what the fuck" -> "ne sikim" / "ne amına koyayım" (e.g. "What the fuck is this?" -> "Bu ne amına koyayım?")
+  "fuck" / "fucking" -> "siktir" / "siktiğimin" / "amına koyayım"
+  "shut the fuck up" -> "kapa lan çeneni" / "kes lan sesini"
+  "motherfucker" -> "orospu çocuğu" / "amına koduğumun"
+  "son of a bitch" -> "orospu çocuğu" / "kahpe dölü"
+  "bitch" -> "orospu" / "kaltak"
+  "asshole" -> "göt herif" / "şerefsiz"
+  "ass" -> "göt" / "kıç" (e.g. "Move your ass!" -> "Kaldır lan götünü!")
+  "shit" -> "bok" / "hassiktir" (exclamation)
+  "bro" -> "kanka"
+  "oh shit" -> "hassiktir" / "siktir"
+  "nigga" (between friends, street talk) -> "kanka" / "lan" / "moruk"; as an insult -> "it" / "şerefsiz"
+- Street slang (translate the MEANING, never word by word):
+  "crib" -> "ev"; "wassup" -> "naber"; "homie" / "dawg" / "loc" / "G" -> "kanka" / "birader"
+  "y'all" -> "siz" / "hepiniz"; "ain't" -> "değil" / "yok"; "trippin'" -> "kafayı yemek"
+  "get bitches" / "pull bitches" -> "karı kız tavlamak"; "fuck with someone" -> "biriyle takılmak" (sexual: "biriyle yatmak")
+  "X-ass" after a word is an intensifier, not a body part: "dog-ass" / "punk-ass" -> "it" / "şerefsiz", "broke-ass" -> "meteliksiz"
+- Spanish (translate the MEANING with the same strength):
+  "pendejo" -> "salak" / "gerizekalı" / "göt herif"; "cabrón" -> "şerefsiz" / "pezevenk" (between friends: "kanka")
+  "puta" -> "orospu"; "hijo de puta" -> "orospu çocuğu"; "chinga tu madre" / "puta madre" -> "ananı sikeyim" / "amına koyayım"
+  "mierda" -> "bok" / "hassiktir"; "chingado" / "carajo" -> "siktir" / "lanet olsun"
+  "mija" / "mijo" -> "kızım" / "oğlum" (affectionate: "canım"); "hermano" -> "kardeşim"; "vato" / "ese" / "güey" -> "kanka" / "moruk"
+  "órale" / "ándale" / "vámonos" -> "hadi" / "tamam" / "gidelim"; "Dios mío" -> "Tanrım"
+- The Turkish for "fuck"/"shit"/"bitch"/"asshole"/"dick" must itself be strong profanity (siktir, sik, amk, bok, \
+orospu, göt, şerefsiz, ...). "Lanet olsun", "kahretsin", "Tanrım" and "Allah kahretsin" are NOT acceptable \
+for them: those are the translation of "damn" or "goddamn" only. "fucking" before a word -> "siktiğimin" / \
+"amına koduğumun" / "lan"; "fuck you" -> "siktir git" / "ananı sikeyim"; "fuck this" -> "siktir et bunu"; \
+"fuck off" -> "siktir git" / "defol lan"; "dumb ass" / "dip shit" -> "aptal göt herif" / "salak göt"; "bullshit" -> "bok" / "boktan".
+- Contractions and slang spellings are normal speech, not errors: "gonna", "wanna", "gotta", "lemme", "gimme", "dunno", \
+"I'mma" (= I'm going to), "'cause", "outta", "kinda", "tryna", "finna", "c'mon", "ya" (= you), "'em" (= them), \
+"ol'", "nah", "mm-hmm", "uh-huh". Read them as the full words and translate the meaning.
+- Equally important: never ADD swearing or slang that is not in the original. A neutral line stays \
+neutral; translate the meaning exactly (left stays left, numbers and names stay the same).
+"""
+
+# Küçük modeller örnekle çok daha tutarlı davranır. Örnekler (CI karşılaştırmasında görülen
+# hatalara karşı) üç şeyi gösterir: küfrün sertliği korunur, küfürsüz satıra küfür eklenmez ve
+# <context> satırı çevrilmez/tekrarlanmaz. Biçim: (bağlam, satır, çeviri).
+EXAMPLES_UNCENSORED = [
+    ("Where's my money?", "Shut the fuck up and drive!", "Kapa lan şu siktiğimin çeneni de sür!"),
+    ("Shut the fuck up and drive!", "Take the next exit on the right.", "Sağdaki ilk çıkıştan sap."),
+    ("You stupid asshole, you almost got us killed.", "Holy shit, bro. That was close.",
+     "Hassiktir kanka. Kıl payı kurtulduk."),
+    (None, "You trippin', dawg. Swing by my crib later.", "Kafayı yemişsin kanka. Sonra eve uğra."),
+    (None, "That punk-ass fool still owes me money.", "O it herif hâlâ bana para borçlu."),
+    (None, "Nigga...", "Lan..."),
+    (None, "Oh shit! They're coming straight at us!", "Hassiktir! Direkt üstümüze geliyorlar!"),
+    (None, "Fucking stop!", "Dur lan siktiğimin!"),
+    (None, "Fuck this! I'm outta here.", "Siktir et bunu! Ben gidiyorum."),
+    (None, "Get off my prick!", "Çekil lan üstümden, götüne koyayım!"),
+    (None, "Yeah, I'mma tell you the same thing, lemme go.", "Evet, sana da aynısını söyleyeceğim, bırak gideyim."),
+]
+EXAMPLES_PLAIN = [
+    ("Holy shit, bro. That was close.", "Get in the car, we're leaving.", "Arabaya bin, gidiyoruz."),
+    (None, "Where did you get the money?", "Parayı nereden buldun?"),
+    # Doğal, duygusu belli çeviri (kelimesi kelimesine değil; gerçek kayıtlardaki hatalardan)
+    (None, "Got a minute?", "Bir dakikan var mı?"),
+    ("You're not gonna rob me again?", "Man, I never robbed you. That was just a repossession.",
+     "Lan, ben seni hiç soymadım. Sadece malımı geri aldım."),
+    (None, "It's good to see you, man. Been way too long.", "Seni görmek ne güzel be kanka. Çok uzun zaman oldu."),
+    (None, "Touch my car again and you're a dead man, you hear me?",
+     "Bir daha arabama dokunursan ölürsün, duydun mu beni?"),
+    (None, "Oh, great. Another genius plan.", "Ah, harika. Yine bir dahiyane plan."),
+    (None, "Ay, mija, you scared me!", "Ay kızım, ödümü kopardın!"),
+    (None, "Orale, vamonos, hermano.", "Hadi kardeşim, gidelim."),
+    # Kelime kelime açılan altyazının yarım okuması: devamı uydurulmaz
+    (None, "Cal: Are you kidding? That wa", "Cal: Şaka mı yapıyorsun? O..."),
+    (None, "Lucia: I need you to listen to me.", "Lucia: Beni dinlemeni istiyorum."),
+]
+
+
+# Sözlük varsa: satırda geçen terimler kullanıcı mesajında <glossary> içinde gelir (yalnızca o satırın
+# terimleri; sistem istemi her satırda aynı kalır, Ollama önbelleğe aldığı öneki yeniden kullanır).
+GLOSSARY_RULE = """\
+- <glossary> lists glossary terms that occur in the line (English = Turkish). Always use exactly these \
+Turkish translations for them; never translate or repeat the <glossary> block itself.
+"""
+# Biçim: (bağlam, satır, sözlük terimleri, çeviri). Yalnızca sözlük varken eklenir.
+EXAMPLES_GLOSSARY = [
+    (None, "Meet me at the safehouse in Vice City.", {"safehouse": "sığınak", "Vice City": "Vice City"},
+     "Benimle Vice City'deki sığınakta buluş."),
+]
+
+
+# Satırın kaynağı: "ocr" (ekrandaki altyazı, varsayılan), "asr" (konuşma tanıma, ör. sokak
+# konuşmaları) ya da "phone" (oyundaki telefonun ekranı: gönderi, haber, mesaj; sohbet geçmişi
+# gönderilmez). Kaynak yalnızca kullanıcı mesajındaki <line> etiketinde belirtilir; sistem istemi
+# her kaynak için aynıdır (önek önbelleği altyazıyla ortak kalır).
+SOURCES = ("ocr", "asr", "phone")
+# Bu kaynaklar diyalog değildir: sohbet geçmişi ve önceki satır bağlamı gönderilmez.
+STANDALONE_SOURCES = frozenset({"phone"})
+
+
+def _approx_tokens(messages) -> int:
+    """Kaba token tahmini (Türkçe/İngilizce karışık metinde ~3 karakter/token; rol başına ek pay)."""
+    return sum(len(m["content"]) // 3 + 4 for m in messages)
+
+
+def _check_source(source: str) -> str:
+    if source not in SOURCES:
+        raise ValueError(f"bilinmeyen satır kaynağı: {source!r} (geçerli: {', '.join(SOURCES)})")
+    return source
+
+
+def _user_message(context: str | None, line: str, terms: dict[str, str] | None = None,
+                  source: str = "ocr") -> str:
+    block = ""
+    if terms:
+        block = "<glossary>\n" + "\n".join(f"{src} = {dst}" for src, dst in terms.items()) + "\n</glossary>\n"
+    tag = "<line>" if _check_source(source) == "ocr" else f'<line source="{source}">'
+    return block + (f"<context>{context}</context>\n" if context else "") + f"{tag}{line}</line>"
+
+_LABEL = re.compile(r"^(?:türkçe|turkish|çeviri|translation)\s*:\s*", re.IGNORECASE)
+_TAGS = re.compile(r"</?(?:line|context|glossary)(?:\s[^>]*)?>")
+# Düşünen modellerin (qwen3, deepseek-r1...) akıl yürütme bloğu: think:false gönderilir ama eski
+# Ollama ya da şablon yine de içeriğe yazabilir. Kapanmamış blok (num_predict kesti) tamamen atılır.
+_THINK = re.compile(r"<think>.*?(?:</think>|$)", re.IGNORECASE | re.DOTALL)
+_THINK_END = re.compile(r"^.*</think>", re.IGNORECASE | re.DOTALL)
+# Modelin çevirinin sonuna eklediği açıklama: "... (Not: "nigga" kelimesi ...)"
+_NOTE = re.compile(r"\s*\(\s*(?:not|note|açıklama|explanation)\s*:.*$", re.IGNORECASE | re.DOTALL)
+_NOTE_LINE = re.compile(r"^\s*(?:not|note|açıklama|explanation)\s*:", re.IGNORECASE)
+
+
+# Küçük model bazen çeviri yerine açıklama/ret yazıyor (gerçek loglar):
+# "(Not translated as per guidelines. In Turkish street talk, "nigga" would be ...)",
+# "Bu cümle anlaşılmaz ve hatalı görünüyor... Türkçe'ye çeviremem."
+_META = re.compile(
+    r"\b(?:not translated|translat(?:e|ed|ion|ing)\b|guidelines?|original (?:text|line)|as an ai|"
+    r"i can(?:no|')t|çeviremem|çevrilemez|çevirmek mümkün değil|orijinal metin|anlaşılmaz|"
+    r"bu mesaj(?:ın|ı)? (?:anla|anlam|çevir)|daha (?:açık|net) bir (?:talimat|soru|ifade)|nasıl yardımcı olabilirim|"
+    r"anlaşılır bir (?:türkçe )?(?:cümle|ifade)|doğrudan bir (?:türkçe )?karşılığı|"
+    r"daha fazla (?:bağlam|bilgi) olmadan|bağlamını netleştirmek|anlamını belirlemek zor|"
+    r"bu bir hata gibi görünüyor|hata mesajı veya (?:bir )?kod parçası|"
+    r"muhtemelen bir (?:isim|yer|kurum)\b.{0,40}(?:adı|ifade)|"
+    r"bu mesaj(?:ın|ı)? içeri[ğk]|(?:ekran görüntüsü|telefon ekranı)(?: mesajı)? (?:gibi görünüyor|görünümünde)|"
+    r"çeviri gerektirmiyor|gta altyazısı|ne anlama geliyor\w* bilmiyorum|anlamını bilmiyorum|"
+    r"^bu,? (?:da |bir )?.{0,40}\b(?:oyun içi|oyun|mağaza|metin|ifade|kelime|cümle|talimat|mesaj|menü|ekran|kod|çeviri|istek)\w*\b"
+    r".{0,50}(?:gibi görünüyor|anlamına geliyor|olabilir)|"
+    r"tam olarak anlaşılamadı|lütfen daha fazla bilgi|türkçe'?ye .{0,30}çevirebilirsin|"
+    r"verilen metin|önceki konuşmada|"
+    # "Bu bir çeviri isteği değil gibi görünüyor. "deer" kelimesi...", "Bu talimatı yerine getiremem. Ben,
+    # ... bir dil modeliyim" (ret önbelleğe girip her seferinde gösteriliyordu)
+    r"anlamı belirsiz|demek istedin|telefon ekranında görünen|çevirmeye gerek yok|"
+    r"çeviri isteği|yerine getiremem|yardımcı olamam|\bdil modeli|yapay zeka|programlanmadım|programlanmamış|"
+    r"kelimesi türkçe|türkçe'?de .{0,20}(?:anlamına gelir|olarak çevrilir))",
+    re.IGNORECASE,
+)
+
+
+def is_continuation(previous: str | None, text: str) -> bool:
+    """Satır önceki altyazının devamı mı? Önceki cümle bitmemiş ya da bu satır küçük harfle başlıyor."""
+    if not previous or not text:
+        return False
+    return previous.rstrip()[-1:] not in ".!?…\"'”" or text.lstrip()[:1].islower()
+
+
+_STAGE_LEAD = re.compile(r"^\s*\([^()]{2,80}\)\s*(?=\S)")
+_STAGE_TAIL = re.compile(r"\s*\([^()]{2,120}\)\s*\.?\s*$")
+
+
+def _strip_stage_notes(out: str, original: str) -> str:
+    """Modelin eklediği sahne/açıklama notları: "(Fısıldayarak) Blista..." ya da
+    "Kamyonet... (Tekrar vurgulayarak)". Orijinalde parantez yoksa başta/sonda kaldırılır (içerik
+    parantezle başlayan/biten gerçek satırlar korunur: orijinal de parantezliyse dokunulmaz)."""
+    if "(" in original:
+        return out
+    stripped = _STAGE_TAIL.sub("", out)
+    stripped = _STAGE_LEAD.sub("", stripped).strip().strip('"').strip()
+    return stripped or out
+
+
+# Tırnaklı açıklama: Bu, "Neşeli Harita" anlamına geliyor / "QAra" ne anlama geliyor?
+_META_QUOTED = re.compile(r"[\"“][^\"”]{1,60}[\"”] (?:ne )?anlam(?:ına|a) geliyor", re.IGNORECASE)
+_SPEAKER = re.compile(r"(?:^|(?<=[.!?…]\s))([A-ZÇĞİÖŞÜ][\wçğıöşü'.-]{1,20}(?: [A-ZÇĞİÖŞÜ][\wçğıöşü]{1,15})?):\s")
+
+
+def _speakers(text: str) -> list[str]:
+    return [m.group(1) for m in _SPEAKER.finditer(text)]
+
+
+def echoes_history(out: str, text: str, history) -> bool:
+    """Çıktı yeni satırın değil geçmişteki bir satırın çevirisi mi (ya da onu da içeriyor mu)?
+    - geçmişteki bir çeviriyle (başka bir İngilizce satırın) neredeyse aynı;
+    - satırda olmayan ama geçmişte konuşan birinin adıyla başlıyor ("Lucia: ..." -> "Jason: ...");
+    - kaynakta olduğundan çok konuşmacı etiketi var (önceki satırı başa eklemiş)."""
+    from difflib import SequenceMatcher
+
+    low = out.casefold().strip()
+    for src, dst in history:
+        if src.strip() == text.strip() or not dst:
+            continue
+        old = dst.casefold().strip().rstrip(".!?…")
+        if SequenceMatcher(None, low, dst.casefold().strip()).ratio() >= 0.85:
+            return True
+        # Önceki çeviriyi başa/sona eklemiş: "Gazlı arabayı R1topour kullan. Görevleri kontrol et ve..."
+        if len(old) >= 12 and old in low and len(low) > len(old) + 8:
+            return True
+    said = {name.casefold() for src, dst in history for name in (*_speakers(src), *_speakers(dst or ""))}
+    names_out = _speakers(out)
+    names_in = _speakers(text)
+    if names_out and names_out[0].casefold() in said and names_out[0].casefold() not in text.casefold():
+        # Kaynakta etiket yokken geçmişteki (çevrilmiş) etiketle başlıyor: "QAra" -> "Yerel: Aman tanrım..."
+        # Kaynakta başka etiket varsa çevrilmiş etiket ("Local" -> "Yerel") yeni satıra aittir.
+        if not names_in or names_out[0].casefold() in {n.casefold() for src, _ in history for n in _speakers(src)}:
+            return True
+    return len(names_out) > max(1, len(names_in))
+
+
+def keep_speaker(text: str, out: str) -> str:
+    """Model konuşmacı etiketini attıysa ("Cal: Yeah, that's right." -> "Evet, tam olarak öyle.") geri
+    eklenir: kimin konuştuğu altyazının parçası."""
+    names = _speakers(text)
+    if names and text.startswith(names[0] + ":") and not _speakers(out):
+        return f"{names[0]}: {out}"
+    return out
+
+
+def is_meta_reply(text: str) -> bool:
+    """Çeviri değil, modelin kendi açıklaması mı? (Tamamı parantez içinde ya da açıklama ifadesi.)"""
+    stripped = text.strip()
+    if stripped.startswith("(") and stripped.endswith(")"):
+        return True
+    if stripped.startswith("(") and len(stripped) > 40:
+        return True  # "(Bu bir ekran görüntüsü ... " (uzunluk sınırında kesilmiş parantezli açıklama)
+    return bool(_META.search(stripped) or _META_QUOTED.search(stripped))
+
+
+def clean_output(text: str) -> str:
+    """Küçük modellerin eklediği etiket/tırnak/ek açıklamaları temizler; yalnızca ilk paragraf."""
+    # Şablon <think>'i istemde açtıysa çıktı "akıl yürütme...</think>çeviri" biçimindedir.
+    text = _THINK_END.sub("", _THINK.sub("", text))
+    text = _TAGS.sub("", text).strip()
+    text = text.split("\n\n", 1)[0].strip()
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if lines and not _NOTE_LINE.match(lines[0]):
+        lines = [line for line in lines if not _NOTE_LINE.match(line)]
+    text = _NOTE.sub("", " ".join(lines)).strip()
+    text = _LABEL.sub("", text).strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'“”«»":
+        text = text[1:-1].strip()
+    if len(text) >= 2 and text[0] in "“«" and text[-1] in "”»":
+        text = text[1:-1].strip()
+    return text
+
+
+class OllamaUnavailable(RuntimeError):
+    pass
+
+
+class Cancelled(RuntimeError):
+    """Önceden çeviri isteği artık gerekmiyor (yanlış okuma/yeni satır): üretim yarıda kesildi."""
+
+
+def _find_ollama() -> str | None:
+    import os
+    import shutil
+
+    found = shutil.which("ollama")
+    if found:
+        return found
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        candidate = os.path.join(local, "Programs", "Ollama", "ollama.exe")
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+class OllamaBackend:
+    """Ollama'daki bir modelle çeviri. `translate` iş parçacığı güvenlidir (HTTP isteği)."""
+
+    name = "Yerel LLM"
+    # translate(..., cancel=Event) destekler: önceden çeviri boşa çıkınca ekran kartı hemen boşalır.
+    cancellable = True
+
+    def __init__(self, model: str, url: str = "http://127.0.0.1:11434", timeout_s: float = 10.0,
+                 uncensored: bool = True, glossary: dict[str, str] | None = None, keep_alive: str = "60m",
+                 num_ctx: int = 4096, use_context: bool = True, context_for_continuation: bool = True,
+                 num_gpu: int | None = None):
+        self.model = model
+        # Küçük bağlam penceresi: istem ~600 token; daha büyük pencere ekran kartı belleğini boşa harcar.
+        self._num_ctx = num_ctx
+        # Ekran kartına alınan katman sayısı (None: Ollama karar verir). Oyun ekran kartı belleğini
+        # kullanırken sınırlamak için; istek gövdesine yalnızca ayarlıysa eklenir.
+        self._num_gpu = num_gpu
+        # Bazı modeller (CI'da aya-expanse) <context> satırını da çeviriyor: kapatılabilir.
+        self._use_context = use_context
+        self._context_for_continuation = context_for_continuation
+        self._url = url.rstrip("/")
+        self._timeout = timeout_s
+        self._keep_alive = keep_alive
+        self._http = requests.Session()  # bağlantı yeniden kullanılır
+        # Sözlüğün tamamı istemde değil: her satıra yalnızca o satırda geçen terimler eklenir. Önbellek
+        # anahtarı da bu terimlerin özetini içerir (cache_terms): ilgisiz terim eklemek önbelleği silmez.
+        self._matcher = Matcher(glossary or {})
+        self._system = SYSTEM.format(uncensored=UNCENSORED if uncensored else "",
+                                     glossary=GLOSSARY_RULE if self._matcher else "")
+        self._examples = [(context, src, None, dst) for context, src, dst in
+                          (EXAMPLES_UNCENSORED if uncensored else []) + EXAMPLES_PLAIN]
+        if self._matcher:
+            self._examples += EXAMPLES_GLOSSARY
+        self.instructions_active = uncensored
+        # Düşünen modeller (qwen3, deepseek-r1, gpt-oss...) için "think": false: hemen yanıt versin.
+        # Parametreyi reddeden Ollama/model (HTTP 400, hata "think" içerir) için bir kez parametresiz
+        # yeniden denenir ve bu model için bir daha gönderilmez (nesne tek modele aittir).
+        self._send_think = True
+        # "clean-7": telefon ekranı kuralı (clean-6: doğallık/duygu/hitap, clean-5: İspanyolca satırlar).
+        blob = json.dumps([self._system, self._examples, "clean-11"], ensure_ascii=False).encode("utf-8")
+        self._fingerprint = hashlib.sha256(blob).hexdigest()[:10]
+
+    def cache_namespace(self) -> str:
+        # Model veya talimat (sansürsüz kural, örnekler, sözlük) değişince eski çeviriler kullanılmaz.
+        return f"ollama-{self.model}-{self._fingerprint}-c{int(self._use_context)}"
+
+    def cache_terms(self, text: str) -> str:
+        """Bu satırın istemine eklenen sözlük terimlerinin özeti ("" = terim yok). CachedTranslator
+        anahtara ekler: yalnızca bu satıra uygulanan terimler değişince eski çeviri kullanılmaz."""
+        return self._matcher.fingerprint(text)
+
+    def cache_source(self, source: str) -> str:
+        """Satır kaynağının istemdeki izi ("" = varsayılan OCR, istem değişmez). CachedTranslator bu
+        yöntemi olan arka uca `source` geçirir ve boş değilse anahtara ekler."""
+        return "" if _check_source(source) == "ocr" else source
+
+    # --- Ollama yönetimi -------------------------------------------------------------------
+
+    def ensure_running(self, log=print, wait_s: float = 20.0) -> bool:
+        """Ollama sunucusu kapalıysa (tepsi uygulaması açılmamış) arka planda başlatır.
+        Başlatabildiyse ya da zaten çalışıyorsa True."""
+        if self._alive():
+            return True
+        exe = _find_ollama()
+        if exe is None:
+            return False
+        import subprocess
+        import time
+
+        log("Ollama kapalı, arka planda başlatılıyor...")
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
+        try:
+            subprocess.Popen([exe, "serve"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, creationflags=flags, close_fds=True)
+        except OSError:
+            return False
+        end = time.monotonic() + wait_s
+        while time.monotonic() < end:
+            if self._alive():
+                return True
+            time.sleep(0.3)
+        return False
+
+    def _alive(self) -> bool:
+        try:
+            return self._http.get(f"{self._url}/api/version", timeout=1).ok
+        except requests.RequestException:
+            return False
+
+    def installed_models(self) -> list[str]:
+        try:
+            r = self._http.get(f"{self._url}/api/tags", timeout=3)
+            r.raise_for_status()
+        except requests.RequestException as exc:
+            raise OllamaUnavailable(
+                "Ollama çalışmıyor. https://ollama.com/download adresinden kurun ve açık olduğundan "
+                f"emin olun (sistem tepsisinde lama simgesi). Ayrıntı: {exc}") from exc
+        return [m.get("name", "") for m in r.json().get("models", [])]
+
+    def has_model(self) -> bool:
+        wanted = self.model if ":" in self.model else f"{self.model}:latest"
+        return any(name in (self.model, wanted) for name in self.installed_models())
+
+    def pull(self, progress) -> None:
+        """Modeli indirir; `progress(metin)` ile ilerleme bildirir."""
+        with self._http.post(f"{self._url}/api/pull", json={"model": self.model, "stream": True},
+                             stream=True, timeout=None) as r:
+            r.raise_for_status()
+            last = ""
+            for raw in r.iter_lines():
+                if not raw:
+                    continue
+                event = json.loads(raw)
+                if "error" in event:
+                    raise OllamaUnavailable(f"Model indirilemedi: {event['error']}")
+                status = event.get("status", "")
+                total, done = event.get("total"), event.get("completed")
+                line = f"{status} {100 * done // total}%" if total and done else status
+                if line != last:
+                    progress(line)
+                    last = line
+
+    def gpu_share(self) -> float | None:
+        """Yüklü modelin ekran kartı belleğindeki oranı (1.0 = tamamen GPU'da). Bilinmiyorsa None."""
+        try:
+            r = self._http.get(f"{self._url}/api/ps", timeout=3)
+            r.raise_for_status()
+        except requests.RequestException:
+            return None
+        for m in r.json().get("models", []):
+            if m.get("name") == self.model or m.get("model") == self.model:
+                size, vram = m.get("size") or 0, m.get("size_vram") or 0
+                return vram / size if size else None
+        return None
+
+    def check(self) -> str:
+        """Modeli belleğe yükler (ilk çeviri gecikmesini oyundan önce öder) ve GPU payını bildirir."""
+        self._chat("<line>Warm up.</line>", timeout=180)
+        share = self.gpu_share()
+        if share is None:
+            return f"Yerel LLM hazır: {self.model}"
+        note = "" if share >= 0.99 else (" — model ekran kartı belleğine sığmadı, kısmen işlemcide çalışıyor "
+                                         "(yavaş). Daha küçük bir model seçin veya local_device: \"cpu\" yapın.")
+        return f"Yerel LLM hazır: {self.model} (%{100 * share:.0f} ekran kartında){note}"
+
+    usage_summary = check
+
+    # --- çeviri ------------------------------------------------------------------------------
+
+    def _chat(self, user: str, timeout: float, num_predict: int = 120, history=(),
+              cancel: threading.Event | None = None, extra=()) -> str:
+        # İstem sırası sabit önek + değişen kuyruk: sistem talimatı ve örnekler her istekte birebir aynı
+        # (Ollama bu öneki önbellekten kullanır), sohbet geçmişi ve yeni satır en sonda.
+        messages = [{"role": "system", "content": self._system}]
+        for context, src, terms, dst in self._examples:
+            messages.append({"role": "user", "content": _user_message(context, src, terms)})
+            messages.append({"role": "assistant", "content": dst})
+        # Sohbet geçmişi: önceki satırlar ve verdiğimiz çeviriler gerçek turlar olarak (model bağlamı
+        # çevirmeye/tekrarlamaya çalışmaz, yalnızca tutarlı devam eder). İstem bağlam penceresini
+        # aşarsa Ollama BAŞINI (talimatları) keserdi: sığmayan en eski geçmiş satırları atılır.
+        history = list(history)
+        budget = self._num_ctx - num_predict - 64
+        fixed = _approx_tokens(messages) + _approx_tokens([{"content": user}])
+        while history and fixed + sum(_approx_tokens([{"content": s}, {"content": d}]) + 8
+                                      for s, d in history) > budget:
+            history.pop(0)
+        for src, dst in history:
+            messages.append({"role": "user", "content": _user_message(None, src)})
+            messages.append({"role": "assistant", "content": dst})
+        messages.append({"role": "user", "content": user})
+        messages.extend(extra)  # düzeltme turu: önceki (yumuşak) yanıt + talimat
+        body = {
+            "model": self.model,
+            "messages": messages,
+            # İptal edilebilir istek akış olarak alınır: bağlantı kapatılınca Ollama üretimi durdurur.
+            "stream": cancel is not None,
+            "keep_alive": self._keep_alive,  # model GPU'da kalsın, her satırda yeniden yüklenmesin
+            "options": {"temperature": 0.1, "num_predict": num_predict, "num_ctx": self._num_ctx},
+        }
+        if self._num_gpu is not None:
+            body["options"]["num_gpu"] = self._num_gpu
+        while True:
+            if self._send_think:
+                body["think"] = False
+            else:
+                body.pop("think", None)
+            with self._http.post(f"{self._url}/api/chat", timeout=timeout, json=body,
+                                 stream=cancel is not None) as r:
+                if r.status_code < 400:
+                    return self._read_reply(r, cancel)
+                if r.status_code == 404:
+                    raise OllamaUnavailable(f"Ollama'da '{self.model}' modeli yok (ollama pull {self.model})")
+                try:
+                    detail = str(r.json().get("error", r.text))
+                except ValueError:
+                    detail = r.text
+            if r.status_code == 400 and "think" in body and "think" in detail.lower():
+                self._send_think = False  # bu model/sunucu desteklemiyor: bir daha gönderme
+                continue
+            hint = (" — ekran kartı belleği yetmiyor olabilir; daha küçük bir model deneyin"
+                    if "memory" in detail.lower() or "cuda" in detail.lower() else "")
+            raise OllamaUnavailable(f"Ollama hatası ({r.status_code}): {detail.strip()[:300]}{hint}")
+
+    @staticmethod
+    def _read_reply(r, cancel: threading.Event | None) -> str:
+        """Yanıt gövdesi: tek JSON ya da (iptal edilebilir istek) akış satırları."""
+        if cancel is None:
+            return r.json().get("message", {}).get("content", "")
+        parts: list[str] = []
+        for raw in r.iter_lines():
+            if cancel.is_set():
+                raise Cancelled("önceden çeviri iptal edildi")  # `with` bağlantıyı kapatır
+            if not raw:
+                continue
+            event = json.loads(raw)
+            if "error" in event:
+                raise OllamaUnavailable(f"Ollama hatası: {str(event['error']).strip()[:300]}")
+            parts.append(event.get("message", {}).get("content", ""))
+            if event.get("done"):
+                break
+        return "".join(parts)
+
+    def translate(self, text: str, context: str | None, cancel: threading.Event | None = None,
+                  source: str = "ocr") -> str:
+        # Bağlam: her zaman (use_context) ya da yalnızca satır öncekinin devamıysa ("or lawyer she
+        # fucking with." gibi yarım cümleler bağlamsız yanlış çevriliyordu).
+        history = getattr(context, "history", ())
+        if _check_source(source) in STANDALONE_SOURCES:
+            history, context = (), None  # telefon gönderisi diyaloğun parçası değil
+        elif history:
+            context = None  # önceki satır zaten sohbet geçmişinde
+        elif not (self._use_context or (self._context_for_continuation and is_continuation(context, text))):
+            context = None
+        # Çıktı sınırı: Türkçe satır İngilizceden çok uzun olmaz; model açıklamaya başlarsa erken kesilir.
+        # Telefon bloğu (haber metni, uzun gönderi) altyazı satırından uzun olabilir.
+        limit = min(320 if source in STANDALONE_SOURCES else 120, 24 + 4 * len(text.split()))
+        # Sözlük terimleri yalnızca yeni satırın mesajında (geçmiş turlar değişmez, önek önbelleği bozulmaz).
+        # Kaynak (OCR/konuşma tanıma) da yalnızca bu mesajda; sistem istemi her satırda aynı.
+        user = _user_message(context, text, self._matcher.matched(text), source)
+        out = _strip_stage_notes(clean_output(self._chat(user, timeout=self._timeout, num_predict=limit,
+                                                         history=history, cancel=cancel)), text)
+        if not out:
+            raise RuntimeError("Yerel LLM boş yanıt verdi")
+        if is_meta_reply(out):  # hata sayılır: taslak çeviri ekranda kalır, önbelleğe girmez
+            raise RuntimeError(f"Yerel LLM çeviri yerine açıklama yazdı: {out[:80]}")
+        if history and echoes_history(out, text, history):
+            # Model yeni satır yerine geçmişteki bir satırı (çoğu zaman bir öncekini) çevirdi ya da başına
+            # ekledi: "Yo, your neighbor's real chatty" -> "Jason: Tamam, bırak artık." Geçmişsiz yeniden.
+            user = _user_message(None, text, self._matcher.matched(text), source)
+            out = _strip_stage_notes(clean_output(self._chat(user, timeout=self._timeout, num_predict=limit,
+                                                             cancel=cancel)), text)
+            history = ()
+            if not out or is_meta_reply(out):
+                raise RuntimeError(f"Yerel LLM çeviri yerine açıklama yazdı: {out[:80]}")
+        if self.instructions_active and textproc.is_softened(text, out):
+            out = self._harden(user, text, out, limit, history, cancel)
+        return keep_speaker(text, out)
+
+    def _harden(self, user: str, text: str, soft: str, limit: int, history, cancel) -> str:
+        """Sert küfür yumuşak çevrildi ("Oh shit" -> "Lanet olsun"): model bir kez daha, sert karşılık
+        istenerek denenir. Sonuç hâlâ yumuşaksa ya da açıklamaya dönerse ilk çeviri korunur."""
+        extra = [{"role": "assistant", "content": soft},
+                 {"role": "user", "content": (
+                     "Too mild: the original contains strong profanity, so the Turkish must contain the equally "
+                     "strong Turkish profanity (siktir, sik, amk, amına koyayım, bok, orospu, göt, şerefsiz...), "
+                     "not \"lanet olsun\"/\"kahretsin\". Translate the same line again. Reply with ONLY the translation.")}]
+        try:
+            again = _strip_stage_notes(clean_output(self._chat(user, timeout=self._timeout, num_predict=limit,
+                                                               history=history, cancel=cancel, extra=extra)), text)
+        except Cancelled:
+            raise
+        except Exception:
+            return textproc.force_strong(text, soft)
+        if again and not is_meta_reply(again) and not textproc.is_softened(text, again):
+            return again
+        return textproc.force_strong(text, soft)

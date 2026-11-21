@@ -1,0 +1,1006 @@
+"""OCR metnini temizleme ve titremeye karşı kararlılık (platformdan bağımsız)."""
+
+from __future__ import annotations
+
+import re
+import unicodedata
+from dataclasses import dataclass
+from difflib import SequenceMatcher
+from functools import lru_cache
+
+_SPACE = re.compile(r"\s+")
+# OCR'ın kenarlarda ürettiği tek başına kalmış işaretler.
+_EDGE_JUNK = re.compile(r"^[\W_]+(?=\w)|(?<=[\w.!?\"')])[^\w.!?\"')]+$")
+
+
+def _fold_accents(text: str) -> str:
+    """İngilizce altyazıda aksanlı harf olmaz; OCR'ın okuduğu å/é/ö... gürültüdür: a/e/o..."""
+    if text.isascii():
+        return text
+    decomposed = unicodedata.normalize("NFKD", text)
+    return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+
+
+_NON_LATIN = re.compile(r"[\u2E80-\u9FFF\uF900-\uFAFF\uFF00-\uFFEF\u25A0-\u25FF\u3000-\u303F\u300A-\u300B]+")
+
+
+def normalize(lines: list[str]) -> str:
+    """Satırları tek cümleye birleştirir, boşlukları ve kenar çöplerini temizler."""
+    text = _fold_accents(" ".join(line.strip() for line in lines if line.strip()))
+    text = _NON_LATIN.sub(" ", text)  # OCR'ın simgelerden uydurduğu CJK/şekil karakterleri ("川Map", "口")
+    text = _spell_fix(_split_glued(_fix_ocr_confusions(_SPACE.sub(" ", text).strip())))
+    text = _EDGE_JUNK.sub("", text).strip()
+    # Satır sonunda kelime bölünmesi: "some- thing" -> "something"
+    text = re.sub(r"(\w)- (\w)", r"\1\2", text)
+    return text
+
+
+# Kontur maskesinde OCR'ın sistematik karışıklıkları (gerçek log): kesme işareti -> r
+# ("donrt", "Irm"), l -> [ ( { ("[ike", "exect[y"). Değiştirilen biçimler gerçek İngilizce kelime
+# değildir, bu yüzden düzeltme doğru okumayı bozmaz.
+_NRT = re.compile(r"\b(do|does|did|is|are|was|were|have|has|had|could|would|should|must|need"
+                  r"|ca|wo|ai)nrt\b", re.IGNORECASE)
+_CONTRACTIONS = re.compile(
+    r"\b(?:(I)r(m|ll|ve|d)|(you|they)r(re|ll|ve)|(we)r(re|ll|ve)"
+    r"|(it|that|what|there|here|who|let)r(s))\b", re.IGNORECASE)
+_L_LOOKALIKE = re.compile(r"(?<=[A-Za-z])[\[{(](?=[a-z])|(?<![\w])[\[{(](?=[a-z]{2})")
+
+
+# Logda tekrar tekrar görülen, İngilizcede olmayan okumalar (büyük/küçük harf duyarlı).
+_WORD_FIXES = {"lfm": "I'm", "Ifm": "I'm", "lrm": "I'm", "T'm": "I'm", "Ilke": "like", "Ilike": "I like"}
+_WORD_FIX = re.compile(r"(?<![\w'])(" + "|".join(_WORD_FIXES) + r")(?![\w'])")
+
+
+def _contraction(m: re.Match) -> str:
+    groups = [g for g in m.groups() if g is not None]
+    return f"{groups[0]}'{groups[1]}"
+
+
+def _fix_ocr_confusions(text: str) -> str:
+    text = _NRT.sub(r"\1n't", text)
+    text = _CONTRACTIONS.sub(_contraction, text)
+    text = _WORD_FIX.sub(lambda m: _WORD_FIXES[m.group(1)], text)
+    # Gerçek parantez/köşeli parantez kapanışıyla gelir ("[laughs]"); kapanış yoksa harf l'dir.
+    if not any(c in text for c in ")]}"):
+        text = _L_LOOKALIKE.sub("l", text)
+    return text
+
+
+# Cümle sonu (. ! ? …, ardından isteğe bağlı kapanış tırnağı), boşluk ve büyük harf/tırnakla
+# başlayan yeni cümle. Yaygın unvan kısaltmalarından (Mr. Dr. …) sonra bölünmez.
+_ABBREV = "".join(rf"(?<!\b{a}\.)" for a in ("Mr", "Mrs", "Ms", "Dr", "St", "Jr", "Sr", "vs"))
+_SENTENCE_END = re.compile(
+    rf"(?:(?<=[.!?…])|(?<=[.!?…][\"')\]])){_ABBREV}\s+(?=[\"'(\[]?[A-ZÇĞİÖŞÜ0-9])"
+)
+
+
+def split_sentences(text: str) -> list[str]:
+    """Altyazı satırını cümlelere böler. Yerel çeviri modeli (Opus-MT) çok cümleli girdide
+    sonraki cümleleri atabildiği için her cümle ayrı çevrilir."""
+    parts = [p.strip() for p in _SENTENCE_END.split(text)]
+    return [p for p in parts if p] or [text]
+
+
+# Küfür/argo içeren satırlar: yerel taslak model bunları yumuşatıyor, son çevirmene gönderilir.
+_PROFANITY = re.compile(
+    r"\b(?:\w*fuck\w*|\w*shit\w*|bitch\w*|sons? of a bitch|ass|asses|\w+ass(?:es)?|ass(?:hole|hat|wipe)s?"
+    r"|bastards?|dicks?|dickhead\w*|cocks?(?:sucker)?s?|puss(?:y|ies)|cunts?|piss\w*|damn\w*|goddamn\w*"
+    r"|crap\w*|bullshit|hoes?|whores?|sluts?|twats?|pricks?|wankers?|bollocks|screw (?:you|this|that|off)"
+    r"|wtf|stfu|bro|bruh|homie|dawg|nigga[sz]?|niggaz|ho)\b",
+    re.IGNORECASE,
+)
+# "ass" ile biten ama küfür olmayan sık kelimeler (\w+ass yakalamasın).
+_NOT_PROFANE = re.compile(r"\b(?:class|glass|grass|pass|mass|brass|bass|lass|compass|embarrass|harass|"
+                          r"surpass|bypass|amass|carcass|morass|trespass|crass|overpass|underpass|"
+                          r"sunglass|eyeglass|hourglass|wineglass)(?:es|ed|ing)?\b", re.IGNORECASE)
+
+
+def needs_uncensored(text: str) -> bool:
+    """Satırda küfür/argo var mı? (Bu satırlar sansürsüz son çevirmene gider.)"""
+    cleaned = _NOT_PROFANE.sub(" ", text)
+    return bool(_PROFANITY.search(cleaned))
+
+
+# Sokak argosu / ağız (küfürsüz de olsa): yerel taslak model bunları anlamıyor ("Yall telling me"
+# -> "Yall anlatıyor"), dil modeline gönderilir. OCR kesme işaretini düşürebildiği için ikisi de.
+_SLANG = re.compile(
+    r"\b(?:y'?all|ain'?t|finna|tryna|lemme|gimme|imma|'?cause|cuz|'?bout|nah|yo|ya|da"
+    r"|homeboy|homes|homey|crib|loc|locs|ese|vato|playa|hood|cuh|fam|dope|ballin|trippin|frontin"
+    r"|\w{2,}in'(?!\w)|(?:call|talk|play|mess|ly|go|do|com|say|noth|someth|buzz|bugg|chill|roll|rid|"
+    r"hang|look|lov|kidd|kill|runn|work|think|try|keep|hold|gett|tell|want|need|walk)in)\b",
+    re.IGNORECASE,
+)
+
+
+def needs_llm(text: str) -> bool:
+    """Satır dil modeline gitmeli mi? Küfür/argo ya da sokak ağzı (taslak model ikisinde de zayıf)."""
+    return needs_uncensored(text) or bool(_SLANG.search(text))
+
+
+_TOKEN = re.compile(r"[^\W\d_]+(?:['’][^\W\d_]+)*")
+_VOWELS = set("aeiouyAEIOUY")
+# Tekrarlanan harfler teke indirilmiş hâlleri (hmmm -> hm, psst -> pst).
+_INTERJECTIONS = {"hm", "m", "sh", "pst", "pft", "br", "gr", "tsk", "hmph", "pf", "ps"}
+
+
+def _wordlike(token: str) -> bool:
+    """Gerçek kelimeye benziyor mu: sesli harf içerir, sessiz harf yığını değildir."""
+    if len(token) == 1:
+        return token in ("I", "a", "A", "O", "o")
+    if re.sub(r"(.)\1+", r"\1", token.lower()) in _INTERJECTIONS:
+        return True  # sesli harfsiz ünlemler: hmm, shhh, psst, pfft, brr...
+    if not any(ch in _VOWELS for ch in token):
+        return False
+    run = longest = 0
+    for ch in token.lower():
+        run = 0 if ch in "aeiouy'’" else run + 1
+        longest = max(longest, run)
+    return longest <= 4
+
+
+_JUNK = re.compile(r"[•=|\\\[\]{}<>~^*_@#%$¦‹›«»„]|[A-Za-z]\d|\d[A-Za-z]")
+
+
+def text_quality(text: str) -> float:
+    """Okunan metnin gerçek metne benzerliği (0..1, çöp karakterler cezalandırılır). Birden çok
+    ön işleme seçeneğinin OCR sonucu arasından seçim için."""
+    tokens = _TOKEN.findall(text)
+    if not tokens:
+        return 0.0
+    total = sum(len(t) for t in tokens)
+    ratio = sum(len(t) for t in tokens if _wordlike(t)) / total
+    return max(0.0, ratio - 0.1 * len(_JUNK.findall(text)))
+
+
+def is_plausible(text: str, min_chars: int) -> bool:
+    """Gerçek altyazıya benziyor mu? Harf oranı düşük gürültüyü ve OCR'ın bozuk okuduğu
+    anlamsız satırları (ör. 'ntpgmfl/ Wag', '3hjc.') eler."""
+    if len(text) < min_chars:
+        return False
+    letters = sum(ch.isalpha() for ch in text)
+    if letters < min_chars or letters / len(text) < 0.55:
+        return False
+    tokens = _TOKEN.findall(text)
+    if not tokens:
+        return False
+    wordlike = sum(len(t) for t in tokens if _wordlike(t))
+    return wordlike / sum(len(t) for t in tokens) >= 0.7
+
+
+def similar(a: str, b: str, threshold: float) -> bool:
+    if a == b:
+        return True
+    if not a or not b:
+        return False
+    return SequenceMatcher(None, a.lower(), b.lower()).ratio() >= threshold
+
+
+# İngilizce kelime listesi (pyspellchecker, MIT; altyazı/diyalog metinlerinden sıklıklı). Sözlükte
+# az geçen (< 20) kayıtlar çoğunlukla yazım hatasıdır, alınmaz. Oyun argosu ayrıca eklenir.
+_MIN_FREQ = 20
+_SLANG_WORDS = {"nigga", "niggas", "niggaz", "yee", "loc", "locs", "wassup", "y'all", "ain't", "finna",
+                "tryna", "homie", "homies", "cuz", "dawg", "bruh", "imma", "lemme", "gimme"}
+
+
+def _game_words() -> set[str]:
+    """Oyunların karakter/yer adlarındaki kelimeler (altyazi/data/*_isimler.txt): yeni bir oyunun
+    isim dosyası eklenince OCR o isimleri de tanır."""
+    try:
+        from .glossary import load_bundled
+
+        _general, names = load_bundled()
+    except Exception:
+        return set()
+    return {t.lower().replace("’", "'") for name in names for t in _TOKEN.findall(name)}
+
+
+@lru_cache(maxsize=1)
+def _word_freq() -> dict[str, int]:
+    """Kelime -> sıklık. pyspellchecker kurulu değilse boş (yalnızca kelime benzerliği kullanılır)."""
+    try:
+        import gzip
+        import json
+        from importlib.resources import files
+
+        with gzip.open(files("spellchecker") / "resources" / "en.json.gz", "rt", encoding="utf-8") as f:
+            freq = json.load(f)
+    except Exception:
+        return {}
+    words = {w: n for w, n in freq.items() if n >= _MIN_FREQ}
+    words.update(dict.fromkeys(_SLANG_WORDS, 1_000_000))
+    # Oyundaki isimler: satır başında "Lucia" -> "Lucid" gibi "düzeltilmesin", hızlı kabulü
+    # engellemesin; yaygınlığı yazım düzeltmesine aday olacak kadar (OCR "Lucla" -> "Lucia").
+    words.update(dict.fromkeys(_game_words(), 5_000))
+    return words
+
+
+# Yazım düzeltmesi: OCR'ın sistematik hataları. RapidOCR çoğunlukla fazladan bir iz ekler
+# ("dlick", "caill", "Niggal", "fuckinig", "cdog") ya da bir harfi karıştırır ("surgeor").
+# Yalnızca sözlükte OLMAYAN, en az 4 harfli, kesme işaretine bitişik olmayan kelimeler düzeltilir;
+# önce harf silme, sonra harf değiştirme denenir ve aday yeterince yaygın olmalıdır.
+_SPELL_TOKEN = re.compile(r"(?<![\w'’])[A-Za-z]{4,}(?![\w'’])")
+_SPELL_MIN_FREQ = 1000
+_LETTERS = "abcdefghijklmnopqrstuvwxyz"
+
+
+def _spell_candidate(word: str, freq: dict[str, int]) -> str | None:
+    deletions = {word[:i] + word[i + 1:] for i in range(len(word))}
+    substitutions = {word[:i] + c + word[i + 1:] for i in range(len(word)) for c in _LETTERS}
+    for candidates in (deletions, substitutions):
+        best = max(candidates, key=lambda c: freq.get(c, 0))
+        if freq.get(best, 0) >= _SPELL_MIN_FREQ:
+            return best
+    return None
+
+
+def _spell_fix(text: str) -> str:
+    freq = _word_freq()
+    if not freq:
+        return text
+
+    def fix(m: re.Match) -> str:
+        token = m.group(0)
+        low = token.lower()
+        if low in freq or low in SPANISH_WORDS:  # İspanyolca kelime İngilizceye "düzeltilmez"
+            return token
+        # Özel isimlere dokunma: yalnızca küçük harfli kelime ya da satır başındaki büyük harfli kelime.
+        first = not text[:m.start()].strip(" \"'(-")
+        if not (token.islower() or (first and token[0].isupper() and token[1:].islower())):
+            return token
+        if low in _apostrophe_less():  # "thats" -> "that's" ("that" değil)
+            best = _apostrophe_less()[low]
+            return best.capitalize() if token[0].isupper() else best
+        best = _spell_candidate(low, freq)
+        if best is None:
+            return token
+        return best.capitalize() if token[0].isupper() else best
+
+    return _SPELL_TOKEN.sub(fix, text)
+
+
+# Bitişik kelimeler: RapidOCR bazı karelerde boşlukları atlıyor ("maybehe'snotaracist",
+# "Moneyisntanissue", "getataxrebate"). Sözlükte olmayan uzun bir parça, sözlük kelimelerine en
+# olası (sık kelime = düşük maliyet) biçimde bölünür. Kesme işaretsiz yazılan kısaltmalar da
+# ("isnt", "thats") gerçek biçimine döner.
+_GLUED = re.compile(r"(?<![\w'’])[A-Za-z'’]{6,}(?![\w'’])")
+_SEGMENT_MIN_FREQ = 200
+
+
+@lru_cache(maxsize=1)
+def _apostrophe_less() -> dict[str, str]:
+    """"isnt" -> "isn't": kesme işaretsiz hâli kendisi kelime olmayan yaygın kısaltmalar."""
+    freq = _word_freq()
+    out = {}
+    for word, n in freq.items():
+        if "'" in word and n >= 10_000:
+            bare = word.replace("'", "")
+            if freq.get(bare, 0) < _MIN_FREQ:
+                out[bare] = word
+    return out
+
+
+def _segment(chunk: str) -> list[str] | None:
+    """Küçük harfli bitişik metni kelimelere böler; bölünemezse None."""
+    import math
+
+    freq = _word_freq()
+    bare = _apostrophe_less()
+    n = len(chunk)
+    best: list[tuple[float, int]] = [(0.0, 0)] + [(math.inf, 0)] * n
+    for end in range(1, n + 1):
+        for start in range(max(0, end - 20), end):
+            piece = chunk[start:end]
+            word = bare.get(piece, piece)
+            f = freq.get(word, 0)
+            if len(piece) == 1 and piece not in ("a", "i"):
+                continue
+            if f < (10_000 if len(piece) <= 2 else _SEGMENT_MIN_FREQ):
+                continue
+            cost = best[start][0] + math.log(1e9 / f)
+            if cost < best[end][0]:
+                best[end] = (cost, start)
+    if best[n][0] == math.inf:
+        return None
+    words, end = [], n
+    while end > 0:
+        start = best[end][1]
+        piece = chunk[start:end]
+        words.append(bare.get(piece, piece))
+        end = start
+    return words[::-1]
+
+
+# İspanyolca konuşan karakterler (altyazıda İspanyolca ya da İspanyolca-İngilizce karışık satırlar).
+# Aksanlar OCR sonrası düzleştirildiği için düz biçimler. İngilizcede de kelime olanlar (no, me, con,
+# solo, pan, si...) bilerek yok: İngilizce satır İspanyolca sanılmasın.
+SPANISH_WORDS = frozenset("""
+que porque pero para por como donde cuando quien quiero quieres tengo tienes tiene estoy estas esta
+eres somos esto eso aqui alli ahora siempre nunca nada todo todos mucho muy bien bueno buena
+claro hola adios gracias senor senora senorita amigo amiga amigos hermano hermana mija mijo mama papa
+chica chico chicos vamos vamonos andale orale oye mira ven vete callate cabron cabrona pendejo pendeja
+pendejos chingado chingada chingao mierda puta puto carajo culero cono joder verdad dinero policia
+loco loca vato ese hijo hija familia corazon cerveza fiesta trabajo dios ayuda espera tranquilo
+tranquila cuidado rapido despacio sabes sabe entiendes nosotros ustedes ellos ella usted contigo
+conmigo tambien entonces porfa favor hombre mujer gringo gringa pinche chamaco guey wey neta
+""".split())
+
+
+def has_spanish(text: str) -> bool:
+    """Satırda İspanyolca var mı (tamamı ya da birkaç kelime: "Come on, mija, vamos!")?"""
+    if "¿" in text or "¡" in text:
+        return True
+    return any(t.lower() in SPANISH_WORDS for t in _TOKEN.findall(text))
+
+
+def _split_glued(text: str) -> str:
+    freq = _word_freq()
+    if not freq:
+        return text
+
+    def fix(m: re.Match) -> str:
+        token = m.group(0)
+        low = token.lower().replace("’", "'")
+        if low in freq or low in SPANISH_WORDS:
+            return token
+        # Özel isimlere dokunma (Vinewood, Yetarian): yalnızca küçük harfli parça ya da satır başındaki
+        # büyük harfli parça; satır başındakinin en az 3 kelimeye bölünmesi gerekir.
+        first = not text[:m.start()].strip(" \"'(-")
+        if not (token.islower() or (first and token[0].isupper() and token[1:].islower())):
+            return token
+        words = _segment(low)
+        if not words or len(words) < (2 if token.islower() else 3):
+            return token
+        # İki parçaya bölünme, tek harflik bir OCR hatasından da gelebilir ("surgeor" -> "surge or"
+        # değil "surgeon"): o durumda yazım düzeltmesi (sonraki adım) tercih edilir.
+        if len(words) == 2 and _spell_candidate(low, freq) is not None:
+            return token
+        if token[0].isupper():
+            words[0] = words[0].capitalize()
+        return " ".join("I" if w == "i" else ("I" + w[1:] if w.startswith("i'") else w) for w in words)
+
+    return _GLUED.sub(fix, text)
+
+
+def all_words_known(text: str) -> bool:
+    """Her kelime sözlükte (ya da büyük harfle başlayan bir isim) mi? Satır başındaki yarım
+    okumalar ("acist", "et a tax rebate") tek okumayla hızlı kabul edilmesin diye."""
+    freq = _word_freq()
+    if not freq:
+        return True
+    for t in _TOKEN.findall(text):
+        if len(t) < 2 or t.lower().replace("’", "'") in freq or t.lower() in SPANISH_WORDS:
+            continue
+        if t[0].isupper() and t[1:].islower():
+            continue
+        return False
+    return True
+
+
+# Türkçe ekran yazıları (konsol/oyun arayüzü Türkçeyse bölgeye taşan bildirimler, menüler): OCR
+# Türkçe harfleri çoğunlukla düz okur ("İpuçları" -> "Ipuclari"), bu yüzden düzleştirilmiş biçimler.
+# İngilizcede de sık geçen kısa kelimeler (et, sec, bu...) alınmaz: İngilizce satır yanlışlıkla atılmasın.
+_TURKISH_WORDS = {
+    "ve", "bir", "icin", "için", "ile", "veya", "yeni", "oyun", "oyunu", "ipucu", "ipuclari", "ipuçları",
+    "kullanim", "kullanım", "kolayligi", "kolaylığı", "ayarlar", "ayarlari", "kupalar", "aksesuarlar",
+    "takip", "edin", "devam", "kaydet", "iptal", "tamam", "evet", "hayir", "hayır", "baslat", "başlat",
+    "yardimi", "yardımı", "bildirim", "bildirimler", "arkadas", "arkadaş", "mesaj", "simdi", "şimdi",
+    "daha", "sonra", "olarak", "gibi", "kadar", "degil", "değil", "var", "yok", "kartta", "seviye",
+    # programın kendi menüsü (menü okuma bölgesinin üstündeyken karartılamadıysa)
+    "islemci", "işlemci", "ekran", "karti", "kartı", "bellek", "belle", "hedef", "pencere", "pence",
+    "motorlar", "ceviri", "çeviri", "qeviri", "taslak", "cevirmen", "çevirmen", "yerel", "hiz", "hız",
+}
+_TURKISH_SUFFIX = re.compile(r"(?:lar|ler)(?:i|ı|in|ın|ini|ını|da|de|dan|den)?$|(?:iniz|ınız|nizi|nızı|miz|mız)$")
+
+
+def looks_turkish(text: str) -> bool:
+    """Satır İngilizce değil Türkçe mi (konsolun Türkçe bildirimi/menüsü)? En az iki Türkçe işaret
+    (sık kelime ya da -ları/-leri/-nizi gibi ek) ve harflerin çoğu İngilizce kelime değil
+    (dört ve üstü işarette yarısı İngilizceye benzeyebilir)."""
+    tokens = [t.lower() for t in _TOKEN.findall(text)]
+    if len(tokens) < 2 or has_spanish(text):  # İspanyolca "hablar", "estar" -lar/-ler eki değil
+        return False
+    hits = sum(1 for t in tokens if t in _TURKISH_WORDS or (len(t) >= 6 and _TURKISH_SUFFIX.search(t)))
+    if hits < 2:
+        return False
+    # Bozuk okunmuş Türkçe bazen İngilizce kelimeye benzer ("sistem" -> "sister"): işaret çoksa gevşek.
+    return known_fraction(text) < (0.6 if hits >= 4 else 0.35)
+
+
+# Konsol/oyun düğme ipuçları ("SCROLL SEND BACK", "SELECT BACK") ve Windows görev çubuğu saati
+# ("TUR 19.11.2026 02:30") altyazı değildir: çevrilmez. Hepsi bu kelimelerden oluşan satır atılır;
+# tek başına "Back" gibi gündelik kelime yalnızca en az iki ipucu kelimesiyle birlikte atılır.
+_HUD_WORDS = frozenset("""scroll select back send exit confirm cancel options continue accept decline close
+open call answer reply delete menu next previous page zoom move rotate lock unlock equip use hold
+press tap toggle skip""".split())
+_HUD_STRONG = frozenset({"scroll", "select", "confirm", "cancel", "options", "exit"})
+_HUD_TAIL = frozenset({"scroll", "select", "back", "send", "exit", "confirm", "cancel", "options"})
+_CLOCK_DATE = r"\d{1,2}[./]\d{1,2}[./]\d{2,4}"
+_CLOCK_TIME = r"\d{1,2}:\d{2}(?::\d{2})?"
+_TASKBAR_CLOCK = re.compile(
+    rf"(?:\b\S{{1,2}}\s+)?\b(?:TUR|ENG|TRK)\s*(?:{_CLOCK_DATE}\s+{_CLOCK_TIME}|{_CLOCK_TIME}\s+{_CLOCK_DATE})",
+    re.IGNORECASE)
+
+
+# --- Oyun içi kontrol ipuçları (HUD) -------------------------------------------------------------
+# "Hold L2 or R2 and aim", "THROW R2 TAKE BEER R1 DROP", "STASH", "HANDLING 8.4 RANGE 4.4": altyazı değil,
+# ekran ipucu. Satır bazında süzülür (OCR satırları ayrı geldiği için diyalog satırı korunur).
+_BUTTON = re.compile(r"(?<![\w])(?:[LR][123]|[LR]STICK|D-?PAD)(?![\w])")
+_UPPER_WORD = re.compile(r"[A-Z][A-Z0-9/&'.-]*[A-Z0-9]|[A-Z]")
+
+
+def _is_label_caps(line: str) -> bool:
+    """Tümü BÜYÜK HARF, tümce noktalaması ve "Ad:" yok: ekran etiketi ("TAKE BEER", "STASH")."""
+    letters = [c for c in line if c.isalpha()]
+    if len(letters) < 3 or any(c.islower() for c in letters):
+        return False
+    if ":" in line or re.search(r"[A-Za-z][.!?](?:\s|$)", line):
+        return False
+    return len(line.split()) <= 6
+
+
+_TRAIL_CAPS = re.compile(r"(?<=[.!?\"”)\]…])\s*((?:[A-Z][A-Z0-9/&'-]+\s*)+(?:[LR][123])?)$")
+_LEAD_CAPS = re.compile(r"^(?:[A-Z][A-Z0-9/&'-]+\s+)+(?=[A-Z][A-Za-z]+s?:)")
+
+
+# Konuşmacı adından önce sahneden okunan rakam/simge ("0000 Cal: ...": teknedeki gösterge) ve rengi
+# farklı olduğu için ilk harfi kaçan ad ("ucia:" -> "Lucia:"; model "000 üncü:" diye çeviriyordu).
+_LEAD_JUNK = re.compile(r"^(?:[^A-Za-z\s]+\s*)+(?=[A-Za-z][\w'.-]{1,20}s?:\s)")
+_LABEL = re.compile(r"^([A-Za-z][\w'.-]{1,20}):(?=\s)")
+
+
+@lru_cache(maxsize=1)
+def _speaker_names() -> tuple[str, ...]:
+    try:
+        from .glossary import load_bundled
+
+        _general, names = load_bundled()
+    except Exception:
+        return ()
+    return tuple(sorted({t for name in names for t in _TOKEN.findall(name) if t[:1].isupper() and len(t) >= 3}))
+
+
+def fix_speaker_label(line: str) -> str:
+    line = _LEAD_JUNK.sub("", line)
+    m = _LABEL.match(line)
+    if m is None:
+        return line
+    label = m.group(1)
+    names = _speaker_names()
+    if label in names or len(label) < 3:
+        return line
+    # Baştan bir-iki harfi eksik bilinen ad: "ucia" -> "Lucia" (tek aday varsa)
+    cands = [n for n in names if n.lower().endswith(label.lower()) and 0 < len(n) - len(label) <= 2]
+    if len(cands) == 1:
+        return cands[0] + line[m.end(1):]
+    return line
+
+
+_GLUED_BUTTON = re.compile(r"(?<![\w])([LR][123])(?=[a-z])")
+_BUTTON_TO = re.compile(r"\s+(?:(?:press|hold|tap)\s+)?[LR][123]\s*to\s*[a-z].*$", re.IGNORECASE)
+
+
+def drop_hud_lines(lines: list[str]) -> list[str]:
+    """OCR satırlarından kontrol ipuçlarını ayıklar. Düğme simgeli bir BÜYÜK HARF öbeği ("DIVE R1")
+    satır sonundan/başından kesilir; küçük harfli cümle içinde düğme geçiyorsa ("Hold L2 or R2 and
+    aim ...") satır tümüyle atılır; BÜYÜK HARFLİ etiket satırları ("STASH") atılır."""
+    out: list[str] = []
+    for raw in lines:
+        line = raw.strip()
+        if not line:
+            continue
+        if _is_label_caps(line):
+            continue
+        # Cümle sonundan sonra gelen BÜYÜK HARFLİ öbek ("...okay? CAUTION MINDYOUR STEP", "...that! DIVE R1")
+        trimmed = _TRAIL_CAPS.sub("", line).strip()
+        if trimmed:
+            line = trimmed
+        trimmed = _LEAD_CAPS.sub("", line).strip()  # "LOOT Locals: Police?" -> "Locals: Police?"
+        if trimmed:
+            line = trimmed
+        line = fix_speaker_label(line)
+        # OCR boşluğu yutmuş düğme: "Use gas car R1topour" -> "Use gas car R1 topour"
+        line = _GLUED_BUTTON.sub(r"\1 ", line)
+        # Görev yazısının sonuna eklenen düğme yönergesi: "Use gas car R1 to pour" -> "Use gas car"
+        cut = _BUTTON_TO.sub("", line).strip()
+        if cut and cut != line and len(cut.split()) >= 2 and not _BUTTON.search(cut):
+            line = cut
+        if _BUTTON.search(line):
+            # Kalan düğme ipucu: BÜYÜK HARFLİ kuyruk ("... DIVE R1") ya da küçük harfli yönerge
+            cut = re.sub(r"\s*(?:[A-Z][A-Z0-9/&'-]+\s+)*[LR][123]\s*$", "", line).strip()
+            if cut and cut != line and not _BUTTON.search(cut):
+                line = cut
+            else:
+                continue
+        out.append(line)
+    return out
+
+
+# --- Konuşma kısaltmaları ----------------------------------------------------------------------
+# Yerel taslak çeviri modeli "I'mma", "lemme", "gonna" gibi biçimleri bilmiyor ("I'mma tell you" ->
+# "Sana Sam'i söyleyeceğim"). Yalnızca taslağa giden metin açılır; son çevirmen (LLM) özgün metni görür.
+_SLANG_EXPAND = [
+    (r"\bi'?mma\b", "I'm going to"), (r"\bgonna\b", "going to"), (r"\bwanna\b", "want to"),
+    (r"\bgotta\b", "got to"), (r"\blemme\b", "let me"), (r"\bgimme\b", "give me"),
+    (r"\bdunno\b", "don't know"), (r"\bkinda\b", "kind of"), (r"\bsorta\b", "sort of"),
+    (r"\boutta\b", "out of"), (r"(?<!\w)(?:cuz|'cause|cause)\b", "because"), (r"\b'em\b", "them"),
+    (r"\btryna\b", "trying to"), (r"\bfinna\b", "about to"), (r"\bc'mon\b", "come on"),
+    (r"\by'all\b", "you all"), (r"\bya\b", "you"), (r"\b'bout\b", "about"), (r"\bol'\b", "old"),
+    (r"\bshoulda\b", "should have"), (r"\bcoulda\b", "could have"), (r"\bwoulda\b", "would have"),
+    (r"\bwhatcha\b", "what are you"), (r"\bgotcha\b", "got you"), (r"\blil\b", "little"),
+    (r"\bbruh\b", "bro"), (r"\bnah\b", "no"), (r"\bain't\b", "isn't"),
+    (r"\b(\w+)in'(?!\w)", r"\1ing"),
+]
+_SLANG_RES = [(re.compile(p, re.IGNORECASE), r) for p, r in _SLANG_EXPAND]
+
+
+def expand_slang(text: str) -> str:
+    for pattern, repl in _SLANG_RES:
+        text = pattern.sub(repl, text)
+    return text
+
+
+# Sert küfür (yumuşatma denetimi): "damn/hell/crap/bro" gibi hafif sözler "lanet olsun" ile de çevrilebilir.
+_STRONG_PROFANITY = re.compile(
+    r"\b(?:\w*fuck\w*|\w*shit\w*|bitch\w*|\w+ass(?:es)?|ass|asses|ass(?:hole|hat|wipe)s?|dicks?|dickhead\w*"
+    r"|cocks?(?:sucker)?s?|cunts?|pricks?|whores?|sluts?|twats?|wankers?|bastards?|motherfuck\w*|tits|pussy)\b",
+    re.IGNORECASE)
+_STRONG_TR = re.compile(
+    r"(?:sik|amk|amın|amına|amina|orospu|göt|\bbok\b|\bboku|piç|pezevenk|şerefsiz|kahpe|puşt|yarrak|kaltak"
+    r"|sürtük|ananı|ananin|hassiktir|\bsiktir|\bsikim|\bsiktiğ|\bsıç|salak herif|yavşak|ibne|\bit\b|\bit herif)",
+    re.IGNORECASE)
+
+
+def has_strong_profanity(text: str) -> bool:
+    return bool(_STRONG_PROFANITY.search(_NOT_PROFANE.sub(" ", text)))
+
+
+def is_softened(source: str, translation: str) -> bool:
+    """Kaynakta sert küfür var ama çeviride sert karşılık yok ("Oh shit" -> "Lanet olsun")."""
+    return has_strong_profanity(source) and not _STRONG_TR.search(translation)
+
+
+# Model iki denemede de yumuşattıysa ("Jason: Shit." -> "Lanet olsun.") yumuşak karşılıklar sertiyle
+# değiştirilir: kullanıcı sansürsüz çeviri istiyor, "lanet olsun" kaynağın anlamını taşımıyor.
+_SOFT_TR = [
+    (re.compile(r"\b(?:lanet olsun|kahretsin|kahrolsun|tüh|hay aksi)\b", re.IGNORECASE), "siktir"),
+    (re.compile(r"\b(?:kahrolası|lanet olası|lanetli|lanet|kahrolasıca)\b", re.IGNORECASE), "siktiğimin"),
+]
+
+
+def force_strong(source: str, translation: str) -> str:
+    """Kaynakta sert küfür varken çeviri yumuşaksa yumuşak ünlemleri sert karşılıkla değiştirir; değişecek
+    bir şey yoksa çeviri olduğu gibi döner."""
+    if not is_softened(source, translation):
+        return translation
+    out = translation
+    for pattern, repl in _SOFT_TR:
+        out = pattern.sub(lambda m, r=repl: r.capitalize() if m.group(0)[:1].isupper() else r, out)
+    return out
+
+
+# --- Görev hedefi altyazıya yapışması ------------------------------------------------------------
+# Ekranın altındaki görev hedefi ("Follow Moses", "Go to Dunk's trailer") altyazı bölgesinde altyazının
+# hemen altında durur; OCR onu her satırın sonuna ekliyordu ("Moses: ... worth. FollowMoses") ve satır
+# ile hedef arasında gidip gelen okumalar ekranda sürekli değişen çeviriye dönüşüyordu.
+_LABEL_START = re.compile(r"^[A-Z][\w'.&-]*(?: [A-Z&][\w'.&-]*)?\s*:")
+
+
+def is_objective(text: str) -> bool:
+    """Tek başına okunan görev hedefi mi: konuşmacı etiketi yok, 2-7 kelime, büyük harfle başlar, cümle
+    sonu noktalaması yok ("Follow Moses", "Get in Vicki's car")."""
+    words = text.split()
+    return (2 <= len(words) <= 7 and text[:1].isupper() and not text.isupper()
+            and not _LABEL_START.match(text) and text.rstrip()[-1:] not in ".?!…\"'”:")
+
+
+def strip_objective(text: str, objective: str) -> str:
+    """Satırın sonuna yapışmış görev hedefini atar (boşlukları yutulmuş olsa da: "FollowMoses").
+    Yalnızca kalan kısım bir noktalama ile bitiyorsa (gerçek bir altyazı sonu) atılır."""
+    letters = [c for c in objective if not c.isspace()]
+    if len(letters) < 4 or text == objective:
+        return text
+    pattern = re.compile(r"\s*" + r"\s*".join(re.escape(c) for c in letters) + r"\s*$", re.IGNORECASE)
+    m = pattern.search(text)
+    if m is None or m.start() == 0:
+        return text
+    rest = text[:m.start()].rstrip()
+    return rest if rest[-1:] in ".?!…,'\"”-" else text
+
+
+def strip_ui_chrome(text: str, strict: bool = False) -> str:
+    """Düğme ipuçları ve görev çubuğu saati temizlenir; geriye anlamlı yazı kalmazsa boş döner.
+    Satırın sonundaki düğme ipucu dizisi ("PHOTO STUDIO SELECT BACK" -> "PHOTO STUDIO") de atılır.
+    `strict` (mesaj bildirimi/telefon bölgeleri): tek başına "BACK" gibi ipuçları da atılır."""
+    text = _TASKBAR_CLOCK.sub(" ", text).strip()
+    tokens = list(_TOKEN.finditer(text))
+    words = [m.group(0).lower() for m in tokens]
+    if words and all(w in _HUD_WORDS for w in words) and (strict or len(words) >= 2 or words[0] in _HUD_STRONG):
+        return ""
+    # Sondaki düğme ipucu dizisi: yalnızca BÜYÜK HARFLİ ve dar listeden (arayüz ipuçları büyük yazılır;
+    # "I'll call you back" gibi gündelik cümleler korunur).
+    tail = 0
+    while (tail < len(tokens) and tokens[-1 - tail].group(0).isupper()
+           and words[-1 - tail] in _HUD_TAIL):
+        tail += 1
+    if tail >= 2 and len(tokens) > tail:
+        text = text[:tokens[len(tokens) - tail].start()]
+    return _SPACE.sub(" ", text).strip()
+
+
+def known_fraction(text: str) -> float:
+    """Harflerin ne kadarı sözlükteki gerçek İngilizce kelimelerde (isimler sayılmaz). Sözlük yoksa 1."""
+    if not _word_freq():
+        return 1.0
+    tokens = _TOKEN.findall(text)
+    total = sum(len(t) for t in tokens)
+    return _known_words(tokens) / total if total else 0.0
+
+
+def _known_words(tokens: list[str]) -> int:
+    """Sözlükteki (İngilizce ya da İspanyolca) kelimelerin harf sayısı."""
+    freq = _word_freq()
+    return sum(len(t) for t in tokens
+               if t.lower().replace("’", "'") in freq or t.lower() in SPANISH_WORDS)
+
+
+def reading_score(text: str) -> float:
+    """Bir OCR okumasının değeri. Asıl ölçü: GERÇEK İngilizce kelimelerdeki harf sayısı
+    ("peniss", "xactly", "sorne" sayılmaz). Ek olarak kelimeye benzeyen harfler (özel isimler,
+    sözlükte olmayan argo) ve çöp karakter / İngilizcede olmayan harf cezası.
+
+    Gerçek kayıtlarda (300 kare, 8 satır) aynı satırın okumaları arasından seçimde hatayı
+    0.199'dan 0.118'e düşürdü (karakter hata oranı). Uzun ve temiz okuma kazanır; kısmi okuma
+    ("Go to") tam okumayı ("Go to Franklin's house.") yenemez."""
+    tokens = _TOKEN.findall(text)
+    known = _known_words(tokens)
+    good = sum(len(t) for t in tokens if t.isascii() and _wordlike(t))
+    non_ascii = sum(1 for ch in text if ch.isalpha() and not ch.isascii())
+    junk = len(_JUNK.findall(text))
+    return known - 3 * junk + 0.6 * (good - 3 * junk - 2 * non_ascii)
+
+
+def _words(text: str) -> set[str]:
+    return {t.lower() for t in _TOKEN.findall(text) if len(t) >= 2}
+
+
+def same_line(a: str, b: str, threshold: float) -> bool:
+    """İki okuma aynı altyazı satırı mı? Benzer metin ya da biri diğerinin parçası (kısmi okuma:
+    "you got" ⊂ "Maybe if you got rid of that haircut you got")."""
+    if similar(a, b, threshold):
+        return True
+    wa, wb = _words(a), _words(b)
+    small, big = (wa, wb) if len(wa) <= len(wb) else (wb, wa)
+    return bool(small) and len(small & big) >= max(1, round(0.8 * len(small)))
+
+
+_SENTENCE_DONE = re.compile(r"[.!?…\"'”)\]]\s*$")
+_GROW_TOKEN = re.compile(r"[\w']+")
+
+
+def grows(new: str, old: str) -> bool:
+    """`new`, `old`un devamı mı? GTA VI altyazıyı konuşmayla birlikte kelime kelime açar: "Jason: You
+    mean Shirley? Witl" -> "... With the dog?". Eskinin kelimeleri yeninin başında aynen durur (son
+    kelime yarım okunmuş olabilir: ilk iki harfi tutmalı) ve yeni en az bir kelime / 3 harf uzundur."""
+    a = [w.lower() for w in _GROW_TOKEN.findall(old)]
+    b = [w.lower() for w in _GROW_TOKEN.findall(new)]
+    if not a or len(b) <= len(a) - 1 or len(new.strip()) < len(old.strip()) + 3:
+        return False
+    if b[:len(a) - 1] != a[:-1]:
+        return False
+    last, nxt = a[-1], b[len(a) - 1]
+    return nxt.startswith(last[:2]) and (len(b) > len(a) or len(nxt) > len(last))
+
+
+@dataclass(frozen=True)
+class Show:
+    text: str
+    first_seen: float  # satırın ilk okunduğu an (gecikme ölçümü için)
+
+
+@dataclass(frozen=True)
+class Clear:
+    pass
+
+
+class Stabilizer:
+    """OCR okumalarını olaylara çevirir.
+
+    - Aynı satırın okuması `stable_reads` kez art arda gelir ve ilk okumadan bu yana en az
+      `min_hold` saniye geçerse `Show` üretir; o okumalar içinden en değerlisi (reading_score)
+      gösterilir. Süre şartı önemli: 8 ms arayla yapılan iki okuma çoğu zaman videonun AYNI
+      karesidir; geçiş/solma karesinin bozuk okuması böylece kendini "doğrulardı".
+    - Gösterilen satırın okumaları (titreşen ya da kısmi) yeni satır sayılmaz; belirgin şekilde
+      daha iyi bir okuma aynı şartla doğrulanırsa `Show` ile güncellenir (eksik satır tamamlanır).
+    - `clear_after` saniye boyunca metin yoksa `Clear` üretir.
+    """
+
+    # Gösterilen satırı güncellemek için yeni okuma en az bu kadar (ve %25) daha değerli olmalı:
+    # her küçük farkta yeniden çevirmemek, ama eksik okunan satırı tamamlamak için.
+    UPGRADE_MARGIN = 4
+    UPGRADE_RATIO = 0.25
+    # Kelime kelime açılan satır: uzayan hâli de doğrulama okumasıyla (aynı metin tekrar) gösterilir;
+    # satır bundan uzun süre uzamaya devam ederse o ana kadarki kısım gösterilir (tamamı sonra yeniden).
+    GROW_MAX_WAIT_S = 1.4
+
+    def __init__(self, stable_reads: int, similarity: float, clear_after: float, min_hold: float = 0.0):
+        self.stable_reads = max(1, stable_reads)
+        self.similarity = similarity
+        self.clear_after = clear_after
+        self.min_hold = max(0.0, min_hold)
+        self.shown: str | None = None
+        self._shown_score = 0.0
+        self._candidate: str | None = None
+        self._candidate_score = 0.0
+        self._candidate_count = 0
+        self._candidate_since = 0.0
+        self._last_text_at: float | None = None
+        self._last_growth: float | None = None
+        self._needs_repeat = False
+
+    @property
+    def pending(self) -> bool:
+        """Doğrulanmayı bekleyen yeni bir satır var mı (bir sonraki okuma hemen yapılmalı)."""
+        return self._candidate is not None
+
+    def reset(self) -> None:
+        """Ekranda hiçbir şey gösterilmiyormuş gibi baştan başla (duraklatma/devam sonrası)."""
+        self.shown = None
+        self._candidate, self._candidate_count = None, 0
+
+    def forget_shown(self) -> None:
+        """Gösterilen satır başarısız olduysa (çeviri hatası) aynı satır tekrar okununca yeniden dene."""
+        self.shown = None
+
+    def feed(self, text: str, now: float, confident: bool = False) -> Show | Clear | None:
+        """`confident`: OCR motoru bu okumadan çok emin (RapidOCR güveni yüksek). Tek okumayla
+        gösterilir; ikinci (doğrulama) okumasının ~100-350 ms'si beklenmez."""
+        if not text:
+            self._candidate, self._candidate_count = None, 0
+            if self.shown is not None and self._last_text_at is not None:
+                if now - self._last_text_at >= self.clear_after:
+                    self.shown = None
+                    return Clear()
+            return None
+
+        self._last_text_at = now
+        score = reading_score(text)
+        if (self.shown is not None and same_line(text, self.shown, self.similarity)
+                and not grows(text, self.shown)):
+            needed = self._shown_score + max(self.UPGRADE_MARGIN, self.UPGRADE_RATIO * self._shown_score)
+            if score < needed:
+                return None  # gösterilen satırın sıradan/kısmi okuması: bekleyen güncellemeyi bozmaz
+            # Daha iyi okuma: yeni satır gibi doğrulanması gerekir (tek bozuk kare güncelleyemez).
+
+        if self._candidate is not None and grows(text, self._candidate):
+            # Satır açılmaya devam ediyor: daha uzun hâli aday olur, yazı durana kadar beklenir.
+            self._candidate, self._candidate_score = text, score
+            self._candidate_count += 1
+            self._needs_repeat = True  # uzayan hâl bir kez daha aynı okunmalı (yazı durdu mu?)
+            self._last_growth = now
+        elif self._candidate is not None and same_line(text, self._candidate, self.similarity):
+            self._candidate_count += 1
+            self._needs_repeat = False
+            if score >= self._candidate_score and not grows(self._candidate, text):  # en değerli okumayı tut
+                self._candidate, self._candidate_score = text, score
+        else:
+            self._candidate, self._candidate_score = text, score
+            self._candidate_count, self._candidate_since = 1, now
+            # Gösterilen yarım satırın devamı: yazı açılmayı sürdürüyor, durunca gösterilir.
+            self._last_growth = now if self.shown is not None and grows(text, self.shown) else None
+            self._needs_repeat = False
+
+        # Cümle sonu noktalaması olmayan satır yarım olabilir (kelime kelime açılıyor): tek okumayla
+        # hızlı kabul edilmez, doğrulama okumasıyla beklenir.
+        confident = confident and bool(_SENTENCE_DONE.search(self._candidate))
+        since = self._candidate_since if self._last_growth is None else self._last_growth
+        overdue = self._last_growth is not None and now - self._candidate_since >= self.GROW_MAX_WAIT_S
+        if (confident and self._last_growth is None) or overdue or (
+                self._candidate_count >= self.stable_reads and not self._needs_repeat
+                and now - since >= self.min_hold):
+            self.shown, self._shown_score = self._candidate, self._candidate_score
+            self._candidate, self._candidate_count = None, 0
+            self._last_growth = None
+            return Show(self.shown, self._candidate_since)
+        return None
+
+
+class Dialogue(str):
+    """Çevirmene giden bağlam: değeri önceki İngilizce satırdır (eski arayüzle uyumlu; DeepL ve devam
+    satırı denetimi bunu kullanır), `history` ise sohbetin son satırları: [(İngilizce, verdiğimiz Türkçe)].
+    Yerel dil modeli bunları sohbet geçmişi olarak görür: hitap (sen/siz), lakaplar ve konu tutarlı kalır."""
+
+    history: tuple[tuple[str, str], ...]
+
+    def __new__(cls, previous: str, history=()):
+        obj = super().__new__(cls, previous)
+        obj.history = tuple(history)
+        return obj
+
+
+# --- Yoksayılan ifadeler ------------------------------------------------------------------------
+# Kullanıcının listesi (config.ignore_phrases): sürekli görünen oyun yönlendirmeleri ("Press [E] to
+# enter") çevrilmez, gösterilmez, seslendirilmez. Büyük/küçük harf ve boşluk farkı önemsizdir; `*`
+# cümle sonunu (. ! ?) aşmadan herhangi bir metne uyar. Satırın tamamına uyan ifade satırı siler;
+# satırın içindeki ifade satırdan çıkarılır, geriye anlamlı bir altyazı kalmazsa satır silinir.
+_IGNORE_EDGE = " \t,;:-–—|/"
+_SENTENCE_START = re.compile(r"(?:^|[.!?…][\"')\]]?)\s*$")
+
+
+def _ignore_pattern(phrase: str) -> re.Pattern | None:
+    phrase = re.sub(r"\*+", "*", " ".join(phrase.split()))
+    if not phrase.replace("*", "").strip():
+        return None  # boş ya da yalnızca "*": her şeyi silerdi
+    pieces = [p for p in re.split(r"(\*)", phrase) if p]
+    body = []
+    for i, piece in enumerate(pieces):
+        if piece == "*":
+            # Sondaki `*` cümle sonuna kadar (noktalaması dahil), aradaki en kısa metne uyar.
+            body.append(r"[^.!?]*[.!?]?" if i == len(pieces) - 1 else r"[^.!?]*?")
+            continue
+        words = r"\s+".join(re.escape(w) for w in piece.split())
+        lead = r"\s*" if piece[0] == " " else ""
+        trail = r"\s*" if piece[-1] == " " else ""
+        body.append(lead + words + trail)
+    # Kelime ortasında eşleşmesin ("Press E" -> "Pressed Eagle" değil). İfade kelimeyle bitiyorsa
+    # ardından gelen cümle sonu noktalaması da yakalanır (tek başına cümleyse onunla silinir).
+    head = r"(?<!\w)" if re.match(r"\w", phrase) else ""
+    tail = r"(?!\w)(?P<end>[.!?]+)?" if re.search(r"\w$", phrase) else ""
+    return re.compile(head + "".join(body) + tail, re.IGNORECASE)
+
+
+@lru_cache(maxsize=8)
+def _ignore_patterns(phrases: tuple[str, ...]) -> tuple[re.Pattern, ...]:
+    return tuple(p for p in map(_ignore_pattern, phrases) if p is not None)
+
+
+def ignore_phrases(text: str, phrases, min_chars: int = 3) -> str:
+    """`text`ten yoksayılan ifadeleri çıkarır; geriye altyazı kalmazsa "" döner. Değişmediyse aynen."""
+    if not text or not phrases:
+        return text
+    rest = text
+    for pattern in _ignore_patterns(tuple(str(p) for p in phrases)):
+        def cut(m: re.Match) -> str:
+            # Cümlenin ortasındaki ifade: soru/ünlem işareti cümleye aittir, kalır.
+            whole = _SENTENCE_START.search(m.string[:m.start()]) is not None
+            end = m.groupdict().get("end")
+            return " " if whole or not end else end
+        rest = pattern.sub(cut, rest)
+    if rest == text:
+        return text
+    rest = re.sub(r"\s+([,.!?;:])", r"\1", _SPACE.sub(" ", rest)).strip(_IGNORE_EDGE)
+    return rest if is_plausible(rest, min_chars) else ""
+
+
+# --- Telefon metni (sosyal medya gönderisi, haber, mesaj) ----------------------------------------
+# Altyazı düzeltmeleri (yazım düzeltme, bitişik kelime bölme, kenar çöpü) @kullanıcı adlarını,
+# #etiketleri, adresleri ve sayıları bozar ("@lennyavery" -> "lenny avery", "2.1K" -> ...). Bu
+# parçalar korunur; düzeltmeler yalnızca aradaki düz kelimelere uygulanır.
+_HANDLE = re.compile(r"^[(\[\"'“]?[@#][\w.]+")
+_URL = re.compile(r"^[(\[\"'“]?(?:https?://|www\.)\S+|^[\w-]+(?:\.[\w-]+)*\.(?:com|net|org|io|gg|tv|ly|co|me|app)"
+                  r"(?:/\S*)?[)\].,!?\"'”]*$", re.IGNORECASE)
+_HAS_DIGIT = re.compile(r"\d")
+# İnternet kısaltmaları ve uzatılmış kelimeler ("lmaooo", "sooo"): sözlükte yok, "düzeltilmemeli".
+INTERNET_SLANG = frozenset("""
+lol lols lmao lmfao rofl smh tbh imo imho omg omfg wtf wth brb idk idc ikr fr frfr ngl rn btw af irl fml
+ffs tfw mfw dm dms pov gg ez lowkey highkey sus bruh bro fam goat goated stan yall ya ur u r pls plz thx ty
+tho thru cuz bc gonna wanna gotta kinda lemme dunno hmu wyd wya nvm jk istg periodt bet slay vibe vibes
+""".split())
+_STRETCHED = re.compile(r"([A-Za-z])\1\1")
+
+
+def _protected(token: str) -> bool:
+    bare = token.strip(".,!?:;\"'“”()[]…").lower()
+    return bool(_HANDLE.match(token) or _URL.match(token) or _HAS_DIGIT.search(token)
+                or bare in INTERNET_SLANG or _STRETCHED.search(token))
+
+
+# RapidOCR arayüz yazısında (keskin, sık aralıklı) boşlukları sık atlıyor: "ViceCitymayorcaughtin",
+# "thewholepierAGAIN". Altyazıdaki bölücü karışık harfli parçalara dokunmaz (özel isimler); telefonda
+# uzun karışık parça en az üç sözlük kelimesine bölünebiliyorsa harf biçimi korunarak bölünür.
+_MIXED_GLUED = re.compile(r"(?<![\w'’@#])[A-Za-z]{10,}(?![\w'’])")
+
+
+def _split_mixed(text: str) -> str:
+    if not _word_freq():
+        return text
+
+    def fix(m: re.Match) -> str:
+        token = m.group(0)
+        if token.islower() or token.isupper() or (token[0].isupper() and token[1:].islower()):
+            return token  # tamamen küçük/büyük ya da İsim biçimi: altyazı bölücüsünün işi
+        words = _segment(token.lower())
+        if not words or len(words) < 3 or "".join(words) != token.lower():
+            return token
+        out, i = [], 0
+        for w in words:
+            out.append(token[i:i + len(w)])
+            i += len(w)
+        return " ".join(out)
+
+    return _MIXED_GLUED.sub(fix, text)
+
+
+def _fix_plain(text: str) -> str:
+    """Altyazı düzeltme zinciri (korunmayan düz kelime dizisine) + karışık harfli bitişik kelimeler."""
+    return _spell_fix(_split_glued(_split_mixed(_fix_ocr_confusions(_fold_accents(text)))))
+
+
+def join_wrapped(lines: list[str]) -> str:
+    """Bir bloğun satırlarını boşlukla birleştirir; satır sonundaki tirelemeyi düzeltir
+    ("some-" + "thing" -> "something"). Bir sonraki satır büyük harfle başlıyorsa tire kalır
+    ("Los Santos-" + "Vinewood" bileşik ad olabilir)."""
+    out = ""
+    for line in (" ".join(raw.split()) for raw in lines):
+        if not line:
+            continue
+        if out.endswith("-") and len(out) >= 2 and out[-2].isalpha() and line[0].islower():
+            out = out[:-1] + line
+        else:
+            out = f"{out} {line}" if out else line
+    return out
+
+
+def normalize_post(lines: list[str]) -> str:
+    """Telefon bloğunun metni: satırlar birleşir, @kullanıcı/#etiket/adres/sayı/internet kısaltması
+    olduğu gibi kalır, aradaki kelimelere altyazı düzeltmeleri uygulanır."""
+    # OCR'ın yapıştırdığı ayraçlar: "WeazelNews@WeazelNews·1h" -> "WeazelNews @WeazelNews · 1h"
+    joined = re.sub(r"\s*([·•|])\s*", r" \1 ", join_wrapped(lines))
+    joined = re.sub(r"(?<=[A-Za-z0-9.!?,])(?=[@#][A-Za-z])", " ", joined)
+    joined = re.sub(r"(?<=[a-z][.!?,])(?=www\.|https?://)", " ", joined)
+    tokens = joined.split()
+    out: list[str] = []
+    run: list[str] = []
+
+    def flush() -> None:
+        if run:
+            out.extend(_fix_plain(" ".join(run)).split())
+            run.clear()
+
+    for token in tokens:
+        if _protected(token):
+            flush()
+            out.append(token)
+        else:
+            run.append(token)
+    flush()
+    text = " ".join(out)
+    # Kenar çöpü ("• ", " |"); @ # ve açılış işaretleri silinmez.
+    text = re.sub(r"^[^\w@#\"'“(\[¿¡]+", "", text)
+    text = re.sub(r"[^\w.!?\"'”)\]…%]+$", "", text)
+    return text.strip()
+
+
+# Telefon arayüzü yazıları (saat, beğeni/görüntülenme sayısı, "3h", "Reply"...): yalnızca bunlardan
+# oluşan satır/blok çevrilmez.
+_CHROME_TOKEN = re.compile(
+    r"^(?:[\W_]+|\d{1,2}[:.]\d{2}(?:[ap]m)?|[ap]m|\d+(?:[.,]\d+)*[kmb]?\+?|\d+\s?(?:s|m|h|d|w|y|mo|min|mins|hr|hrs|"
+    r"sec|secs)|%?\d+%?)$",
+    re.IGNORECASE)
+_CHROME_WORDS = frozenset("""
+like likes liked reply replies replied share shares shared repost reposts reposted retweet retweets comment
+comments follow following followers follower views view ago now just today yesterday edited sent delivered
+read seen online typing more less translate see show all new message messages notifications home search
+min mins hr hrs sec secs lte 3g 4g 5g wifi hour hours minute minutes day days week weeks month months year years
+""".split())
+
+
+# Rakam içeren ve üç harflik kelime parçası olmayan parça da arayüz sayılır: OCR simgeleri harf
+# okuyor ("♡ 2.1K ↻ 340" -> "2.1KC340", pil/şebeke "5G87%").
+_LETTER_RUN = re.compile(r"[^\W\d_]{3,}")
+
+
+def _chrome_token(token: str) -> bool:
+    if _CHROME_TOKEN.match(token) or token.strip(".,:;!?·•()").lower() in _CHROME_WORDS:
+        return True
+    return bool(_HAS_DIGIT.search(token)) and not _LETTER_RUN.search(token) and not _HANDLE.match(token)
+
+
+def is_ui_chrome(text: str) -> bool:
+    """Metin yalnızca arayüz parçası mı (saat, sayı, "3h", "2.1K", "Reply · Share")?"""
+    return all(_chrome_token(t) for t in text.split())
+
+
+def is_handle_only(text: str) -> bool:
+    """Yalnızca kullanıcı adı/etiket (+ arayüz parçası): "@lennyavery · 3h"."""
+    tokens = text.split()
+    return any(_HANDLE.match(t) for t in tokens) and all(_HANDLE.match(t) or _chrome_token(t) for t in tokens)
